@@ -29,7 +29,7 @@
   },
   "homepage": "https://github.com/sgodmez/copybot#readme",
   "devDependencies": {
-    "electron": "^14.0.0",
+    "electron": "^14.2.4",
     "copyfiles": "^2.4.1",
     "typescript": "^4.4.2",
     "@typescript-eslint/eslint-plugin": "^4.30.0",
