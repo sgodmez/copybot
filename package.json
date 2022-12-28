@@ -4,7 +4,10 @@
   "description": "pretty bot to copy photo or files somewhere and allow profiles and rights management",
   "main": "index.js",
   "scripts": {
-    "test": "test"
+    "build": "tsc",
+    "watch": "tsc -w",
+    "lint": "eslint -c .eslintrc --ext .ts ./src",
+    "start": "npm run build && electron ./dist/main.js"
   },
   "repository": {
     "type": "git",
@@ -14,13 +17,19 @@
     "electron",
     "node",
     "javascript",
-    "typescript\u001b[H\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D",
-    "sf"
+    "typescript"
   ],
   "author": "sgodmez",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/sgodmez/copybot/issues"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^4.33.0",
+    "@typescript-eslint/parser": "^4.33.0",
+    "electron": "^22.0.0",
+    "eslint": "^7.32.0",
+    "typescript": "^4.8.3"
   },
   "homepage": "https://github.com/sgodmez/copybot#readme"
 }
