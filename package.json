@@ -1,49 +1,26 @@
 {
   "name": "copybot",
   "version": "1.0.0",
-  "description": "Software bot to transform and copy files",
-  "main": "build/index.js",
+  "description": "pretty bot to copy photo or files somewhere and allow profiles and rights management",
+  "main": "index.js",
   "scripts": {
-    "test": "npm test",
-    "start": "npm run compile && electron .",
-    "compile": "tsc && copyfiles -f src/index.html build",
-    "lint": "eslint \"src/**/*.ts\""
+    "test": "test"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/sgodmez/copybot.git"
   },
   "keywords": [
-    "Software",
-    "bot",
-    "to",
-    "transform",
-    "and",
-    "copy",
-    "files"
+    "electron",
+    "node",
+    "javascript",
+    "typescript\u001b[H\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D\u001b[D",
+    "sf"
   ],
-  "author": "Sandrine Godmez && Steven Kerdudou",
-  "license": "GPL-3.0-or-later",
+  "author": "sgodmez",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/sgodmez/copybot/issues"
   },
-  "homepage": "https://github.com/sgodmez/copybot#readme",
-  "devDependencies": {
-    "electron": "^14.0.0",
-    "copyfiles": "^2.4.1",
-    "typescript": "^4.4.2",
-    "@typescript-eslint/eslint-plugin": "^4.30.0",
-    "@typescript-eslint/parser": "^4.30.0",
-    "eslint": "^7.32.0",
-    "eslint-config-prettier": "^8.3.0",
-    "husky": "^7.0.2"
-  },
-  "husky": {
-    "hooks": {
-      "pre-commit": "lint-staged"
-    }
-  },
-  "lint-staged": {
-    "**/*": "prettier --write --ignore-unknown"
-  }
+  "homepage": "https://github.com/sgodmez/copybot#readme"
 }
