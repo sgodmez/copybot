@@ -15,7 +15,6 @@ import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.nio.file.Files;
-import java.nio.file.Path;
 
 public class HelloController {
     @FXML
@@ -75,40 +74,16 @@ public class HelloController {
 
         @Override
         public void run() {
-            try {
-                Files.find(Path.of("D:\\photos"),
-                                Integer.MAX_VALUE,
-                                (filePath, fileAttr) -> fileAttr.isRegularFile())
-                        .forEach(p -> {
-//                            try {
-//                                Thread.currentThread().sleep(3);
-//                            } catch (InterruptedException e) {
-//                                throw new RuntimeException(e);
-//                            }
-/*
-                            try {
-                                extractMetadata(p.toFile());
-                            } catch (ImageProcessingException e) {
-                                //throw new RuntimeException(e);
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-*/
-                            CopybotEngine.m.doManyThings(p.toFile());
-
-                            Platform.runLater(() -> {
-                                fileCount.setText(String.valueOf(fileListObservable.size()));
-                                try {
-                                    fileListObservable.add(new CBFile(p.getFileName().toString(), p.getParent().toString(), Files.size(p)));
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            });
-
-                        });
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
+            CopybotEngine.run(p -> {
+                Platform.runLater(() -> {
+                    fileCount.setText(String.valueOf(fileListObservable.size()));
+                    try {
+                        fileListObservable.add(new CBFile(p.getFileName().toString(), p.getParent().toString(), Files.size(p)));
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            });
         }
     }
 
