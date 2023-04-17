@@ -1,13 +1,13 @@
 package com.copybot.plugin.demo.nomodule;
 
-import com.copybot.plugin.api.ICBPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
 import com.drew.metadata.Metadata;
 import com.google.auto.service.AutoService;
 
 import java.io.File;
 
-@AutoService(ICBPluginModule.class)
-public class DemoPluginModuleNoModule implements ICBPluginModule {
+@AutoService(IPlugin.class)
+public class DemoTransformModuleNoModule implements IPlugin {
 
     @Override
     public String getName() {

@@ -1,5 +1,6 @@
 package com.copybot.ui;
 
+import com.copybot.plugin.action.WorkItem;
 import com.copybot.engine.CopybotEngine;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
@@ -21,9 +22,9 @@ public class HelloController {
     private Label fileCount;
 
     @FXML
-    private TableView<CBFile> fileListView;
+    private TableView<WorkItem> fileListView;
 
-    private ObservableList<CBFile> fileListObservable;
+    private ObservableList<WorkItem> fileListObservable;
 
     @FXML
     public void initialize() {
@@ -78,7 +79,7 @@ public class HelloController {
                 Platform.runLater(() -> {
                     fileCount.setText(String.valueOf(fileListObservable.size()));
                     try {
-                        fileListObservable.add(new CBFile(p.getFileName().toString(), p.getParent().toString(), Files.size(p)));
+                        fileListObservable.add(new WorkItem(p.getFileName().toString(), p.getParent().toString(), Files.size(p)));
                     } catch (IOException e) {
                         throw new RuntimeException(e);
                     }

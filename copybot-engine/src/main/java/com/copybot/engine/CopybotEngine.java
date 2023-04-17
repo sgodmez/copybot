@@ -1,6 +1,6 @@
 package com.copybot.engine;
 
-import com.copybot.plugin.api.ICBPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
 
 import java.io.File;
 import java.io.IOException;
@@ -15,7 +15,9 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 public class CopybotEngine {
-    private static ICBPluginModule m;
+    private static IPlugin m;
+
+    public static ResourceBundle resourceBundle = ResourceBundle.getBundle("com.copybot.engine.engineBundle");
 
     private static List<Path> listDirectory(Path dirPath) {
         List<Path> paths = new ArrayList<>();
@@ -48,7 +50,7 @@ public class CopybotEngine {
     }
 
     public static void test() {
-        List<Path> pluginsDirs = listDirectory(Path.of("D:\\plugins")); // Directory with plugins JARs
+        List<Path> pluginsDirs = listDirectory(Path.of("D:\\plugins2\\")); // Directory with plugins JARs
 /*
         for (Path pluginDir : pluginsDirs) {
             Configuration pluginsConfiguration = getConfiguration(pluginDir, ModuleLayer.boot());
@@ -90,11 +92,13 @@ public class CopybotEngine {
             System.out.println("Found " + services.size() + " services!");
         }
          */
+        // dev mode
+        // pluginsDirs.replaceAll(p -> p.resolve("target/classes/"));
         var r1 = pluginsDirs.get(0);
         Configuration c1 = getConfiguration(r1, ModuleLayer.boot());
         // Create a module layer for plugin dir
         ModuleLayer l1 = ModuleLayer.boot().defineModulesWithOneLoader(c1, ClassLoader.getSystemClassLoader());
-
+/*
         var r2 = pluginsDirs.get(1);
         Configuration c2 = getConfiguration(r2, ModuleLayer.boot());
         // Create a module layer for plugin dir
@@ -113,14 +117,17 @@ public class CopybotEngine {
         Configuration c99 = Configuration.resolve(ModuleFinder.ofSystem(), List.of(c1, c2, c3, c4), ModuleFinder.of(), List.of());
         ModuleLayer l99 = ModuleLayer.defineModulesWithOneLoader(c99, List.of(l1, l2, l3, l4), ClassLoader.getSystemClassLoader()).layer();
 
-        ServiceLoader<ICBPluginModule> serviceLoader = ServiceLoader.load(l99, ICBPluginModule.class);
+        ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(l99, IPlugin.class);
+        */
+        ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(l1, IPlugin.class);
 
-        Map<String, ICBPluginModule> services = new HashMap<>();
-        for (ICBPluginModule service : serviceLoader) {
+        Map<String, IPlugin> services = new HashMap<>();
+        for (IPlugin service : serviceLoader) {
             System.out.println("I've found a service called '" + service.getName() + "' ! " + service.getClass().getModule().getName() + " : " + service.getClass().getProtectionDomain().getCodeSource().getLocation());
-            service.doManyThings(null);
+            //service.doManyThings(null);
             services.put(service.getName(), service);
             m = service;
+            break;
         }
 
 

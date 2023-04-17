@@ -1,11 +1,11 @@
-import com.copybot.plugin.api.ICBPluginModule;
-import com.copybot.plugin.metadataextractor.DummyPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.metadataextractor.MetadataExtractorPlugin;
 
-module com.copybot.plugin.embedded {
+module com.copybot.plugin.metadataextractor {
     requires com.copybot.plugin.api;
     requires metadata.extractor;
 
     exports com.copybot.plugin.metadataextractor;
 
-    provides ICBPluginModule with DummyPluginModule;
+    provides IPlugin with MetadataExtractorPlugin;
 }

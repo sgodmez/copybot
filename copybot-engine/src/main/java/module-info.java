@@ -1,9 +1,13 @@
-import com.copybot.plugin.api.ICBPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
 
 module com.copybot.engine {
     requires com.copybot.plugin.api;
+    requires info.picocli;
+    requires com.google.gson;
 
-    exports com.copybot.engine  to com.copybot.ui;
+    opens com.copybot.engine to javafx.base;
+    exports com.copybot.engine to com.copybot.ui;
+    exports com.copybot.engine.plugin to com.copybot.ui;
 
-    uses ICBPluginModule;
+    uses IPlugin;
 }

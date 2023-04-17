@@ -73,7 +73,7 @@
                 </executions>
             </plugin>
             <plugin>
-                <groupId>org.panteleyev</groupId>
+                <groupId>org.panteleyev</groupId> <!-- hum... -->
                 <artifactId>jpackage-maven-plugin</artifactId>
                 <version>1.6.0</version>
                 <executions>

@@ -1,5 +1,5 @@
-import com.copybot.plugin.api.ICBPluginModule;
-import com.copybot.plugin.demo.inheritance.DemoPluginInhheritance;
+import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.demo.inheritance.DemoTransformInhheritance;
 
 module com.copybot.plugin.demo.inheritance {
     requires com.copybot.plugin.api;
@@ -7,5 +7,5 @@ module com.copybot.plugin.demo.inheritance {
     requires com.copybot.plugin.demo.module.old;
     requires metadata.extractor;
 
-    provides ICBPluginModule with DemoPluginInhheritance;
+    provides IPlugin with DemoTransformInhheritance;
 }

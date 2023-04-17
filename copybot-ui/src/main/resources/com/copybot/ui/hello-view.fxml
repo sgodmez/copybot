@@ -54,9 +54,9 @@
                      <PropertyValueFactory property="name" />
                   </cellValueFactory>
                </TableColumn>
-               <TableColumn prefWidth="263.0" text="Folder">
+               <TableColumn prefWidth="263.0" text="Location">
                   <cellValueFactory>
-                     <PropertyValueFactory property="folder" />
+                     <PropertyValueFactory property="sourceLocationDisplay" />
                   </cellValueFactory>
                </TableColumn>
                <TableColumn minWidth="0.0" prefWidth="91.0" text="Size">

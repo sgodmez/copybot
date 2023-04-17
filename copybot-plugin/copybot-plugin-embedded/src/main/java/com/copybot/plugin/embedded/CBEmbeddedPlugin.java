@@ -1,10 +1,10 @@
-package com.copybot.plugin.metadataextractor;
+package com.copybot.plugin.embedded;
 
-import com.copybot.plugin.api.ICBPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
 
 import java.io.File;
 
-public class DummyPluginModule implements ICBPluginModule {
+public class CBEmbeddedPlugin implements IPlugin {
 
     @Override
     public String getName() {

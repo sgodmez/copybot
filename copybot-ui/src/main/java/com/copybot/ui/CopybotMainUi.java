@@ -17,12 +17,16 @@ public class CopybotMainUi extends Application {
 
     public static ExecutorService executor;
 
+    //public String getSizeHR() {
+    //       return FileUtil.toAutoUnitSize(getSize(),2);
+    //    }
+
     @Override
     public void start(Stage stage) throws IOException {
         STAGE = stage;
         FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("hello-view.fxml"));
         //Locale.setDefault(Locale.ENGLISH);
-        fxmlLoader.setResources(ResourceBundle.getBundle("com.copybot.ui.Bundle", Locale.getDefault()));
+        fxmlLoader.setResources(ResourceBundle.getBundle("com.copybot.ui.uiBundle", Locale.getDefault()));
         Scene scene = new Scene(fxmlLoader.load(), 320, 240);
         stage.setTitle("Hello!");
         stage.setScene(scene);

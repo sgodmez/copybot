@@ -1,5 +1,5 @@
-import com.copybot.plugin.api.ICBPluginModule;
-import com.copybot.plugin.demo.module.DemoPluginModuleModule;
+import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.demo.module.DemoTransformModuleModule;
 
 module com.copybot.plugin.demo.module {
     requires com.copybot.plugin.api;
@@ -7,5 +7,5 @@ module com.copybot.plugin.demo.module {
 
     exports com.copybot.plugin.demo.module;
 
-    provides ICBPluginModule with DemoPluginModuleModule;
+    provides IPlugin with DemoTransformModuleModule;
 }

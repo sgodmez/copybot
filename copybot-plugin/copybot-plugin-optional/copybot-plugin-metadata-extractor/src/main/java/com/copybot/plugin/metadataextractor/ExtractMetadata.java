@@ -6,14 +6,14 @@ import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.Tag;
 
-import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.Map;
 
 public class ExtractMetadata {
-    public static Map<String, String> extractMetadata(File file) {
+    public static Map<String, String> extractMetadata(InputStream fileIS) {
         try {
-            Metadata metadata = ImageMetadataReader.readMetadata(file);
+            Metadata metadata = ImageMetadataReader.readMetadata(fileIS);
 
             for (Directory directory : metadata.getDirectories()) {
                 for (Tag tag : directory.getTags()) {

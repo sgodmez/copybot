@@ -1,13 +1,13 @@
 package com.copybot.plugin.demo.inheritance;
 
-import com.copybot.plugin.api.ICBPluginModule;
-import com.copybot.plugin.demo.module.DemoPluginModuleModule;
-import com.copybot.plugin.demo.module.old.DemoPluginModuleModuleOlder;
+import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.demo.module.DemoTransformModuleModule;
+import com.copybot.plugin.demo.module.old.DemoTransformModuleModuleOlder;
 import com.drew.metadata.Metadata;
 
 import java.io.File;
 
-public class DemoPluginInhheritance implements ICBPluginModule {
+public class DemoTransformInhheritance implements IPlugin {
 
     @Override
     public String getName() {
@@ -16,8 +16,8 @@ public class DemoPluginInhheritance implements ICBPluginModule {
 
     @Override
     public void doManyThings(File file) {
-        DemoPluginModuleModule.extract();
-        DemoPluginModuleModuleOlder.extract();
+        DemoTransformModuleModule.extract();
+        DemoTransformModuleModuleOlder.extract();
         System.out.println("Resolving metadata with : " + Metadata.class.getProtectionDomain().getCodeSource().getLocation());
     }
 

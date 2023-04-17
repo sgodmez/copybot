@@ -1,15 +1,15 @@
-package com.copybot.plugin.demo.module;
+package com.copybot.plugin.demo.module.old;
 
-import com.copybot.plugin.api.ICBPluginModule;
+import com.copybot.plugin.definition.api.IPlugin;
 import com.drew.metadata.Metadata;
 
 import java.io.File;
 
-public class DemoPluginModuleModule implements ICBPluginModule {
+public class DemoTransformModuleModuleOlder implements IPlugin {
 
     @Override
     public String getName() {
-        return "DemoServiceModule";
+        return "DemoServiceModuleOlder";
     }
 
     @Override
