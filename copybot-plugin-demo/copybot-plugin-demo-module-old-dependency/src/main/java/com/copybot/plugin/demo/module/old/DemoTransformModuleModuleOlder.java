@@ -1,6 +1,6 @@
 package com.copybot.plugin.demo.module.old;
 
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.definition.IPlugin;
 import com.drew.metadata.Metadata;
 
 import java.io.File;

@@ -1,4 +1,4 @@
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.definition.IPlugin;
 import com.copybot.plugin.demo.module.DemoTransformModuleModule;
 
 module com.copybot.plugin.demo.module {

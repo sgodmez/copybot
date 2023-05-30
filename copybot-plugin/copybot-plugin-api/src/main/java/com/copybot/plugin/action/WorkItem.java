@@ -35,6 +35,26 @@ public class WorkItem {
         this.sourceLocationDisplay = sourceLocationDisplay;
     }
 
+    public URL getSourceLocation() {
+        return sourceLocation;
+    }
+
+    public void setSourceLocation(URL sourceLocation) {
+        this.sourceLocation = sourceLocation;
+    }
+
+    public Supplier<InputStream> getInputStreamSupplier() {
+        return inputStreamSupplier;
+    }
+
+    public void setInputStreamSupplier(Supplier<InputStream> inputStreamSupplier) {
+        this.inputStreamSupplier = inputStreamSupplier;
+    }
+
+    public boolean isSourceReaded() {
+        return isSourceReaded;
+    }
+
     public Long getSize() {
         return size;
     }
@@ -42,5 +62,4 @@ public class WorkItem {
     public void setSize(Long size) {
         this.size = size;
     }
-
 }

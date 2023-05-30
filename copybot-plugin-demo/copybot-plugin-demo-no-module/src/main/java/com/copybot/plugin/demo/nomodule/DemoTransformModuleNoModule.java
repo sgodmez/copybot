@@ -1,6 +1,6 @@
 package com.copybot.plugin.demo.nomodule;
 
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.definition.IPlugin;
 import com.drew.metadata.Metadata;
 import com.google.auto.service.AutoService;
 

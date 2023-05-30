@@ -1,16 +1,22 @@
 package com.copybot.engine;
 
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.plugin.PluginEngine;
+import com.copybot.engine.utils.FileUtil;
+import com.copybot.plugin.definition.IPlugin;
+import com.google.gson.GsonBuilder;
 
-import java.io.File;
 import java.io.IOException;
 import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.*;
+import java.util.List;
+import java.util.ResourceBundle;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -19,122 +25,49 @@ public class CopybotEngine {
 
     public static ResourceBundle resourceBundle = ResourceBundle.getBundle("com.copybot.engine.engineBundle");
 
-    private static List<Path> listDirectory(Path dirPath) {
-        List<Path> paths = new ArrayList<>();
-        doListDirectory(dirPath, paths, false);
-        return paths;
-    }
-
-    private static List<Path> listDirectoryRecur(Path dirPath, boolean withRoot) {
-        List<Path> paths = new ArrayList<>();
-        if (withRoot) {
-            paths.add(dirPath);
-        }
-        doListDirectory(dirPath, paths, true);
-        return paths;
-    }
-
-    private static void doListDirectory(Path dirPath, List<Path> pathList, boolean recur) {
-        File[] files = dirPath.toFile().listFiles();
-        if (files != null) {
-            for (File aFile : files) {
-                if (aFile.isDirectory()) {
-                    Path aFilePath = aFile.toPath();
-                    pathList.add(aFilePath);
-                    if (recur) {
-                        doListDirectory(aFilePath, pathList, recur);
-                    }
-                }
-            }
-        }
-    }
 
     public static void test() {
-        List<Path> pluginsDirs = listDirectory(Path.of("D:\\plugins2\\")); // Directory with plugins JARs
+        PluginEngine.load(Path.of("D:\\plugins\\"));
+        List<Path> pluginsDirs = FileUtil.listDirectory(Path.of("D:\\plugins\\")); // Directory with plugins JARs
+
+        var gson = new GsonBuilder().setPrettyPrinting().create();
+
 /*
-        for (Path pluginDir : pluginsDirs) {
-            Configuration pluginsConfiguration = getConfiguration(pluginDir, ModuleLayer.boot());
-            // Create a module layer for plugin dir
-            ModuleLayer layer = ModuleLayer.boot().defineModulesWithOneLoader(pluginsConfiguration, ClassLoader.getSystemClassLoader());
-
-            ServiceLoader<MyService> serviceLoader = ServiceLoader.load(layer, MyService.class);
-
-            Map<String, MyService> services = new HashMap<>();
-            for (MyService service : serviceLoader) {
-                System.out.println("I've found a service called '" + service.getName() + "' !");
-                services.put(service.getName(), service);
-                m = service;
-            }
-
-            System.out.println("Found " + services.size() + " services!");
-        }
+        var config = new PipelineConfig(List.of(new PipelineStep("test",null)),List.of(),List.of(),List.of());
+        var result = gson.toJson(config);
+        System.out.println(result);
 */
-        /*
-        List<ModuleLayer> layers = new ArrayList<>();
-        layers.add(ModuleLayer.boot());
-        for (Path pluginDir : pluginsDirs) {
-            Configuration pluginsConfiguration = getConfiguration(pluginDir, layers);
-            // Create a module layer for plugin dir
-            var layer = ModuleLayer.defineModulesWithOneLoader(pluginsConfiguration, layers, ClassLoader.getSystemClassLoader()).layer();
-            //layer = layer.defineModulesWithOneLoader(pluginsConfiguration, ClassLoader.getSystemClassLoader());
-            layers.add(layer);
+        PipelineConfig c = gson.fromJson("""
+                {
+                  "inSteps": [
+                    {
+                      "action": "test",
+                      "actionConfig" : {
+                         "path" : "d:/photos/"
+                      }
+                    }
+                  ],
+                  "analyseSteps": [],
+                  "outSteps": []
+                }
+                """, PipelineConfig.class);
+        //Test t = gson.fromJson(c.inSteps().get(0).actionConfig(),Test.class);
+        var cl = Thread.currentThread().getContextClassLoader();
 
-
-            ServiceLoader<MyService> serviceLoader = ServiceLoader.load(layer, MyService.class);
-
-            Map<String, MyService> services = new HashMap<>();
-            for (MyService service : serviceLoader) {
-                System.out.println("I've found a service called '" + service.getName() + "' !");
-                services.put(service.getName(), service);
-                m = service;
-            }
-
-            System.out.println("Found " + services.size() + " services!");
+        m = PluginEngine.getPluginDefinitions().get(1).getPluginInstance();
+        var cl2 = m.getClass();
+        var actionClass = m.getInActions().get(0);
+        try {
+            var actionInstance = actionClass.getConstructor().newInstance();
+            actionInstance.loadConfig(c.inSteps().get(0).actionConfig());
+        } catch (InstantiationException | IllegalAccessException | InvocationTargetException |
+                 NoSuchMethodException e) {
+            throw new RuntimeException(e);
         }
-         */
-        // dev mode
-        // pluginsDirs.replaceAll(p -> p.resolve("target/classes/"));
-        var r1 = pluginsDirs.get(0);
-        Configuration c1 = getConfiguration(r1, ModuleLayer.boot());
-        // Create a module layer for plugin dir
-        ModuleLayer l1 = ModuleLayer.boot().defineModulesWithOneLoader(c1, ClassLoader.getSystemClassLoader());
-/*
-        var r2 = pluginsDirs.get(1);
-        Configuration c2 = getConfiguration(r2, ModuleLayer.boot());
-        // Create a module layer for plugin dir
-        ModuleLayer l2 = ModuleLayer.defineModulesWithOneLoader(c2, List.of(ModuleLayer.boot()), ClassLoader.getSystemClassLoader()).layer();
-
-        var r3 = pluginsDirs.get(2);
-        List<ModuleLayer> layers3 = List.of(l1, l2);
-        Configuration c3 = getConfiguration(r3, layers3);
-        ModuleLayer l3 = ModuleLayer.defineModulesWithOneLoader(c3, layers3, ClassLoader.getSystemClassLoader()).layer();
-
-        var r4 = pluginsDirs.get(3);
-        Configuration c4 = getConfiguration(r4, ModuleLayer.boot());
-        // Create a module layer for plugin dir
-        ModuleLayer l4 = ModuleLayer.boot().defineModulesWithOneLoader(c4, ClassLoader.getSystemClassLoader());
-
-        Configuration c99 = Configuration.resolve(ModuleFinder.ofSystem(), List.of(c1, c2, c3, c4), ModuleFinder.of(), List.of());
-        ModuleLayer l99 = ModuleLayer.defineModulesWithOneLoader(c99, List.of(l1, l2, l3, l4), ClassLoader.getSystemClassLoader()).layer();
-
-        ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(l99, IPlugin.class);
-        */
-        ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(l1, IPlugin.class);
-
-        Map<String, IPlugin> services = new HashMap<>();
-        for (IPlugin service : serviceLoader) {
-            System.out.println("I've found a service called '" + service.getName() + "' ! " + service.getClass().getModule().getName() + " : " + service.getClass().getProtectionDomain().getCodeSource().getLocation());
-            //service.doManyThings(null);
-            services.put(service.getName(), service);
-            m = service;
-            break;
-        }
-
-
     }
 
     private static Configuration getConfiguration(Path pluginDir, ModuleLayer layer) {
-        List<Path> pluginDirRecur = listDirectoryRecur(pluginDir, true);
+        List<Path> pluginDirRecur = FileUtil.listDirectoryRecur(pluginDir, true);
 
         // Search for plugins in the plugins directory
         ModuleFinder pluginsFinder = ModuleFinder.of(pluginDirRecur.toArray(new Path[0]));
@@ -175,7 +108,7 @@ public class CopybotEngine {
     }
 
     private static Configuration getConfiguration(Path pluginDir, List<ModuleLayer> layer) {
-        List<Path> pluginDirRecur = listDirectoryRecur(pluginDir, true);
+        List<Path> pluginDirRecur = FileUtil.listDirectoryRecur(pluginDir, true);
 
         // Search for plugins in the plugins directory
         ModuleFinder pluginsFinder = ModuleFinder.of(pluginDirRecur.toArray(new Path[0]));

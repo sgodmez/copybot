@@ -1,6 +1,6 @@
 package com.copybot.plugin.demo.inheritance;
 
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.definition.IPlugin;
 import com.copybot.plugin.demo.module.DemoTransformModuleModule;
 import com.copybot.plugin.demo.module.old.DemoTransformModuleModuleOlder;
 import com.drew.metadata.Metadata;

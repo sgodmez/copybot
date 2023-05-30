@@ -1,8 +1,11 @@
 package com.copybot.plugin.metadataextractor;
 
-import com.copybot.plugin.definition.api.IPlugin;
+import com.copybot.plugin.action.IAnalyzeAction;
+import com.copybot.plugin.definition.IPlugin;
+import com.copybot.plugin.metadataextractor.actions.ExtractMetadata;
 
 import java.io.*;
+import java.util.List;
 
 public class MetadataExtractorPlugin implements IPlugin {
 
@@ -18,5 +21,10 @@ public class MetadataExtractorPlugin implements IPlugin {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public List<Class<? extends IAnalyzeAction>> getAnalyzeActions() {
+        return List.of(ExtractMetadata.class);
     }
 }

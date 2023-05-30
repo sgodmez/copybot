@@ -2,7 +2,11 @@ package com.copybot.engine.utils;
 
 import com.copybot.engine.CopybotEngine;
 
+import java.io.File;
 import java.math.BigDecimal;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.List;
 
 public class FileUtil {
     public static final long ONE_KB = 1024;
@@ -34,5 +38,35 @@ public class FileUtil {
             displaySize = size + " " + CopybotEngine.resourceBundle.getString("size.b");
         }
         return displaySize;
+    }
+
+    public static List<Path> listDirectory(Path dirPath) {
+        List<Path> paths = new ArrayList<>();
+        doListDirectory(dirPath, paths, false);
+        return paths;
+    }
+
+    public static List<Path> listDirectoryRecur(Path dirPath, boolean withRoot) {
+        List<Path> paths = new ArrayList<>();
+        if (withRoot) {
+            paths.add(dirPath);
+        }
+        doListDirectory(dirPath, paths, true);
+        return paths;
+    }
+
+    public static void doListDirectory(Path dirPath, List<Path> pathList, boolean recur) {
+        File[] files = dirPath.toFile().listFiles();
+        if (files != null) {
+            for (File aFile : files) {
+                if (aFile.isDirectory()) {
+                    Path aFilePath = aFile.toPath();
+                    pathList.add(aFilePath);
+                    if (recur) {
+                        doListDirectory(aFilePath, pathList, recur);
+                    }
+                }
+            }
+        }
     }
 }
