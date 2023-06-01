@@ -4,7 +4,7 @@ import java.lang.module.ModuleDescriptor;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-public class ModuleUtil {
+public final class ModuleUtil {
 
     private static final Pattern versionExtractPattern = Pattern.compile("^([0-9]+\\.[0-9]+).*");
 

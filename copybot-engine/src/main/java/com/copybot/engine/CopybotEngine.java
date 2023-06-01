@@ -7,24 +7,22 @@ import com.copybot.plugin.definition.IPlugin;
 import com.google.gson.GsonBuilder;
 
 import java.io.IOException;
-import java.lang.module.Configuration;
-import java.lang.module.ModuleDescriptor;
-import java.lang.module.ModuleFinder;
-import java.lang.module.ModuleReference;
-import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.ResourceBundle;
-import java.util.Set;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 public class CopybotEngine {
     private static IPlugin m;
 
     public static ResourceBundle resourceBundle = ResourceBundle.getBundle("com.copybot.engine.engineBundle");
 
+    private static PluginEngine pluginEngine;
+
+    public static void init() {
+        //pluginEngine
+    }
 
     public static void test() {
         PluginEngine.load(Path.of("D:\\plugins\\"));
@@ -53,8 +51,8 @@ public class CopybotEngine {
                 """, PipelineConfig.class);
         //Test t = gson.fromJson(c.inSteps().get(0).actionConfig(),Test.class);
         var cl = Thread.currentThread().getContextClassLoader();
-
-        m = PluginEngine.getPluginDefinitions().get(1).getPluginInstance();
+/*
+        m = PluginEngine.getLoadedPlugins().get(1).getPluginInstance();
         var cl2 = m.getClass();
         var actionClass = m.getInActions().get(0);
         try {
@@ -64,73 +62,7 @@ public class CopybotEngine {
                  NoSuchMethodException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private static Configuration getConfiguration(Path pluginDir, ModuleLayer layer) {
-        List<Path> pluginDirRecur = FileUtil.listDirectoryRecur(pluginDir, true);
-
-        // Search for plugins in the plugins directory
-        ModuleFinder pluginsFinder = ModuleFinder.of(pluginDirRecur.toArray(new Path[0]));
-
-        // Find all names of all found plugin modules
-        Set<ModuleReference> plugins = pluginsFinder
-                .findAll();
-
-/*
-        List<String> loadedModules = layer.modules().stream()
-                .map(Module::getName)
-                .collect(Collectors.toList());
-
-        plugins.stream()
-                .map(m -> m.descriptor().name())
-                .forEach(loadedModules::add);
-
-        List<String> notResolved = plugins.stream()
-                .flatMap(m -> m.descriptor().requires().stream())
-                .map(ModuleDescriptor.Requires::name)
-                .filter(Predicate.not(loadedModules::contains))
-                .distinct()
-                .toList();
-*/
-
-        List<String> pluginsName = plugins
-                .stream()
-                .map(ModuleReference::descriptor)
-                .map(ModuleDescriptor::name)
-                .collect(Collectors.toList());
-
-        // Create configuration that will resolve plugin modules
-        // (verify that the graph of modules is correct)
-        Configuration pluginsConfiguration = layer
-                .configuration()
-                .resolve(pluginsFinder, ModuleFinder.of(), pluginsName);
-        return pluginsConfiguration;
-    }
-
-    private static Configuration getConfiguration(Path pluginDir, List<ModuleLayer> layer) {
-        List<Path> pluginDirRecur = FileUtil.listDirectoryRecur(pluginDir, true);
-
-        // Search for plugins in the plugins directory
-        ModuleFinder pluginsFinder = ModuleFinder.of(pluginDirRecur.toArray(new Path[0]));
-
-        // Find all names of all found plugin modules
-        Set<ModuleReference> plugins = pluginsFinder
-                .findAll();
-
-
-        List<String> pluginsName = plugins
-                .stream()
-                .map(ModuleReference::descriptor)
-                .map(ModuleDescriptor::name)
-                .collect(Collectors.toList());
-
-        // Create configuration that will resolve plugin modules
-        // (verify that the graph of modules is correct)
-        var confs = layer.stream()
-                .map(ModuleLayer::configuration)
-                .toList();
-        Configuration pluginsConfiguration = Configuration.resolve(pluginsFinder, confs, ModuleFinder.of(), pluginsName);
-        return pluginsConfiguration;
+ */
     }
 
     public static void run(Consumer<Path> pConsumer) {

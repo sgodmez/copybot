@@ -5,7 +5,7 @@ import com.copybot.plugin.definition.IPlugin;
 
 import java.nio.file.Path;
 
-public class PluginDefinition {
+public final class PluginDefinition {
     private String name;
     private String version;
     private Path path;

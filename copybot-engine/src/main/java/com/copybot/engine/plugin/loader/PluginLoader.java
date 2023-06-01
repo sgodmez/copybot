@@ -16,7 +16,7 @@ import java.util.ServiceLoader;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-public class PluginLoader {
+public final class PluginLoader {
     List<LayerLoader> validLayers;
     List<LayerLoader> loadedLayers;
     List<LayerLoader> layersWithDepenencies;

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-public class LayerLoader {
+public final class LayerLoader {
     private Path path;
     private ModuleFinder pluginsFinder;
     private Set<ModuleDescriptor> moduleDescriptors;

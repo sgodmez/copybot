@@ -11,4 +11,6 @@ module com.copybot.ui {
 
     opens com.copybot.ui to javafx.fxml, javafx.base;
     exports com.copybot.ui to javafx.graphics;
+
+    opens com.copybot.ui.i18n;
 }

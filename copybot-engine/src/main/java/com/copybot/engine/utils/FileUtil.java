@@ -8,7 +8,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-public class FileUtil {
+public final class FileUtil {
     public static final long ONE_KB = 1024;
     public static final BigDecimal ONE_KB_BD = BigDecimal.valueOf(ONE_KB);
 

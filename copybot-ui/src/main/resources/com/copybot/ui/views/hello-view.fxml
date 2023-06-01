@@ -35,7 +35,8 @@
    <ToolBar prefHeight="40.0" prefWidth="200.0">
      <items>
        <Button mnemonicParsing="false" onAction="#onTestButtonClick" text="%test.btn" />
-       <Button onAction="#onHelloButtonClick" text="Hello!" />
+       <Button onAction="#onHelloButtonClick" text="%test.btn2" />
+       <Button onAction="#onHelloButtonClick" text="%test.btn3" />
      </items>
    </ToolBar>
    <VBox prefHeight="200.0" prefWidth="100.0" VBox.vgrow="ALWAYS">

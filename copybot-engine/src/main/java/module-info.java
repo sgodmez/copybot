@@ -10,7 +10,8 @@ module com.copybot.engine {
     exports com.copybot.engine to com.copybot.ui;
     exports com.copybot.engine.plugin to com.copybot.ui;
     exports com.copybot.engine.pipeline to com.google.gson;
-    exports com.copybot.engine.plugin.loader to com.copybot.ui;
+    // exports com.copybot.engine.plugin.loader to com.copybot.ui;
+    exports com.copybot.engine.resources;
 
     uses IPlugin;
 }
