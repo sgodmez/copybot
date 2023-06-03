@@ -1,34 +1,45 @@
 package com.copybot.plugin.definition;
 
-import com.copybot.plugin.action.IAnalyzeAction;
-import com.copybot.plugin.action.IInAction;
-import com.copybot.plugin.action.IOutAction;
-import com.copybot.plugin.action.IProcessAction;
+import com.copybot.plugin.action.*;
+import com.google.gson.JsonElement;
 
-import java.io.File;
 import java.util.List;
+import java.util.ResourceBundle;
 
 public interface IPlugin {
 
-    String getName();
+    /**
+     * Plugin code is used for reference in the pipeline JSON.
+     * Display name and description are i18n derived from this code as :
+     * - display name : plugin.pluginCode.name
+     * - description : plugin.pluginCode.description
+     */
+    String getPluginCode();
 
-    void doManyThings(File file);
+    default void loadConfig(JsonElement config) {
+        // nothing by default
+    }
 
-   default List<Class<? extends IInAction>> getInActions() {
-     return List.of();
-   };
+    Iterable<String> getI18nBundleNames();
 
-   default List<Class<? extends IAnalyzeAction>> getAnalyzeActions() {
-     return List.of();
-   };
+    void setResourceBundle(ResourceBundle resourceBundle);
 
-   default List<Class<? extends IProcessAction>> getProcessActions() {
-     return List.of();
-   };
+    ResourceBundle getResourceBundle();
 
-   default List<Class<? extends IOutAction>> getOutActions() {
-     return List.of();
-   };
+    default List<ActionDefinition<? extends IInAction>> getInActions() {
+        return List.of();
+    }
 
+    default List<ActionDefinition<? extends IAnalyzeAction>> getAnalyzeActions() {
+        return List.of();
+    }
+
+    default List<ActionDefinition<? extends IProcessAction>> getProcessActions() {
+        return List.of();
+    }
+
+    default List<ActionDefinition<? extends IOutAction>> getOutActions() {
+        return List.of();
+    }
 
 }

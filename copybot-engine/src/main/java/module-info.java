@@ -1,3 +1,4 @@
+import com.copybot.plugin.definition.ILanguagePack;
 import com.copybot.plugin.definition.IPlugin;
 
 module com.copybot.engine {
@@ -10,8 +11,8 @@ module com.copybot.engine {
     exports com.copybot.engine to com.copybot.ui;
     exports com.copybot.engine.plugin to com.copybot.ui;
     exports com.copybot.engine.pipeline to com.google.gson;
-    // exports com.copybot.engine.plugin.loader to com.copybot.ui;
-    exports com.copybot.engine.resources;
+    exports com.copybot.engine.resources to com.copybot.ui;
 
     uses IPlugin;
+    uses ILanguagePack;
 }

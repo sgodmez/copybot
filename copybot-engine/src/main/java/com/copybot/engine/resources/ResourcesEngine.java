@@ -1,19 +1,21 @@
 package com.copybot.engine.resources;
 
-import java.util.HashSet;
-import java.util.Locale;
-import java.util.Set;
+import com.copybot.plugin.definition.IPlugin;
+
+import java.util.*;
 
 public final class ResourcesEngine {
 
     private static CombinedResourceBundle resourceBundle;
+    private static List<CombinedResourceBundle> pluginResourceBundles;
     private static Set<Locale> supportedLocales;
 
     static {
         resourceBundle = new CombinedResourceBundle();
+        pluginResourceBundles = new ArrayList<>();
         supportedLocales = new HashSet<>();
 
-        registerBundle("com.copybot.engine.engineBundle");
+        registerBundle("com.copybot.engine.i18n.engineBundle");
         addSupportedLocale(Locale.ENGLISH);
         addSupportedLocale(Locale.FRENCH);
     }
@@ -27,12 +29,20 @@ public final class ResourcesEngine {
     }
 
     public static void loadLanguage(Locale locale) {
-        Locale.setDefault(locale);
+        Locale.setDefault(locale); // could be used to set secondary language preference before "root" fallback
         resourceBundle.load(locale);
+        pluginResourceBundles.forEach(p -> p.load(locale));
     }
 
     public static CombinedResourceBundle getResourceBundle() {
         return resourceBundle;
+    }
+
+    public static CombinedResourceBundle buildPluginResourceBundle(Iterable<String> baseNames, IPlugin context) {
+        var pluginResourceBundle = new CombinedResourceBundle(context, resourceBundle);
+        baseNames.forEach(pluginResourceBundle::addBundle);
+        pluginResourceBundles.add(pluginResourceBundle);
+        return pluginResourceBundle;
     }
 
 }

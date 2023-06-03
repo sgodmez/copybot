@@ -60,6 +60,8 @@ public final class LayerLoader {
             System.out.println("Attention ! ");
             return;
         }
+        // TODO vérifier la version de com.copybot.plugin.api
+
         mainModuleDescriptor = mainModules.get(0);
 
         requires = moduleDescriptors.stream()
@@ -71,10 +73,10 @@ public final class LayerLoader {
         var rootModules = ModuleLayer.boot().modules().stream()
                 .map(Module::getDescriptor)
                 .toList();
-        requires.removeIf(req -> rootModules.stream().anyMatch(m -> ModuleUtil.moduleMatches(req, m)));
+        requires.removeIf(req -> rootModules.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
 
         // remove internally provided requirements
-        requires.removeIf(req -> moduleDescriptors.stream().anyMatch(m -> ModuleUtil.moduleMatches(req, m)));
+        requires.removeIf(req -> moduleDescriptors.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
     }
 
     public boolean canBeLoaded() {
@@ -86,7 +88,7 @@ public final class LayerLoader {
                 .flatMap(l -> l.modules().stream())
                 .map(Module::getDescriptor)
                 .toList();
-        return requires.stream().allMatch(req -> parentModules.stream().anyMatch(m -> ModuleUtil.moduleMatches(req, m)));
+        return requires.stream().allMatch(req -> parentModules.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
     }
 
 

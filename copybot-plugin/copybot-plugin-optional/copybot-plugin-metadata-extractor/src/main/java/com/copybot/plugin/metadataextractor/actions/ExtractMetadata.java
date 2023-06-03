@@ -1,7 +1,9 @@
 package com.copybot.plugin.metadataextractor.actions;
 
+import com.copybot.plugin.action.AbstractAction;
 import com.copybot.plugin.action.IAnalyzeAction;
 import com.copybot.plugin.action.WorkItem;
+import com.copybot.plugin.exception.ProcessFailedException;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Directory;
@@ -12,8 +14,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.Map;
 
-public class ExtractMetadata implements IAnalyzeAction {
-    public static Map<String, String> extractMetadata(InputStream fileIS) {
+public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
+    private static Map<String, String> extractMetadata(InputStream fileIS) {
         try {
             Metadata metadata = ImageMetadataReader.readMetadata(fileIS);
 
@@ -37,9 +39,9 @@ public class ExtractMetadata implements IAnalyzeAction {
     @Override
     public void doAnalyze(WorkItem item) {
         try (InputStream is = item.getInputStreamSupplier().get()) {
-            ExtractMetadata.extractMetadata(is);
+            extractMetadata(is);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            throw new ProcessFailedException(e);
         }
     }
 }

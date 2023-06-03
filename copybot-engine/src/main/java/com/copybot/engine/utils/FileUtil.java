@@ -1,6 +1,6 @@
 package com.copybot.engine.utils;
 
-import com.copybot.engine.CopybotEngine;
+import com.copybot.engine.resources.ResourcesEngine;
 
 import java.io.File;
 import java.math.BigDecimal;
@@ -29,13 +29,13 @@ public final class FileUtil {
         BigDecimal sizeBd = BigDecimal.valueOf(size);
 
         if (size / ONE_GB > 0) {
-            displaySize = sizeBd.divide(ONE_KB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + CopybotEngine.resourceBundle.getString("size.gb");
+            displaySize = sizeBd.divide(ONE_KB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + ResourcesEngine.getResourceBundle().getString("size.gb");
         } else if (size / ONE_MB > 0) {
-            displaySize = new BigDecimal(size).divide(ONE_MB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + CopybotEngine.resourceBundle.getString("size.mb");
+            displaySize = new BigDecimal(size).divide(ONE_MB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + ResourcesEngine.getResourceBundle().getString("size.mb");
         } else if (size / ONE_KB > 0) {
-            displaySize = new BigDecimal(size).divide(ONE_GB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + CopybotEngine.resourceBundle.getString("size.kb");
+            displaySize = new BigDecimal(size).divide(ONE_GB_BD, decimals, BigDecimal.ROUND_CEILING) + " " + ResourcesEngine.getResourceBundle().getString("size.kb");
         } else {
-            displaySize = size + " " + CopybotEngine.resourceBundle.getString("size.b");
+            displaySize = size + " " + ResourcesEngine.getResourceBundle().getString("size.b");
         }
         return displaySize;
     }

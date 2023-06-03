@@ -1,5 +1,6 @@
 package com.copybot.plugin.action;
 
+import com.copybot.plugin.definition.IPlugin;
 import com.google.gson.JsonElement;
 
 import java.util.function.Consumer;
@@ -26,7 +27,8 @@ public interface IAction {
         // nothing by default
     }
 
-    default void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        // nothing by default
-    }
+    void setStatusWatcher(Consumer<WorkStatus> watcher);
+
+    void setPlugin(IPlugin plugin);
+
 }

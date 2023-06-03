@@ -10,13 +10,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.ResourceBundle;
 import java.util.function.Consumer;
 
 public class CopybotEngine {
     private static IPlugin m;
-
-    public static ResourceBundle resourceBundle = ResourceBundle.getBundle("com.copybot.engine.engineBundle");
 
     private static PluginEngine pluginEngine;
 
@@ -25,7 +22,7 @@ public class CopybotEngine {
     }
 
     public static void test() {
-        PluginEngine.load(Path.of("D:\\plugins\\"));
+        PluginEngine.load(Path.of("D:\\plugins2\\"));
         List<Path> pluginsDirs = FileUtil.listDirectory(Path.of("D:\\plugins\\")); // Directory with plugins JARs
 
         var gson = new GsonBuilder().setPrettyPrinting().create();
@@ -85,7 +82,7 @@ public class CopybotEngine {
                                 throw new RuntimeException(e);
                             }
 */
-                        CopybotEngine.m.doManyThings(p.toFile());
+                        //CopybotEngine.m.doManyThings(p.toFile());
 
                         pConsumer.accept(p);
                     });

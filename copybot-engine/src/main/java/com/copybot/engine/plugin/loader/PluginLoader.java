@@ -1,6 +1,7 @@
 package com.copybot.engine.plugin.loader;
 
 import com.copybot.engine.plugin.PluginDefinition;
+import com.copybot.engine.resources.ResourcesEngine;
 import com.copybot.engine.utils.ModuleUtil;
 import com.copybot.plugin.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
@@ -19,14 +20,14 @@ import java.util.stream.Collectors;
 public final class PluginLoader {
     List<LayerLoader> validLayers;
     List<LayerLoader> loadedLayers;
-    List<LayerLoader> layersWithDepenencies;
+    List<LayerLoader> layersWithDependencies;
     private List<PluginDefinition> pluginDefinitions;
 
     public PluginLoader() {
         validLayers = new ArrayList<>();
         pluginDefinitions = new ArrayList<>();
         loadedLayers = new ArrayList<>();
-        layersWithDepenencies = new ArrayList<>();
+        layersWithDependencies = new ArrayList<>();
     }
 
     public List<PluginDefinition> load() {
@@ -49,7 +50,7 @@ public final class PluginLoader {
                 continue;
             }
             var samePreviousPluginOpt = validLayers.stream()
-                    .filter(previousLl -> ModuleUtil.moduleMatches(ll.getMainModuleDescriptor(), previousLl.getMainModuleDescriptor()))
+                    .filter(previousLl -> ModuleUtil.sameMajorMinorModule(ll.getMainModuleDescriptor(), previousLl.getMainModuleDescriptor()))
                     .findFirst();
             if (samePreviousPluginOpt.isPresent()) {
                 LayerLoader previousLl = samePreviousPluginOpt.get();
@@ -77,7 +78,7 @@ public final class PluginLoader {
                 ll.load();
                 loadedLayers.add(ll);
             } else { // need other plugin
-                layersWithDepenencies.add(ll);
+                layersWithDependencies.add(ll);
             }
         }
     }
@@ -86,7 +87,7 @@ public final class PluginLoader {
         boolean hasResolvedPlugin;
         do {
             hasResolvedPlugin = false;
-            var it = layersWithDepenencies.iterator();
+            var it = layersWithDependencies.iterator();
             while (it.hasNext()) {
                 LayerLoader ll = it.next();
                 // find dependencies candidates in already loaded
@@ -107,17 +108,17 @@ public final class PluginLoader {
 
     private List<ModuleLayer> getCandidates(LayerLoader ll) {
         var candiadateLayers = loadedLayers.stream()
-                .filter(c -> ll.getRequires().stream().anyMatch(r -> ModuleUtil.moduleMatches(r, c.getMainModuleDescriptor())))
+                .filter(c -> ll.getRequires().stream().anyMatch(r -> ModuleUtil.moduleCompatible(c.getMainModuleDescriptor(), r)))
                 .map(LayerLoader::getModuleLayer)
                 .toList();
         return candiadateLayers;
     }
 
     private void markUnresolvedPlugin() {
-        for (LayerLoader ll : layersWithDepenencies) {
+        for (LayerLoader ll : layersWithDependencies) {
             String missingDependencies = ll.getRequires().stream()
                     .filter(r -> r.compiledVersion().isPresent())
-                    .filter(r -> loadedLayers.stream().anyMatch(m -> ModuleUtil.moduleMatches(r, m.getMainModuleDescriptor())))
+                    .filter(r -> loadedLayers.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m.getMainModuleDescriptor(), r)))
                     .map(r -> r.name() + ":" + r.compiledVersion().get().toString())
                     .collect(Collectors.joining(", "));
 
@@ -126,18 +127,30 @@ public final class PluginLoader {
     }
 
     private void instanciateResolved() {
-        Map<ModuleLayer, LayerLoader> moduleLayerToLayerLoaderMap = loadedLayers.stream().collect(Collectors.toMap(LayerLoader::getModuleLayer, Function.identity()));
-        Configuration allConfig = Configuration.resolve(ModuleFinder.ofSystem(), loadedLayers.stream().map(LayerLoader::getPluginConfiguration).toList(), ModuleFinder.of(), List.of());
-        ModuleLayer allLayers = ModuleLayer.defineModulesWithOneLoader(allConfig, loadedLayers.stream().map(LayerLoader::getModuleLayer).toList(), ClassLoader.getSystemClassLoader()).layer();
+        Map<ModuleLayer, LayerLoader> moduleLayerToLayerLoaderMap;
+        ModuleLayer allLayers;
+        if (loadedLayers.isEmpty()) {
+            // no plugins
+            moduleLayerToLayerLoaderMap = Map.of();
+            allLayers = ModuleLayer.boot();
+        } else {
+            moduleLayerToLayerLoaderMap = loadedLayers.stream().collect(Collectors.toMap(LayerLoader::getModuleLayer, Function.identity()));
+            Configuration allConfig = Configuration.resolve(ModuleFinder.ofSystem(), loadedLayers.stream().map(LayerLoader::getPluginConfiguration).toList(), ModuleFinder.of(), List.of());
+            allLayers = ModuleLayer.defineModulesWithOneLoader(allConfig, loadedLayers.stream().map(LayerLoader::getModuleLayer).toList(), ClassLoader.getSystemClassLoader()).layer();
+        }
+
 
         ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(allLayers, IPlugin.class);
 
         for (IPlugin service : serviceLoader) {
+            // load i18n
+            service.setResourceBundle(ResourcesEngine.buildPluginResourceBundle(service.getI18nBundleNames(), service));
+            // register
             if (service.getClass().equals(CBEmbeddedPlugin.class)) {
                 pluginDefinitions.add(PluginDefinition.ofEmbedded(service));
             } else {
                 LayerLoader ll = moduleLayerToLayerLoaderMap.get(service.getClass().getModule().getLayer());
-                System.out.println("I've found a service called '" + service.getName() + "' ! " + ll.getPath());
+                System.out.println("I've found a service called '" + service.getPluginCode() + "' ! " + ll.getPath());
                 pluginDefinitions.add(PluginDefinition.ofSuccess(ll, service));
             }
         }

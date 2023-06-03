@@ -7,5 +7,7 @@ module com.copybot.plugin.embedded {
     exports com.copybot.plugin.embedded;
     exports com.copybot.plugin.embedded.actions;
 
+    opens com.copybot.plugin.embedded.i18n;
+
     provides IPlugin with CBEmbeddedPlugin;
 }

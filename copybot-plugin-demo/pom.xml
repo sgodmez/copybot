@@ -12,8 +12,40 @@
     <modules>
         <module>copybot-plugin-demo-module</module>
         <module>copybot-plugin-demo-module-old-dependency</module>
+        <module>copybot-plugin-demo-module-2</module>
         <module>copybot-plugin-demo-no-module</module>
         <module>copybot-plugin-demo-inheritance</module>
     </modules>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-plugin-api</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.copybot</groupId>
+                <artifactId>copybot-dependencies</artifactId>
+                <version>1.0-SNAPSHOT</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
 </project>
