@@ -1,14 +1,10 @@
 package com.copybot.engine.pipeline;
 
-import com.google.gson.JsonElement;
+import com.copybot.plugin.action.IAction;
+import com.copybot.plugin.definition.IPlugin;
 
-public record PipelineStep(
-        String action,
-
-        /**
-         * optional discriminant if multiple version of the plugin is loaded
-         */
-        String version,
-        JsonElement actionConfig
+public record PipelineStep <A extends IAction> (
+        IPlugin plugin,
+        A action
 ) {
 }

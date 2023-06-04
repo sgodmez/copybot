@@ -1,42 +1,47 @@
 package com.copybot.engine;
 
+import com.copybot.engine.config.CopybotConfig;
+import com.copybot.engine.exception.ActionNotFoundException;
+import com.copybot.engine.exception.PluginNotFoundException;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStep;
+import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.plugin.PluginEngine;
-import com.copybot.engine.utils.FileUtil;
-import com.copybot.plugin.definition.IPlugin;
+import com.copybot.plugin.action.IInAction;
+import com.copybot.plugin.exception.ActionErrorException;
 import com.google.gson.GsonBuilder;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public class CopybotEngine {
-    private static IPlugin m;
 
-    private static PluginEngine pluginEngine;
+    private static ExecutorService executor;
 
-    public static void init() {
+    public static void init(CopybotConfig config) {
+        executor = Executors.newCachedThreadPool();
+
         //pluginEngine
+        PluginEngine.load(Path.of("D:\\plugins2\\"));
     }
 
-    public static void test() {
-        PluginEngine.load(Path.of("D:\\plugins2\\"));
-        List<Path> pluginsDirs = FileUtil.listDirectory(Path.of("D:\\plugins\\")); // Directory with plugins JARs
+    public static void destroy() {
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+    }
 
+    public static void run(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher) {
         var gson = new GsonBuilder().setPrettyPrinting().create();
-
-/*
-        var config = new PipelineConfig(List.of(new PipelineStep("test",null)),List.of(),List.of(),List.of());
-        var result = gson.toJson(config);
-        System.out.println(result);
-*/
-        PipelineConfig c = gson.fromJson("""
+        PipelineConfig testPipelineConfig = gson.fromJson("""
                 {
                   "inSteps": [
                     {
-                      "action": "test",
+                      "action": "read.file",
                       "actionConfig" : {
                          "path" : "d:/photos/"
                       }
@@ -46,48 +51,35 @@ public class CopybotEngine {
                   "outSteps": []
                 }
                 """, PipelineConfig.class);
-        //Test t = gson.fromJson(c.inSteps().get(0).actionConfig(),Test.class);
-        var cl = Thread.currentThread().getContextClassLoader();
-/*
-        m = PluginEngine.getLoadedPlugins().get(1).getPluginInstance();
-        var cl2 = m.getClass();
-        var actionClass = m.getInActions().get(0);
+
+        // ---------
+
+        PipelineStepConfig inStepsConfig = testPipelineConfig.inSteps().get(0);
+
+        PipelineStep<IInAction> inStep;
         try {
-            var actionInstance = actionClass.getConstructor().newInstance();
-            actionInstance.loadConfig(c.inSteps().get(0).actionConfig());
-        } catch (InstantiationException | IllegalAccessException | InvocationTargetException |
-                 NoSuchMethodException e) {
+            inStep = PluginEngine.resolve(inStepsConfig, IInAction.class);
+        } catch (PluginNotFoundException e) {
+            throw new RuntimeException(e);
+        } catch (ActionNotFoundException e) {
+            throw new RuntimeException(e);
+        } catch (ActionErrorException e) {
             throw new RuntimeException(e);
         }
- */
-    }
 
-    public static void run(Consumer<Path> pConsumer) {
-        try {
-            Files.find(Path.of("D:\\photos"),
-                            Integer.MAX_VALUE,
-                            (filePath, fileAttr) -> fileAttr.isRegularFile())
-                    .forEach(p -> {
-//                            try {
-//                                Thread.currentThread().sleep(3);
-//                            } catch (InterruptedException e) {
-//                                throw new RuntimeException(e);
-//                            }
-/*
-                            try {
-                                extractMetadata(p.toFile());
-                            } catch (ImageProcessingException e) {
-                                //throw new RuntimeException(e);
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-*/
-                        //CopybotEngine.m.doManyThings(p.toFile());
+        PipelineState state = new PipelineState(List.of());
 
-                        pConsumer.accept(p);
-                    });
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+        executor.submit(() -> {
+            try {
+                inStep.action().listFiles(workItem -> {
+                    state.getWorkItems().add(workItem);
+                    if (watcher != null) {
+                        watcher.accept(state);
+                    }
+                });
+            } catch (ActionErrorException e) {
+                throw new RuntimeException(e);
+            }
+        });
     }
 }

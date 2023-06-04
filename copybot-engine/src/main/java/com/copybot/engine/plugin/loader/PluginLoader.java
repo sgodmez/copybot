@@ -2,7 +2,7 @@ package com.copybot.engine.plugin.loader;
 
 import com.copybot.engine.plugin.PluginDefinition;
 import com.copybot.engine.resources.ResourcesEngine;
-import com.copybot.engine.utils.ModuleUtil;
+import com.copybot.engine.utils.VersionUtil;
 import com.copybot.plugin.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 
@@ -50,7 +50,7 @@ public final class PluginLoader {
                 continue;
             }
             var samePreviousPluginOpt = validLayers.stream()
-                    .filter(previousLl -> ModuleUtil.sameMajorMinorModule(ll.getMainModuleDescriptor(), previousLl.getMainModuleDescriptor()))
+                    .filter(previousLl -> VersionUtil.sameMajorMinorModule(ll.getMainModuleDescriptor(), previousLl.getMainModuleDescriptor()))
                     .findFirst();
             if (samePreviousPluginOpt.isPresent()) {
                 LayerLoader previousLl = samePreviousPluginOpt.get();
@@ -108,7 +108,7 @@ public final class PluginLoader {
 
     private List<ModuleLayer> getCandidates(LayerLoader ll) {
         var candiadateLayers = loadedLayers.stream()
-                .filter(c -> ll.getRequires().stream().anyMatch(r -> ModuleUtil.moduleCompatible(c.getMainModuleDescriptor(), r)))
+                .filter(c -> ll.getRequires().stream().anyMatch(r -> VersionUtil.moduleCompatible(c.getMainModuleDescriptor(), r)))
                 .map(LayerLoader::getModuleLayer)
                 .toList();
         return candiadateLayers;
@@ -118,7 +118,7 @@ public final class PluginLoader {
         for (LayerLoader ll : layersWithDependencies) {
             String missingDependencies = ll.getRequires().stream()
                     .filter(r -> r.compiledVersion().isPresent())
-                    .filter(r -> loadedLayers.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m.getMainModuleDescriptor(), r)))
+                    .filter(r -> loadedLayers.stream().anyMatch(m -> VersionUtil.moduleCompatible(m.getMainModuleDescriptor(), r)))
                     .map(r -> r.name() + ":" + r.compiledVersion().get().toString())
                     .collect(Collectors.joining(", "));
 

@@ -1,7 +1,7 @@
 package com.copybot.engine.plugin.loader;
 
 import com.copybot.engine.utils.FileUtil;
-import com.copybot.engine.utils.ModuleUtil;
+import com.copybot.engine.utils.VersionUtil;
 import com.copybot.plugin.definition.IPlugin;
 
 import java.lang.module.Configuration;
@@ -73,10 +73,10 @@ public final class LayerLoader {
         var rootModules = ModuleLayer.boot().modules().stream()
                 .map(Module::getDescriptor)
                 .toList();
-        requires.removeIf(req -> rootModules.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
+        requires.removeIf(req -> rootModules.stream().anyMatch(m -> VersionUtil.moduleCompatible(m, req)));
 
         // remove internally provided requirements
-        requires.removeIf(req -> moduleDescriptors.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
+        requires.removeIf(req -> moduleDescriptors.stream().anyMatch(m -> VersionUtil.moduleCompatible(m, req)));
     }
 
     public boolean canBeLoaded() {
@@ -88,7 +88,7 @@ public final class LayerLoader {
                 .flatMap(l -> l.modules().stream())
                 .map(Module::getDescriptor)
                 .toList();
-        return requires.stream().allMatch(req -> parentModules.stream().anyMatch(m -> ModuleUtil.moduleCompatible(m, req)));
+        return requires.stream().allMatch(req -> parentModules.stream().anyMatch(m -> VersionUtil.moduleCompatible(m, req)));
     }
 
 

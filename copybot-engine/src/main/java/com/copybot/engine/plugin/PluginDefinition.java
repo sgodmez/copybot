@@ -1,7 +1,11 @@
 package com.copybot.engine.plugin;
 
+import com.copybot.engine.exception.ActionNotFoundException;
+import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.LayerLoader;
+import com.copybot.plugin.action.ActionDefinition;
 import com.copybot.plugin.definition.IPlugin;
+import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 
 import java.nio.file.Path;
 
@@ -33,7 +37,7 @@ public final class PluginDefinition {
     }
 
     public static PluginDefinition ofEmbedded(IPlugin pluginInstance) {
-        return new PluginDefinition("Embedded", null, null, true, null, pluginInstance);
+        return new PluginDefinition(CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME, null, null, true, null, pluginInstance);
     }
 
     private PluginDefinition(String name, String version, Path path, boolean active, String errorMessage, IPlugin pluginInstance) {
@@ -43,6 +47,19 @@ public final class PluginDefinition {
         this.active = active;
         this.errorMessage = errorMessage;
         this.pluginInstance = pluginInstance;
+    }
+
+    public ActionDefinition findAction(String name, StepType type) throws ActionNotFoundException {
+        var actionList = switch (type) {
+            case IN -> pluginInstance.getInActions();
+            case ANALYZE -> pluginInstance.getAnalyzeActions();
+            case PROCESS -> pluginInstance.getProcessActions();
+            case OUT -> pluginInstance.getOutActions();
+        };
+        return actionList.stream()
+                .filter(a -> a.actionCode().equals(name))
+                .findFirst()
+                .orElseThrow(() -> new ActionNotFoundException(name));
     }
 
     public String getName() {

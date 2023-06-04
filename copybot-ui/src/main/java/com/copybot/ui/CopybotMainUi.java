@@ -24,12 +24,12 @@ public class CopybotMainUi extends Application {
 
     @Override
     public void start(Stage stage) throws IOException {
-        CopybotEngine.test();
+        CopybotEngine.init(null);
 
         STAGE = stage;
         var plugin = PluginEngine.getLoadedPlugins().get(1).getPluginInstance();
-        FXMLLoader fxmlLoader = new FXMLLoader(plugin.getClass().getResource("views/test-view.fxml"));
-        //FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view.fxml"));
+        //FXMLLoader fxmlLoader = new FXMLLoader(plugin.getClass().getResource("views/test-view.fxml"));
+        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view.fxml"));
         //Locale.setDefault(Locale.ENGLISH);
         ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
         ResourcesEngine.loadLanguage(Locale.GERMAN);
@@ -48,6 +48,7 @@ public class CopybotMainUi extends Application {
         if (executor != null) {
             executor.shutdown();
         }
+        CopybotEngine.destroy();
     }
 
     public static void main(String[] args) {

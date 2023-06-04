@@ -1,11 +1,16 @@
 package com.copybot.plugin.action;
 
-import java.util.List;
+import com.copybot.plugin.exception.ActionErrorException;
+
+import java.util.function.Consumer;
 
 public interface IInAction extends IAction {
 
-    List<WorkItem> listFiles();
-
+    /**
+     * Function that produce work items to the provided consumer.
+     * Action ends when returns.
+     */
+    void listFiles(Consumer<WorkItem> workItemConsumer) throws ActionErrorException;
 
 
 }

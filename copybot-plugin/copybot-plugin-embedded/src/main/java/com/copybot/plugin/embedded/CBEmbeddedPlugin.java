@@ -9,15 +9,17 @@ import java.util.List;
 
 public class CBEmbeddedPlugin extends AbstractPlugin {
 
+    public static final String EMBEDDED_PLUGN_NAME = "embedded";
+
     @Override
     public String getPluginCode() {
-        return "embedded";
+        return EMBEDDED_PLUGN_NAME;
     }
 
     @Override
     public List<ActionDefinition<? extends IInAction>> getInActions() {
         return List.of(
-                new ActionDefinition("read-file", ReadFiles.class, false)
+                new ActionDefinition("read.file", ReadFiles.class, false)
         );
     }
 }

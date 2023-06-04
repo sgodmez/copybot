@@ -1,7 +1,7 @@
 package com.copybot.ui;
 
-import com.copybot.plugin.action.WorkItem;
 import com.copybot.engine.CopybotEngine;
+import com.copybot.plugin.action.WorkItem;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -15,7 +15,6 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.io.IOException;
-import java.nio.file.Files;
 
 public class HelloController {
     @FXML
@@ -63,29 +62,27 @@ public class HelloController {
 
     @FXML
     protected void onHelloButtonClick() throws IOException {
+        /*
         StartExp s = new StartExp();
         CopybotMainUi.executor.submit(s);
-
+*/
+        /*
+        CopybotEngine.run(null, null, wi -> {
+            Platform.runLater(() -> {
+                fileListObservable.add(wi);
+                fileCount.setText(String.valueOf(fileListObservable.size()));
+            });
+        });
+*/
+        CopybotEngine.run(null, state -> {
+            Platform.runLater(() -> {
+                fileListObservable.clear();
+                fileListObservable.addAll(state.getWorkItems());
+                fileCount.setText(String.valueOf(fileListObservable.size()));
+            });
+        });
 
 //        welcomeText.setText("Welcome to JavaFX Application!");
-    }
-
-
-    private class StartExp implements Runnable {
-
-        @Override
-        public void run() {
-            CopybotEngine.run(p -> {
-                Platform.runLater(() -> {
-                    fileCount.setText(String.valueOf(fileListObservable.size()));
-                    try {
-                        fileListObservable.add(new WorkItem(p.getFileName().toString(), p.getParent().toString(), Files.size(p)));
-                    } catch (IOException e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-            });
-        }
     }
 
 

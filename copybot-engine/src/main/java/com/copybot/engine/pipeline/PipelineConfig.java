@@ -4,10 +4,10 @@ import java.util.List;
 
 public record PipelineConfig(
 
-        List<PipelineStep> inSteps,
-        List<PipelineStep> analyseSteps,
-        List<PipelineStep> actionSteps,
-        List<PipelineStep> outSteps
+        List<PipelineStepConfig> inSteps,
+        List<PipelineStepConfig> analyseSteps,
+        List<PipelineStepConfig> actionSteps,
+        List<PipelineStepConfig> outSteps
 
         ) {
 }

@@ -29,6 +29,9 @@ public interface IAction {
 
     void setStatusWatcher(Consumer<WorkStatus> watcher);
 
+    /**
+     * Called at start to chain action with its plugin.
+     */
     void setPlugin(IPlugin plugin);
 
 }

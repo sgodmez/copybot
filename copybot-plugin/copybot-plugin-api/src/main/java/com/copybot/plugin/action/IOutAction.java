@@ -1,12 +1,10 @@
 package com.copybot.plugin.action;
 
-import java.io.File;
+import com.copybot.plugin.exception.ActionErrorException;
 
 public interface IOutAction extends IAction {
 
-    void doManyThings(File file);
-
-
+    void writeItem(WorkItem workItem) throws ActionErrorException;
 
 
 }

@@ -4,7 +4,7 @@ import java.lang.module.ModuleDescriptor;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-public final class ModuleUtil {
+public final class VersionUtil {
 
     private static final Pattern versionExtractPattern = Pattern.compile("^([0-9]+)\\.([0-9]+).*");
 
@@ -18,16 +18,20 @@ public final class ModuleUtil {
                 && moduleVersionCompatible(module1.version(), module2.version(), true);
     }
 
-    private static boolean moduleVersionCompatible(Optional<ModuleDescriptor.Version> version, Optional<ModuleDescriptor.Version> versionRequire, boolean strict) {
+    public static boolean moduleVersionCompatible(Optional<ModuleDescriptor.Version> version, Optional<ModuleDescriptor.Version> versionRequire, boolean strict) {
         return version.isEmpty() || versionRequire.isEmpty()
-                || isCompatible(version.get(), versionRequire.get(), strict);
+                || isCompatible(version.get().toString(), versionRequire.get().toString(), strict);
     }
 
-    private static boolean isCompatible(ModuleDescriptor.Version version, ModuleDescriptor.Version require, boolean strict) {
-        var matcherVersion = versionExtractPattern.matcher(version.toString());
-        var matcherRequire = versionExtractPattern.matcher(version.toString());
+    /**
+     * Check if version is compatible.
+     * Same major version and same minor or above. If strict = true, only same minor.
+     */
+    public static boolean isCompatible(String version, String require, boolean strict) {
+        var matcherVersion = versionExtractPattern.matcher(version);
+        var matcherRequire = versionExtractPattern.matcher(require);
         if (!matcherVersion.matches() || !matcherRequire.matches()) {
-            return version.toString().equals(require.toString()); // fallback if no minor version
+            return version.equals(require); // fallback if no minor version
         }
 
         boolean sameMajor = matcherVersion.group(1).equals(matcherRequire.group(1));

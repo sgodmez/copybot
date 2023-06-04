@@ -20,6 +20,17 @@ public interface IPlugin {
         // nothing by default
     }
 
+    /*
+    // make dedicated interface to use also with actions ?
+    default boolean canMigrateConfig(int previousMajorVersion) {
+        return false;
+    }
+
+    default JsonElement migrateConfig(JsonElement previousConfig) {
+        return previousConfig;
+    }
+     */
+
     Iterable<String> getI18nBundleNames();
 
     void setResourceBundle(ResourceBundle resourceBundle);
