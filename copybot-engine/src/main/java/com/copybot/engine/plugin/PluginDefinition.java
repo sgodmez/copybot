@@ -1,10 +1,10 @@
 package com.copybot.engine.plugin;
 
-import com.copybot.engine.exception.ActionNotFoundException;
+import com.copybot.exception.ActionNotFoundException;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.LayerLoader;
-import com.copybot.plugin.action.ActionDefinition;
-import com.copybot.plugin.definition.IPlugin;
+import com.copybot.plugin.api.action.ActionDefinition;
+import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 
 import java.nio.file.Path;

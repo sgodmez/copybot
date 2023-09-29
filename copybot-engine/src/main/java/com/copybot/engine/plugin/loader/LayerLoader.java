@@ -1,8 +1,8 @@
 package com.copybot.engine.plugin.loader;
 
-import com.copybot.engine.utils.FileUtil;
-import com.copybot.engine.utils.VersionUtil;
-import com.copybot.plugin.definition.IPlugin;
+import com.copybot.utils.FileUtil;
+import com.copybot.utils.VersionUtil;
+import com.copybot.plugin.api.definition.IPlugin;
 
 import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;

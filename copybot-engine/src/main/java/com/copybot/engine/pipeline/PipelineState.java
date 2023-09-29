@@ -1,6 +1,6 @@
 package com.copybot.engine.pipeline;
 
-import com.copybot.plugin.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItem;
 
 import java.util.ArrayList;
 import java.util.List;

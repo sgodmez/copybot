@@ -1,8 +1,8 @@
 package com.copybot.plugin.demo.module2;
 
-import com.copybot.plugin.action.ActionDefinition;
-import com.copybot.plugin.action.IAnalyzeAction;
-import com.copybot.plugin.definition.AbstractPlugin;
+import com.copybot.plugin.api.action.ActionDefinition;
+import com.copybot.plugin.api.action.IAnalyzeAction;
+import com.copybot.plugin.api.definition.AbstractPlugin;
 import com.copybot.plugin.demo.module2.actions.DemoModule2Action;
 
 import java.util.List;

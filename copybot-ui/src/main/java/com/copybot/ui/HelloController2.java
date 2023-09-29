@@ -16,7 +16,7 @@ public class HelloController2 {
 
     @FXML
     protected void onTestButtonClick() throws IOException {
-        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("hello-view2.fxml"));
+        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view2.fxml"));
 
         Scene secondScene = new Scene(fxmlLoader.load(), 230, 100);
 

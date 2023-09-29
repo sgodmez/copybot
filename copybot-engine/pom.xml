@@ -14,11 +14,6 @@
 
     <dependencies>
         <dependency>
-            <groupId>com.copybot</groupId>
-            <artifactId>copybot-plugin-api</artifactId>
-            <version>${project.parent.version}</version>
-        </dependency>
-        <dependency>
             <groupId>org.openjfx</groupId>
             <artifactId>javafx-controls</artifactId>
             <optional>true</optional>
@@ -30,12 +25,6 @@
         </dependency>
 
         <dependency>
-            <groupId>com.copybot</groupId>
-            <artifactId>copybot-plugin-embedded</artifactId>
-            <version>${project.parent.version}</version>
-        </dependency>
-
-        <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
             <version>4.7.2</version>
@@ -43,6 +32,14 @@
         <dependency>
             <groupId>com.google.code.gson</groupId>
             <artifactId>gson</artifactId>
+        </dependency>
+
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
         </dependency>
 
     </dependencies>

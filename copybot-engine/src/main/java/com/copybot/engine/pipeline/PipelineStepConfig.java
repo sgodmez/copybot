@@ -13,10 +13,13 @@ public record PipelineStepConfig(
 
         String filterCondition,
 
+        Integer maxConcurrency,
+        Integer priority,
+
         JsonElement actionConfig
 ) {
 
     public String getDisplayName() {
-        return plugin + version == null ? "" : ':' + version;
+        return plugin + (version == null ? "" : ':' + version);
     }
 }

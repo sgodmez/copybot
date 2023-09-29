@@ -1,0 +1,12 @@
+{
+  "inSteps": [
+    {
+      "action": "read.file",
+      "actionConfig": {
+        "path": "d:/photos/"
+      }
+    }
+  ],
+  "analyseSteps": [],
+  "outSteps": []
+}

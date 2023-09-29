@@ -62,7 +62,7 @@
                </TableColumn>
                <TableColumn minWidth="0.0" prefWidth="91.0" text="Size">
                   <cellValueFactory>
-                     <PropertyValueFactory property="size" />
+                     <PropertyValueFactory property="sizeHR" />
                   </cellValueFactory>
                </TableColumn>
            </columns>

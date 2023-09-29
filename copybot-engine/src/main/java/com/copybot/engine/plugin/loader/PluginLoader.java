@@ -1,9 +1,9 @@
 package com.copybot.engine.plugin.loader;
 
 import com.copybot.engine.plugin.PluginDefinition;
-import com.copybot.engine.resources.ResourcesEngine;
-import com.copybot.engine.utils.VersionUtil;
-import com.copybot.plugin.definition.IPlugin;
+import com.copybot.resources.ResourcesEngine;
+import com.copybot.utils.VersionUtil;
+import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 
 import java.lang.module.Configuration;

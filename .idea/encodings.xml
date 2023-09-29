@@ -29,6 +29,8 @@
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-api/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-embedded/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-embedded/src/main/resources" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-metadata-extractor/src/main/java" charset="UTF-8" />
+    <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-metadata-extractor/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-optional/copybot-plugin-metadata-extractor/src/main/java" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-optional/copybot-plugin-metadata-extractor/src/main/resources" charset="UTF-8" />
     <file url="file://$PROJECT_DIR$/copybot-plugin/copybot-plugin-optional/src/main/java" charset="UTF-8" />

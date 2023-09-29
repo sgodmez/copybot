@@ -1,16 +1,16 @@
 package com.copybot.engine.plugin;
 
-import com.copybot.engine.exception.ActionNotFoundException;
-import com.copybot.engine.exception.PluginNotFoundException;
+import com.copybot.exception.ActionNotFoundException;
+import com.copybot.exception.PluginNotFoundException;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.PluginLoader;
-import com.copybot.engine.utils.FileUtil;
-import com.copybot.engine.utils.VersionUtil;
-import com.copybot.plugin.action.IAction;
+import com.copybot.utils.FileUtil;
+import com.copybot.utils.VersionUtil;
+import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
-import com.copybot.plugin.exception.ActionErrorException;
+import com.copybot.plugin.api.exception.ActionErrorException;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -23,11 +23,11 @@ public final class PluginEngine {
     private static List<PluginDefinition> loadedPlugins = new ArrayList<>();
     private static List<PluginDefinition> errorPlugins = new ArrayList<>();
 
-    public static void load(Path pluginDir) {
+    public static void load(Path pluginDir, List<Path> devPluginDirs) {
         PluginLoader pl = new PluginLoader();
 
         pl.resolve(FileUtil.listDirectory(pluginDir), false);
-        pl.resolve(List.of(Path.of("C:\\Users\\Steven\\IdeaProjects\\copybot\\copybot-plugin\\copybot-plugin-optional\\copybot-plugin-metadata-extractor\\target")), true);// test dev
+        pl.resolve(devPluginDirs, true);
 
         var allPlugins = pl.load();
         allPlugins.sort(Comparator
@@ -66,7 +66,7 @@ public final class PluginEngine {
         var actionDef = pluginDef.findAction(stepConfig.action(), type);
         IAction actionInstance = actionDef.getInstance();
         actionInstance.loadConfig(stepConfig.actionConfig());
-        return new PipelineStep(pluginDef.getPluginInstance(), actionInstance);
+        return new PipelineStep(pluginDef.getPluginInstance(), actionInstance, stepConfig);
     }
 
 
@@ -74,8 +74,7 @@ public final class PluginEngine {
         String stepPluginName = stepConfig.plugin() == null || stepConfig.plugin().isBlank() ? CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME : stepConfig.plugin();
         return plugin.getName().equals(stepPluginName)
                 && (
-                plugin.getVersion() == null // embedded plugin have no version
-                        || stepConfig.version() == null
+                plugin.getVersion() == null // fixme embedded plugin have no version
                         || VersionUtil.isCompatible(plugin.getVersion(), stepConfig.version(), true)
         );
     }

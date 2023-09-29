@@ -1,7 +1,7 @@
 package com.copybot.ui;
 
 import com.copybot.engine.CopybotEngine;
-import com.copybot.plugin.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItem;
 import javafx.application.Platform;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -37,7 +37,7 @@ public class HelloController {
 
     @FXML
     protected void onTestButtonClick() throws IOException {
-        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("hello-view2.fxml"));
+        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view2.fxml"));
 
         Scene secondScene = new Scene(fxmlLoader.load(), 230, 100);
 

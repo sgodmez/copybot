@@ -1,8 +1,8 @@
-import com.copybot.plugin.definition.IPlugin;
+import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.demo.module.DemoModulePlugin;
 
 module com.copybot.plugin.demo.module {
-    requires com.copybot.plugin.api;
+    requires com.copybot.engine;
     requires metadata.extractor;
 
     exports com.copybot.plugin.demo.module;

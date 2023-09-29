@@ -20,12 +20,6 @@
     </properties>
 
     <dependencies>
-        <dependency>
-            <groupId>com.copybot</groupId>
-            <artifactId>copybot-plugin-api</artifactId>
-            <version>1.0-SNAPSHOT</version>
-            <scope>provided</scope>
-        </dependency>
 
         <!-- used for demo purpose only, this version is not safe anymore -->
         <dependency>

@@ -1,6 +1,6 @@
 package com.copybot.engine.pipeline;
 
-import com.copybot.plugin.action.*;
+import com.copybot.plugin.api.action.*;
 
 public enum StepType {
     IN(IInAction.class),

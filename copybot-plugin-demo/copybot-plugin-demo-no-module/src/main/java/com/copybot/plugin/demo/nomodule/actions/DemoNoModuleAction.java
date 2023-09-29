@@ -1,8 +1,8 @@
 package com.copybot.plugin.demo.nomodule.actions;
 
-import com.copybot.plugin.action.AbstractAction;
-import com.copybot.plugin.action.IAnalyzeAction;
-import com.copybot.plugin.action.WorkItem;
+import com.copybot.plugin.api.action.AbstractAction;
+import com.copybot.plugin.api.action.IAnalyzeAction;
+import com.copybot.plugin.api.action.WorkItem;
 import com.drew.metadata.Metadata;
 
 public class DemoNoModuleAction extends AbstractAction implements IAnalyzeAction {
