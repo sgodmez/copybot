@@ -27,11 +27,13 @@ public class ReadFiles extends AbstractActionWithConfig<ReadFileConfig> implemen
                             Integer.MAX_VALUE,
                             (filePath, fileAttr) -> fileAttr.isRegularFile())
                     .forEach(p -> {
+                        /*
                         try {
                             Thread.currentThread().sleep(30);
                         } catch (InterruptedException e) {
                             throw new RuntimeException(e);
                         }
+                         */
                         WorkItem wi;
                         try {
                             wi = new WorkItem(p.getFileName().toString(), p.getParent().toString(), Files.size(p));

@@ -12,7 +12,7 @@
 <?import javafx.scene.control.cell.PropertyValueFactory?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox prefHeight="490.0" prefWidth="732.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.HelloController">
+<VBox prefHeight="768.0" prefWidth="1024.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.HelloController">
    <MenuBar>
      <menus>
        <Menu mnemonicParsing="false" text="File">

@@ -23,7 +23,6 @@ public class WorkItem {
         this.name = name;
         this.sourceLocationDisplay = sourceLocationDisplay;
         this.size = size;
-        FileUtil.toAutoUnitSize(12, 2);
     }
 
     public String getName() {

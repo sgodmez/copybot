@@ -13,12 +13,6 @@
     <artifactId>copybot-plugin-demo-module</artifactId>
     <version>1.0</version>
 
-    <properties>
-        <maven.compiler.source>17</maven.compiler.source>
-        <maven.compiler.target>17</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
-
     <dependencies>
 
         <!-- used for demo purpose only, this version is not safe anymore -->
@@ -31,15 +25,6 @@
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.10.1</version>
-                <configuration>
-                    <source>17</source>
-                    <target>17</target>
-                </configuration>
-            </plugin>
             <plugin>
                 <artifactId>maven-dependency-plugin</artifactId>
                 <executions>

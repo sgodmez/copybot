@@ -20,6 +20,6 @@ public record PipelineStepConfig(
 ) {
 
     public String getDisplayName() {
-        return plugin + (version == null ? "" : ':' + version);
+        return action + " => " + plugin + (version == null ? "" : ':' + version);
     }
 }

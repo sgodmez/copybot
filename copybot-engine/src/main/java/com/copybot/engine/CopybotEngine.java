@@ -7,18 +7,24 @@ import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.exception.ActionNotFoundException;
+import com.copybot.exception.CopybotException;
 import com.copybot.exception.PluginNotFoundException;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.exception.ActionErrorException;
+import com.copybot.utils.GsonUtil;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonSyntaxException;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,7 +43,21 @@ public class CopybotEngine {
     private static List<PipelineStep<IProcessAction>> processSteps;
     private static List<PipelineStep<IOutAction>> outSteps;
 
-    public static void init(CopybotConfig config) {
+    public static void init(Optional<Path> configPathOpt) {
+        Path configPath = configPathOpt.orElse(Path.of("./config.json"));
+
+        if (!configPath.toFile().canRead()) {
+            throw CopybotException.ofResource("config.not-found", configPath.toAbsolutePath());
+        }
+
+        CopybotConfig config;
+        try {
+            String configString = Files.readString(configPath);
+            config = GsonUtil.getGson().fromJson(configString, CopybotConfig.class);
+        } catch (IOException | JsonSyntaxException e) {
+            throw CopybotException.ofResource(e, "config.not-json", configPath);
+        }
+
         executor = Executors.newCachedThreadPool();
 
         inSteps = new ArrayList<>();

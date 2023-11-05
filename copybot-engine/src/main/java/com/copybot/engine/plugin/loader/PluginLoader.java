@@ -141,10 +141,9 @@ public final class PluginLoader {
 
 
         ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(allLayers, IPlugin.class);
-
         for (IPlugin service : serviceLoader) {
             // load i18n
-            service.setResourceBundle(ResourcesEngine.buildPluginResourceBundle(service.getI18nBundleNames(), service));
+            service.setResourceBundle(ResourcesEngine.buildPluginResourceBundle(service.getI18nBundleNames(), service.getClass().getModule()));
             // register
             if (service.getClass().equals(CBEmbeddedPlugin.class)) {
                 pluginDefinitions.add(PluginDefinition.ofEmbedded(service));

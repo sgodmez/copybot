@@ -1,18 +1,20 @@
-package com.copybot.engine;
+package com.copybot;
 
+import com.copybot.engine.CopybotEngine;
 import com.copybot.exception.CopybotException;
+import com.copybot.logger.CopybotLogger;
 import picocli.CommandLine;
 
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.concurrent.ExecutionException;
-import java.util.logging.Logger;
 
 @CommandLine.Command(name = "Copybot", version = "0.1", mixinStandardHelpOptions = true)
 public class Copybot implements Runnable {
 
-    private static final Logger LOG = Logger.getLogger(Copybot.class.getCanonicalName());
+    private static final CopybotLogger LOG = CopybotLogger.getLogger(Copybot.class);
 
-    @CommandLine.Option(names = {"-c", "--config-file"}, description = "Configuration file", defaultValue = "./config.json")
+    @CommandLine.Option(names = {"-c", "--config-file"}, description = "Configuration file")
     private Path configPath;
 
     @CommandLine.Option(names = {"-p", "--pipeline"}, description = "Pipeline file", required = true)
@@ -30,7 +32,7 @@ public class Copybot implements Runnable {
             doRun();
         } catch (Exception e) {
             if (isDebug) {
-                throw e;
+                throw CopybotException.wrapIfNeeded(e);
             } else {
                 System.err.println(e.getMessage());
             }
@@ -38,16 +40,10 @@ public class Copybot implements Runnable {
     }
 
     public void doRun() {
-        if (!configPath.toFile().canRead()) {
-            LOG.warning("test");
-            System.out.println("No config file found at '{0}', using defaults");
-        }
-
-        CopybotEngine.init(null);
-
+        CopybotEngine.init(Optional.ofNullable(configPath));
 
         if (!pipelinePath.toFile().canRead()) {
-            throw CopybotException.ofResourceBundle("pipeline.not-found", pipelinePath);
+            throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
         }
 
 
@@ -67,7 +63,11 @@ public class Copybot implements Runnable {
 
 
     public static void main(String... args) {
-        int exitCode = new CommandLine(new Copybot()).execute(args);
+        int exitCode = doMain(args);
         System.exit(exitCode);
+    }
+
+    public static int doMain(String... args) {
+        return new CommandLine(new Copybot()).execute(args);
     }
 }

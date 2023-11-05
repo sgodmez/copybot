@@ -1,10 +1,15 @@
 package com.copybot.engine;
 
+import com.copybot.Copybot;
 import org.junit.jupiter.api.Test;
 
 public class MainTest {
+
     @Test
     public void testMain() {
-        //Copybot.main("-p=./src/test/resources/opybot/engine/test-pipeline.json", "--debug");
+        Copybot.doMain(
+                "-p=./src/test/resources/com/copybot/engine/test-pipeline.json",
+                "-c=./src/test/resources/com/copybot/engine/config.json",
+                "--debug");
     }
 }

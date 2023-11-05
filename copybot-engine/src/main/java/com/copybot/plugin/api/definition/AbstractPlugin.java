@@ -1,11 +1,12 @@
 package com.copybot.plugin.api.definition;
 
+import com.copybot.resources.CombinedResourceBundle;
+
 import java.util.List;
-import java.util.ResourceBundle;
 
 public abstract class AbstractPlugin implements IPlugin {
 
-    private ResourceBundle resourceBundle;
+    private CombinedResourceBundle resourceBundle;
 
     @Override
     public Iterable<String> getI18nBundleNames() {
@@ -13,12 +14,12 @@ public abstract class AbstractPlugin implements IPlugin {
     }
 
     @Override
-    public ResourceBundle getResourceBundle() {
+    public CombinedResourceBundle getResourceBundle() {
         return resourceBundle;
     }
 
     @Override
-    public void setResourceBundle(ResourceBundle resourceBundle) {
+    public void setResourceBundle(CombinedResourceBundle resourceBundle) {
         this.resourceBundle = resourceBundle;
     }
 }

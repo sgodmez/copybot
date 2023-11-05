@@ -102,7 +102,7 @@
                             <linuxPackageName>Copybot</linuxPackageName>
                             <linuxAppCategory>Utilities</linuxAppCategory>
                             <linuxMenuGroup>Utilities</linuxMenuGroup>
-                            <icon>${project.basedir}/Robot_icon.ico</icon>
+                            <icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.png</icon>
                             <javaOptions>
                                 <option>-Dfile.encoding=UTF-8</option>
                             </javaOptions>

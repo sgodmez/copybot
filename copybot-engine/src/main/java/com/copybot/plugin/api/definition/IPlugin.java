@@ -1,10 +1,10 @@
 package com.copybot.plugin.api.definition;
 
 import com.copybot.plugin.api.action.*;
+import com.copybot.resources.CombinedResourceBundle;
 import com.google.gson.JsonElement;
 
 import java.util.List;
-import java.util.ResourceBundle;
 
 public interface IPlugin {
 
@@ -33,9 +33,9 @@ public interface IPlugin {
 
     Iterable<String> getI18nBundleNames();
 
-    void setResourceBundle(ResourceBundle resourceBundle);
+    void setResourceBundle(CombinedResourceBundle resourceBundle);
 
-    ResourceBundle getResourceBundle();
+    CombinedResourceBundle getResourceBundle();
 
     default List<ActionDefinition<? extends IInAction>> getInActions() {
         return List.of();

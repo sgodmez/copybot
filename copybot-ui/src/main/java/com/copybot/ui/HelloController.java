@@ -15,6 +15,8 @@ import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
 public class HelloController {
     @FXML
@@ -76,8 +78,8 @@ public class HelloController {
 */
         CopybotEngine.run(null, state -> {
             Platform.runLater(() -> {
-                fileListObservable.clear();
-                fileListObservable.addAll(state.getWorkItems());
+                List<WorkItem> list = new ArrayList<>(state.getWorkItems()); // copy to prevent list to evolve while setting to fileListObservable
+                fileListObservable.setAll(list);
                 fileCount.setText(String.valueOf(fileListObservable.size()));
             });
         });

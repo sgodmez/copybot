@@ -1,14 +1,12 @@
 package com.copybot.resources;
 
-import com.copybot.plugin.api.definition.IPlugin;
-
 import java.text.MessageFormat;
 import java.util.*;
 
 public class CombinedResourceBundle extends ResourceBundle {
 
     private final CombinedResourceBundle parent;
-    private final IPlugin context;
+    private final Module context;
 
     private List<String> bundleNames = new ArrayList<>();
 
@@ -19,7 +17,7 @@ public class CombinedResourceBundle extends ResourceBundle {
         parent = null;
     }
 
-    public CombinedResourceBundle(IPlugin context, CombinedResourceBundle parent) {
+    public CombinedResourceBundle(Module context, CombinedResourceBundle parent) {
         this.context = context;
         this.parent = parent;
     }
@@ -39,7 +37,7 @@ public class CombinedResourceBundle extends ResourceBundle {
     private void loadBundle(Locale locale, String basename) {
         ResourceBundle rb = context == null ?
                 ResourceBundle.getBundle(basename, locale) :
-                ResourceBundle.getBundle(basename, locale, context.getClass().getModule());
+                ResourceBundle.getBundle(basename, locale, context);
         for (String key : rb.keySet()) {
             dictionary.put(key, rb.getString(key));
         }

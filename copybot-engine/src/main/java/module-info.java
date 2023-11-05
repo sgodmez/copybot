@@ -7,6 +7,7 @@ module com.copybot.engine {
     requires info.picocli;
     requires com.google.gson;
 
+    exports com.copybot.config to com.google.gson;
     exports com.copybot.exception;
     exports com.copybot.resources;
     exports com.copybot.utils;
@@ -21,6 +22,8 @@ module com.copybot.engine {
     exports com.copybot.plugin.api.exception;
 
     exports com.copybot.plugin.embedded.actions;
+    exports com.copybot to com.copybot.ui;
+    opens com.copybot to info.picocli, javafx.base;
 
     uses IPlugin;
     uses ILanguagePack;
