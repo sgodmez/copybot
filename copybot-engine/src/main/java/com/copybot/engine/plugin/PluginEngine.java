@@ -1,16 +1,14 @@
 package com.copybot.engine.plugin;
 
-import com.copybot.exception.ActionNotFoundException;
-import com.copybot.exception.PluginNotFoundException;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.PluginLoader;
-import com.copybot.utils.FileUtil;
-import com.copybot.utils.VersionUtil;
+import com.copybot.exception.PluginNotFoundException;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
-import com.copybot.plugin.api.exception.ActionErrorException;
+import com.copybot.utils.FileUtil;
+import com.copybot.utils.VersionUtil;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -54,7 +52,7 @@ public final class PluginEngine {
     }
 
 
-    public static <A extends IAction> PipelineStep<A> resolve(PipelineStepConfig stepConfig, Class<A> actionClass) throws PluginNotFoundException, ActionNotFoundException, ActionErrorException {
+    public static <A extends IAction> PipelineStep<A> resolve(PipelineStepConfig stepConfig, Class<A> actionClass) {
         StepType type = StepType.getType(actionClass);
         // if config contains version, get plugin with desired version
         // else get most recent (list is ordered with most recent first)

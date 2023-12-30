@@ -52,17 +52,12 @@
            <columns>
                <TableColumn prefWidth="217.0" text="Name">
                   <cellValueFactory>
-                     <PropertyValueFactory property="name" />
+                     <PropertyValueFactory property="nameDisplay" />
                   </cellValueFactory>
                </TableColumn>
                <TableColumn prefWidth="263.0" text="Location">
                   <cellValueFactory>
                      <PropertyValueFactory property="sourceLocationDisplay" />
-                  </cellValueFactory>
-               </TableColumn>
-               <TableColumn minWidth="0.0" prefWidth="91.0" text="Size">
-                  <cellValueFactory>
-                     <PropertyValueFactory property="sizeHR" />
                   </cellValueFactory>
                </TableColumn>
            </columns>

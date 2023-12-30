@@ -1,20 +1,20 @@
 package com.copybot.engine.pipeline;
 
-import com.copybot.plugin.api.action.WorkItem;
-
-import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class PipelineState {
-    List<PipelineStepState> stepStates;
-    PipelineStatus status;
+    private List<PipelineStepState> stepStates;
+    private PipelineStatus status;
 
-    List<WorkItem> workItems;
+    private ConcurrentLinkedQueue<WorkItemExecution> workItems;
+
+    private boolean listingInProgress;
 
     public PipelineState(List<PipelineStepState> stepStates) {
         this.stepStates = stepStates;
         status = PipelineStatus.NEW;
-        workItems = new ArrayList<>();
+        workItems = new ConcurrentLinkedQueue<>();
     }
 
     public PipelineStatus getStatus() {
@@ -29,8 +29,15 @@ public class PipelineState {
         return stepStates;
     }
 
-    public List<WorkItem> getWorkItems() {
+    public ConcurrentLinkedQueue<WorkItemExecution> getWorkItems() {
         return workItems;
     }
 
+    public boolean isListingInProgress() {
+        return listingInProgress;
+    }
+
+    public void setListingInProgress(boolean listingInProgress) {
+        this.listingInProgress = listingInProgress;
+    }
 }

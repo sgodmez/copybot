@@ -1,9 +1,9 @@
 package com.copybot.plugin.metadataextractor.actions;
 
+import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.WorkItem;
-import com.copybot.plugin.api.exception.ActionErrorException;
 import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Directory;
@@ -37,11 +37,11 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
     }
 
     @Override
-    public void doAnalyze(WorkItem item) throws ActionErrorException {
-        try (InputStream is = item.getInputStreamSupplier().get()) {
+    public void doAnalyze(WorkItem item) {
+        try (InputStream is = item.openInputStream()) {
             extractMetadata(is);
         } catch (IOException e) {
-            throw new ActionErrorException(e);
+            throw CopybotException.ofResource(e, "plugin.metadata-extractor.extract.error.io", item.getSourceLocationDisplay());
         }
     }
 }

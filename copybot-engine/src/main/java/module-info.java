@@ -19,7 +19,6 @@ module com.copybot.engine {
 
     exports com.copybot.plugin.api.action;
     exports com.copybot.plugin.api.definition;
-    exports com.copybot.plugin.api.exception;
 
     exports com.copybot.plugin.embedded.actions;
     exports com.copybot to com.copybot.ui;

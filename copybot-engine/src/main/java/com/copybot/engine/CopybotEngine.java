@@ -1,21 +1,17 @@
 package com.copybot.engine;
 
 import com.copybot.config.CopybotConfig;
+import com.copybot.engine.asynch.RunnableCallback;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStep;
-import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.plugin.PluginEngine;
-import com.copybot.exception.ActionNotFoundException;
 import com.copybot.exception.CopybotException;
-import com.copybot.exception.PluginNotFoundException;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
-import com.copybot.plugin.api.exception.ActionErrorException;
 import com.copybot.utils.GsonUtil;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
 
 import java.io.IOException;
@@ -82,66 +78,33 @@ public class CopybotEngine {
         }
     }
 
-    public static void run(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher) {
+    public static void run(Path pipelinePath, Consumer<PipelineState> watcher) {
         synchronized (executor) {
             if (mainTask != null) {
                 throw new IllegalStateException("Engine already running");
             }
         }
 
-        var gson = new GsonBuilder().setPrettyPrinting().create();
-        PipelineConfig testPipelineConfig = gson.fromJson("""
-                {
-                  "inSteps": [
-                    {
-                      "action": "read.file",
-                      "actionConfig" : {
-                         "path" : "d:/photos/"
-                      }
-                    }
-                  ],
-                  "analyseSteps": [],
-                  "outSteps": []
-                }
-                """, PipelineConfig.class);
-
-        // ---------
-
-        for (var inStep : testPipelineConfig.inSteps()) {
-
-        }
-        PipelineStepConfig inStepsConfig = testPipelineConfig.inSteps().get(0);
-
-        PipelineStep<IInAction> inStep;
+        PipelineConfig pipelineConfig;
         try {
-            inStep = PluginEngine.resolve(inStepsConfig, IInAction.class);
-        } catch (PluginNotFoundException e) {
-            throw new RuntimeException(e);
-        } catch (ActionNotFoundException e) {
-            throw new RuntimeException(e);
-        } catch (ActionErrorException e) {
-            throw new RuntimeException(e);
+            pipelineConfig = GsonUtil.getGson().fromJson(Files.newBufferedReader(pipelinePath), PipelineConfig.class);
+        } catch (IOException e) {
+            throw CopybotException.ofResource(e, "pipeline.not-json");
         }
-
-        PipelineState state = new PipelineState(java.util.List.of());
 
         synchronized (executor) {
-            mainTask = executor.submit(() -> {
-                try {
-                    inStep.getAction().listFiles(workItem -> {
-                        state.getWorkItems().add(workItem);
-                        if (watcher != null) {
-                            watcher.accept(state);
+            mainTask = executor.submit(new RunnableCallback(
+                    new MainExecutor(pipelineConfig, watcher),
+                    () -> {
+                        synchronized (executor) {
+                            System.out.println("End main executor " + executor); // TODO
+                            mainTask = null;
                         }
-                    });
-                } catch (ActionErrorException e) {
-                    throw new RuntimeException(e);
-                } finally {
-                    synchronized (executor) {
-                        mainTask = null;
+                    },
+                    t -> {
+
                     }
-                }
-            });
+            ));
         }
     }
 

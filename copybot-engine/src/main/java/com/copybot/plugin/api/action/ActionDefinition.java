@@ -1,6 +1,6 @@
 package com.copybot.plugin.api.action;
 
-import com.copybot.plugin.api.exception.ActionErrorException;
+import com.copybot.exception.CopybotException;
 
 /**
  * @param actionCode Action code is used for reference in the pipeline JSON.
@@ -12,11 +12,11 @@ public record ActionDefinition<A extends IAction>(
         String actionCode,
         Class<A> actionClass,
         boolean isParallelizable) {
-    public IAction getInstance() throws ActionErrorException {
+    public IAction getInstance() {
         try {
             return actionClass.getConstructor().newInstance();
         } catch (Exception e) {
-            throw new ActionErrorException(e);
+            throw CopybotException.wrapIfNeeded(e);
         }
     }
 }

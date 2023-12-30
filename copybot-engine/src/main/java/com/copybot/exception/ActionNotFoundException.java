@@ -1,9 +1,11 @@
 package com.copybot.exception;
 
-public class ActionNotFoundException extends Exception {
+import com.copybot.resources.ResourcesEngine;
 
-    public ActionNotFoundException(String message) {
-        super(message);
+public class ActionNotFoundException extends CopybotException {
+
+    public ActionNotFoundException(String name) {
+        super(ResourcesEngine.getString("action.not-found", name));
     }
 
 }

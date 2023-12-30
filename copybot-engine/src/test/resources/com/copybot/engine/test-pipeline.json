@@ -1,12 +1,19 @@
 {
   "inSteps": [
     {
-      "action": "read.file",
+      "action": "file.read",
       "actionConfig": {
         "path": "d:/photos/"
       }
     }
   ],
   "analyseSteps": [],
-  "outSteps": []
+  "outSteps": [
+    {
+      "action": "file.write",
+      "actionConfig": {
+        "path": "d:/photos2/"
+      }
+    }
+  ]
 }

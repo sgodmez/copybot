@@ -1,9 +1,9 @@
 package com.copybot.plugin.api.action;
 
-import com.copybot.plugin.api.exception.ActionErrorException;
+import java.util.List;
 
 public interface IProcessAction extends IAction {
 
-    void doProcess(WorkItem item) throws ActionErrorException;
+    List<WorkItem> doProcess(WorkItem item);
 
 }

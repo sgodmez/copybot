@@ -1,9 +1,11 @@
 package com.copybot.exception;
 
-public class PluginNotFoundException extends Exception {
+import com.copybot.resources.ResourcesEngine;
 
-    public PluginNotFoundException(String message) {
-        super(message);
+public class PluginNotFoundException extends CopybotException {
+
+    public PluginNotFoundException(String name) {
+        super(ResourcesEngine.getString("plugin.not-found",name));
     }
 
 }

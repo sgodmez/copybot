@@ -1,6 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
-public record ReadFileConfig(
+//TODO : patterns & exclusions
+public record FileReadConfig(
         String path,
 
         boolean recursive

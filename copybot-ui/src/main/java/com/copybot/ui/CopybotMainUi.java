@@ -29,7 +29,7 @@ public class CopybotMainUi extends Application {
         try {
             //Locale.setDefault(Locale.ENGLISH);
             ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
-            //ResourcesEngine.loadLanguage(Locale.FRENCH);
+            //ResourcesEngine.loadLanguage(Locale.ENGLISH);
             CopybotEngine.init(pathArg);
         } catch (Exception e) {
             PopinUtil.showError(e);

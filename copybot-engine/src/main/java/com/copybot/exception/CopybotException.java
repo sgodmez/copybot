@@ -4,11 +4,11 @@ import com.copybot.resources.ResourcesEngine;
 
 public class CopybotException extends RuntimeException {
 
-    private CopybotException(String message) {
+    protected CopybotException(String message) {
         super(message);
     }
 
-    private CopybotException(String message, Throwable cause) {
+    protected CopybotException(Throwable cause, String message) {
         super(message, cause);
     }
 
@@ -17,7 +17,7 @@ public class CopybotException extends RuntimeException {
     }
 
     public static CopybotException of(Throwable cause, String message) {
-        return new CopybotException(message, cause);
+        return new CopybotException(cause, message);
     }
 
     public static CopybotException ofResource(String resourceBundleKey, Object... args) {
@@ -25,12 +25,17 @@ public class CopybotException extends RuntimeException {
     }
 
     public static CopybotException ofResource(Throwable cause, String resourceBundleKey, Object... args) {
-        return new CopybotException(ResourcesEngine.getString(resourceBundleKey, args), cause);
+        return new CopybotException(cause, ResourcesEngine.getString(resourceBundleKey, args));
     }
 
     public static CopybotException wrapIfNeeded(Throwable e) {
         if (e instanceof CopybotException) return (CopybotException) e;
         return ofResource(e, "error.unknown");
+    }
+
+    public static CopybotException wrapActionError(Throwable cause, String actionLabel, String actionCode) {
+        var exception = CopybotException.wrapIfNeeded(cause);
+        return CopybotException.ofResource(exception, "action.error", actionLabel, actionCode, exception.getMessage());
     }
 
 }

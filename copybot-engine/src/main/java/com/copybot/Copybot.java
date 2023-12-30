@@ -46,10 +46,7 @@ public class Copybot implements Runnable {
             throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
         }
 
-
-        // var plugin = PluginEngine.getLoadedPlugins().get(1).getPluginInstance();
-
-        CopybotEngine.run(null, pipelineState -> System.out.println(pipelineState));
+        CopybotEngine.run(pipelinePath, pipelineState -> System.out.println(pipelineState));
 
         try {
             CopybotEngine.waitForCompletion();

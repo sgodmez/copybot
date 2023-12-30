@@ -8,10 +8,18 @@ import java.util.function.Consumer;
 public abstract class AbstractAction implements IAction {
     private Consumer<WorkStatus> statusWatcher;
 
+    private String actualActionName;
+
     private IPlugin plugin;
 
     protected final void updateStatus(WorkStatus status) {
+        actualActionName = status.actionName();
         statusWatcher.accept(status);
+    }
+
+    protected final void updatePercent(int actionPercent) {
+        WorkStatus ws = new WorkStatus(actualActionName, actionPercent);
+        statusWatcher.accept(ws);
     }
 
     @Override

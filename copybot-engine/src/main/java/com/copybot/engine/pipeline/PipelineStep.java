@@ -13,6 +13,8 @@ public class PipelineStep<A extends IAction> {
 
     private final ConcurrentLinkedQueue<WorkItem> queue;
 
+    private int runningCount;
+
     public PipelineStep(IPlugin plugin, A action, PipelineStepConfig config) {
         this.plugin = plugin;
         this.action = action;

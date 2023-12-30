@@ -1,8 +1,10 @@
 package com.copybot.ui;
 
 import com.copybot.engine.CopybotEngine;
+import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.plugin.api.action.WorkItem;
 import javafx.application.Platform;
+import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
@@ -10,11 +12,13 @@ import javafx.fxml.FXMLLoader;
 import javafx.scene.Scene;
 import javafx.scene.control.Label;
 import javafx.scene.control.SelectionMode;
+import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -34,6 +38,13 @@ public class HelloController {
 
         fileCount.setText("aze");
         fileListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
+
+        TableColumn<WorkItem, String> column = new TableColumn<>(
+               "test"
+        );
+        column.setCellValueFactory(cellData -> new SimpleStringProperty(cellData.getValue().getMetadatas().getSizeHr())
+        );
+        fileListView.getColumns().add(column);
     }
 
 
@@ -76,9 +87,9 @@ public class HelloController {
             });
         });
 */
-        CopybotEngine.run(null, state -> {
+        CopybotEngine.run(Path.of("C:\\Users\\Steven\\IdeaProjects\\copybot\\copybot-engine\\src\\test\\resources\\com\\copybot\\engine\\test-pipeline.json"),state -> {
             Platform.runLater(() -> {
-                List<WorkItem> list = new ArrayList<>(state.getWorkItems()); // copy to prevent list to evolve while setting to fileListObservable
+                List<WorkItem> list = new ArrayList<>(state.getWorkItems().stream().map(WorkItemExecution::getWorkItem).toList()); // copy to prevent list to evolve while setting to fileListObservable
                 fileListObservable.setAll(list);
                 fileCount.setText(String.valueOf(fileListObservable.size()));
             });

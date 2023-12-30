@@ -13,6 +13,7 @@ public class GsonUtil {
 
     static {
         gson = new GsonBuilder()
+                .setPrettyPrinting()
                 .registerTypeAdapter(Path.class, new PathAdapter())
                 .create();
     }
