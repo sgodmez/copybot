@@ -2,11 +2,13 @@ package com.copybot.engine.resources;
 
 import com.copybot.config.CopybotConfig;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -237,6 +239,50 @@ public class ResourceRegistryTest {
         assertEquals(1, used(reg, "r"));
 
         holder.release();
+    }
+
+    @Test
+    @Timeout(10)
+    public void emptyFootprintIsGrantedImmediately() throws Exception {
+        // a step with no declared resources (e.g. a fake listing) must never block,
+        // even while every known resource is saturated
+        ResourceRegistry reg = registry(Map.of("r", 1));
+        Acquirer holder = new Acquirer(reg, Set.of("r"));
+        assertTrue(holder.acquired.await(5, TimeUnit.SECONDS));
+
+        Acquirer empty = new Acquirer(reg, Set.of());
+        assertTrue(empty.acquired.await(5, TimeUnit.SECONDS), "empty footprint must not wait");
+        empty.release();
+        holder.release();
+    }
+
+    @Test
+    @Timeout(30)
+    public void manyConcurrentWaitersDrainCompletely() throws Exception {
+        // guards the indexed, event-driven implementation under load: 5000 waiters on one
+        // capacity-4 resource must drain without a hang, a lost wakeup or a leaked permit
+        ResourceRegistry reg = registry(Map.of("r", 4));
+        int count = 5000;
+        CountDownLatch done = new CountDownLatch(count);
+        AtomicInteger concurrent = new AtomicInteger();
+        AtomicInteger maxObserved = new AtomicInteger();
+        for (int i = 0; i < count; i++) {
+            Thread.ofVirtual().start(() -> {
+                try {
+                    reg.acquireAll(Set.of("r"));
+                    maxObserved.accumulateAndGet(concurrent.incrementAndGet(), Math::max);
+                    concurrent.decrementAndGet();
+                    reg.releaseAll(Set.of("r"));
+                    done.countDown();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+        }
+        assertTrue(done.await(25, TimeUnit.SECONDS), "all 5000 waiters must be served");
+        assertTrue(maxObserved.get() <= 4, "capacity must never be exceeded, got " + maxObserved.get());
+        assertEquals(0, used(reg, "r"));
+        assertEquals(0, waiting(reg, "r"));
     }
 
     @Test

@@ -17,6 +17,12 @@ import java.util.stream.Collectors;
  * Central arbiter for named resources.
  * acquireAll is all-or-nothing: a waiter never holds a permit while waiting for another,
  * so multi-resource acquisition cannot deadlock nor waste slots.
+ *
+ * <p>Wake-ups are event-driven (release / arrival / capacity registration) and waiters are
+ * indexed by resource name, so releasing a resource nobody waits for costs nothing and the
+ * grant scan stops as soon as no free capacity can serve anyone. Starvation age is evaluated
+ * lazily at each grant decision — time passing cannot by itself make a new grant possible,
+ * so no periodic polling is needed.
  */
 public final class ResourceRegistry {
 
@@ -47,6 +53,7 @@ public final class ResourceRegistry {
     private final ResourceSettings settings;
     private final Map<String, ResourceCount> counts = new HashMap<>();
     private final Deque<Waiter> waiters = new ArrayDeque<>(); // arrival order
+    private final Map<String, Set<Waiter>> waitersByResource = new HashMap<>();
     private final Object lock = new Object();
 
     public ResourceRegistry(ResourceSettings settings) {
@@ -71,8 +78,9 @@ public final class ResourceRegistry {
                 // clamp: a capacity below 1 (e.g. a misconfigured maxConcurrency of 0) would make
                 // fits() permanently false and hang every acquirer of this resource forever
                 counts.put(canonical, new ResourceCount(Math.max(1, capacity)));
-                grantEligibleWaiters(); // a widened capacity may unblock waiters
-                lock.notifyAll();
+                if (waitersByResource.containsKey(canonical)) {
+                    grantEligibleWaiters(); // a widened capacity may unblock waiters
+                }
             }
         }
     }
@@ -83,24 +91,26 @@ public final class ResourceRegistry {
      */
     public void acquireAll(Set<String> names) throws InterruptedException {
         Set<String> canonical = canonicalize(names);
+        if (canonical.isEmpty()) {
+            return; // nothing to arbitrate; an empty waiter would never be indexed, hence never scanned
+        }
         Waiter me = new Waiter(canonical, System.currentTimeMillis());
         synchronized (lock) {
+            canonical.forEach(this::countFor); // materialize so the scan sees their free capacity
             waiters.addLast(me);
+            index(me);
             grantEligibleWaiters();
             try {
                 while (!me.granted) {
-                    lock.wait(200); // periodic wake-up so age-based anti-starvation takes effect
-                    if (!me.granted) {
-                        grantEligibleWaiters();
-                    }
+                    lock.wait(); // every grant notifies; nothing else can make this waiter eligible
                 }
             } catch (InterruptedException e) {
                 waiters.remove(me);
+                unindex(me);
                 if (me.granted) { // granted between the interrupt and the catch: give it back
                     doRelease(canonical);
                     grantEligibleWaiters();
                 }
-                lock.notifyAll();
                 throw e;
             }
         }
@@ -109,9 +119,12 @@ public final class ResourceRegistry {
     /** Returns one permit on each named resource and wakes up eligible waiters. */
     public void releaseAll(Set<String> names) {
         synchronized (lock) {
-            doRelease(canonicalize(names));
-            grantEligibleWaiters();
-            lock.notifyAll();
+            Set<String> canonical = canonicalize(names);
+            doRelease(canonical);
+            // a release can only unblock someone waiting on one of the released names
+            if (canonical.stream().anyMatch(waitersByResource::containsKey)) {
+                grantEligibleWaiters();
+            }
         }
     }
 
@@ -122,7 +135,7 @@ public final class ResourceRegistry {
                             e.getKey(),
                             e.getValue().capacity,
                             e.getValue().used,
-                            (int) waiters.stream().filter(w -> w.resources.contains(e.getKey())).count()))
+                            waitersByResource.getOrDefault(e.getKey(), Set.of()).size()))
                     .sorted(Comparator.comparing(ResourceSnapshot::name))
                     .toList();
         }
@@ -137,13 +150,23 @@ public final class ResourceRegistry {
      * granted. A global stop would make the registry degenerate into strict FIFO — in two-phase mode
      * every item is enqueued at once and shares the same age — and break the core promise that
      * independent resources (e.g. two distinct disks) keep running in parallel.
+     *
+     * <p>The scan aborts as soon as {@code grantable} — the names that are both free and awaited —
+     * is exhausted: no waiter behind that point can fit (all-or-nothing needs every name free), so
+     * a queue saturated on one disk costs O(1) per event instead of a full walk.
      */
     private void grantEligibleWaiters() {
+        Set<String> grantable = new HashSet<>();
+        for (Map.Entry<String, ResourceCount> entry : counts.entrySet()) {
+            if (entry.getValue().used < entry.getValue().capacity && waitersByResource.containsKey(entry.getKey())) {
+                grantable.add(entry.getKey());
+            }
+        }
         long now = System.currentTimeMillis();
         List<Waiter> skipped = new ArrayList<>();
         Set<String> reserved = new HashSet<>(); // resources held back for starved waiters
         Iterator<Waiter> it = waiters.iterator();
-        while (it.hasNext()) {
+        while (it.hasNext() && !grantable.isEmpty()) {
             Waiter waiter = it.next();
             if (!Collections.disjoint(waiter.resources, reserved)) {
                 continue; // would steal a resource reserved for a starved waiter ahead of it
@@ -152,12 +175,38 @@ public final class ResourceRegistry {
                 take(waiter.resources);
                 waiter.granted = true;
                 it.remove();
+                unindex(waiter);
                 skipped.forEach(s -> s.bypassCount++);
                 lock.notifyAll();
+                waiter.resources.forEach(n -> {
+                    ResourceCount count = countFor(n);
+                    if (count.used >= count.capacity) {
+                        grantable.remove(n);
+                    }
+                });
             } else if (waiter.bypassCount >= MAX_BYPASS || now - waiter.since >= MAX_WAIT_MILLIS) {
                 reserved.addAll(waiter.resources); // starved: strict mode on ITS resources only
+                grantable.removeAll(waiter.resources);
             } else {
                 skipped.add(waiter);
+            }
+        }
+    }
+
+    private void index(Waiter waiter) {
+        for (String name : waiter.resources) {
+            waitersByResource.computeIfAbsent(name, n -> new HashSet<>()).add(waiter);
+        }
+    }
+
+    private void unindex(Waiter waiter) {
+        for (String name : waiter.resources) {
+            Set<Waiter> interested = waitersByResource.get(name);
+            if (interested != null) {
+                interested.remove(waiter);
+                if (interested.isEmpty()) {
+                    waitersByResource.remove(name);
+                }
             }
         }
     }
