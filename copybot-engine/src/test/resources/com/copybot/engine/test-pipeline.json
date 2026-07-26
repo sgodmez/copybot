@@ -3,17 +3,16 @@
     {
       "action": "file.read",
       "actionConfig": {
-        "path": "d:/photos/"
+        "path": "./target/maintest-in"
       }
     }
   ],
   "analyseSteps": [],
-  "outSteps": [
-    {
-      "action": "file.write",
-      "actionConfig": {
-        "path": "d:/photos2/"
-      }
+  "outStep": {
+    "action": "file.write",
+    "actionConfig": {
+      "outPattern": "./target/maintest-out/{name}",
+      "overwrite": false
     }
-  ]
+  }
 }

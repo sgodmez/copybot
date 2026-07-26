@@ -50,10 +50,16 @@ public class Copybot implements Runnable {
 
         try {
             CopybotEngine.waitForCompletion();
-        } catch (InterruptedException | ExecutionException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             CopybotEngine.destroy();
             System.out.println("Cancelled !");
             return;
+        } catch (ExecutionException e) {
+            // The pipeline itself blew up (e.g. an unresolvable step): that is a failure, not a
+            // cancellation, and it must reach the exit code instead of being reported as "Cancelled".
+            CopybotEngine.destroy();
+            throw CopybotException.wrapIfNeeded(e.getCause() == null ? e : e.getCause());
         }
         System.out.println("Done !");
     }

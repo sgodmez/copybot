@@ -11,6 +11,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.util.Set;
 import java.util.function.Consumer;
 
 public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> implements IInAction {
@@ -20,6 +21,10 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
         return FileReadConfig.class;
     }
 
+    @Override
+    public Set<Path> touchedPaths(WorkItem item) {
+        return Set.of(Path.of(getConfig().path()));
+    }
 
     @Override
     public void listFiles(Consumer<WorkItem> workItemConsumer) {

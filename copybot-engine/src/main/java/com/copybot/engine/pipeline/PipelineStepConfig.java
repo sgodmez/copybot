@@ -2,6 +2,8 @@ package com.copybot.engine.pipeline;
 
 import com.google.gson.JsonElement;
 
+import java.util.List;
+
 public record PipelineStepConfig(
         String plugin,
         String action,
@@ -15,6 +17,11 @@ public record PipelineStepConfig(
 
         Integer maxConcurrency,
         Integer priority,
+
+        /**
+         * optional additional resource names this step consumes (e.g. ["gpu"])
+         */
+        List<String> resources,
 
         JsonElement actionConfig
 ) {

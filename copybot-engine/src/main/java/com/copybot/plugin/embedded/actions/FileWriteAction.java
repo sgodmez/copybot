@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> implements IOutAction {
@@ -23,6 +24,15 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     @Override
     protected Class<FileWriteConfig> getConfigClass() {
         return FileWriteConfig.class;
+    }
+
+    @Override
+    public Set<Path> touchedPaths(WorkItem item) {
+        // static prefix of the out pattern, before the first {placeholder}
+        String outPattern = getConfig().outPattern();
+        int firstParam = outPattern.indexOf('{');
+        String prefix = firstParam < 0 ? outPattern : outPattern.substring(0, firstParam);
+        return Set.of(Path.of(prefix));
     }
 
     @Override
