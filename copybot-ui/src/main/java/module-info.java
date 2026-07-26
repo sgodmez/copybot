@@ -1,6 +1,7 @@
 module com.copybot.ui {
     requires javafx.controls;
     requires javafx.fxml;
+    requires java.prefs;
 
     requires org.controlsfx.controls;
     requires org.kordamp.ikonli.javafx;

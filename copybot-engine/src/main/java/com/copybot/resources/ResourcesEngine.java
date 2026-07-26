@@ -29,6 +29,10 @@ public final class ResourcesEngine {
         supportedLocales.add(locale);
     }
 
+    public static Set<Locale> getSupportedLocales() {
+        return Set.copyOf(supportedLocales);
+    }
+
     public static void loadLanguage(Locale locale) {
         Locale.setDefault(locale); // could be used to set secondary language preference before "root" fallback
         resourceBundle.load(locale);

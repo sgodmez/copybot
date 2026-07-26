@@ -3,14 +3,17 @@ package com.copybot.ui;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.util.PopinUtil;
+import com.copybot.ui.util.UiPreferences;
 import javafx.application.Application;
 import javafx.fxml.FXMLLoader;
+import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -27,9 +30,9 @@ public class CopybotMainUi extends Application {
         Optional<Path> pathArg = Optional.ofNullable(params.getNamed().get("config-file")).map(Path::of);
 
         try {
-            //Locale.setDefault(Locale.ENGLISH);
             ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
-            //ResourcesEngine.loadLanguage(Locale.ENGLISH);
+            ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
+            UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
             CopybotEngine.init(pathArg);
         } catch (Exception e) {
             PopinUtil.showError(e);
@@ -37,11 +40,7 @@ public class CopybotMainUi extends Application {
         }
 
         STAGE = stage;
-        //var plugin = PluginEngine.getLoadedPlugins().get(1).getPluginInstance();
-        //FXMLLoader fxmlLoader = new FXMLLoader(plugin.getClass().getResource("views/test-view.fxml"));
-        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view.fxml"));
-        fxmlLoader.setResources(ResourcesEngine.getResourceBundle());
-        Scene scene = new Scene(fxmlLoader.load());
+        Scene scene = new Scene(loadMainView());
         stage.setMaximized(true);
         stage.setTitle("Copybot");
         stage.getIcons().add(new Image(CopybotMainUi.class.getResourceAsStream("Copybot.png")));
@@ -50,6 +49,21 @@ public class CopybotMainUi extends Application {
 
         executor = Executors.newCachedThreadPool();
 
+    }
+
+    /** Rebuilds the main view with the current resource bundle (e.g. after a language change). */
+    public static void reloadMainView() {
+        try {
+            STAGE.getScene().setRoot(loadMainView());
+        } catch (IOException e) {
+            PopinUtil.showError(e);
+        }
+    }
+
+    private static Parent loadMainView() throws IOException {
+        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view.fxml"));
+        fxmlLoader.setResources(ResourcesEngine.getResourceBundle());
+        return fxmlLoader.load();
     }
 
     @Override

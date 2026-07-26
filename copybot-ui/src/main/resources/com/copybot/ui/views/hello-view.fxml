@@ -22,6 +22,7 @@
        <Menu mnemonicParsing="false" text="%menu.edit">
          <items>
            <MenuItem mnemonicParsing="false" text="%menu.edit.delete" />
+           <MenuItem mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
          </items>
        </Menu>
        <Menu mnemonicParsing="false" text="%menu.help">

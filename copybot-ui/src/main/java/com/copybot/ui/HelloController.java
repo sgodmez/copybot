@@ -3,6 +3,7 @@ package com.copybot.ui;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.plugin.api.action.WorkStatus;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.util.PopinUtil;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
@@ -80,6 +81,19 @@ public class HelloController {
     @FXML
     protected void onExitClick() {
         Platform.exit(); // triggers Application.stop(): executor shutdown + engine destroy
+    }
+
+    @FXML
+    protected void onPreferencesClick() throws IOException {
+        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/preferences-view.fxml"));
+        fxmlLoader.setResources(ResourcesEngine.getResourceBundle());
+
+        Stage dialog = new Stage();
+        dialog.setTitle(ResourcesEngine.getString("pref.title"));
+        dialog.setScene(new Scene(fxmlLoader.load()));
+        dialog.initModality(Modality.APPLICATION_MODAL);
+        dialog.initOwner(CopybotMainUi.STAGE);
+        dialog.showAndWait();
     }
 
     @FXML
