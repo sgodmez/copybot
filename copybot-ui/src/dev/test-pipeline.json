@@ -1,0 +1,18 @@
+{
+  "inSteps": [
+    {
+      "action": "file.read",
+      "actionConfig": {
+        "path": "./copybot-ui/src/dev/test-in"
+      }
+    }
+  ],
+  "analyseSteps": [],
+  "outStep": {
+    "action": "file.write",
+    "actionConfig": {
+      "outPattern": "./copybot-ui/target/ui-test-out/{name}",
+      "overwrite": true
+    }
+  }
+}

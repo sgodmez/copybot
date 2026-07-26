@@ -68,6 +68,16 @@ public class FileWriteActionTest {
     }
 
     @Test
+    public void missingParentDirectoriesAreCreated() throws IOException {
+        Path target = tempDir.resolve("out").resolve("nested").resolve("deep.bin");
+        WorkItem item = itemWithContent("src5.bin", "payload".getBytes());
+
+        action(target, false).writeItem(item);
+
+        assertArrayEquals("payload".getBytes(), Files.readAllBytes(target));
+    }
+
+    @Test
     public void progressPercentsAreProportionalNotZero() throws IOException {
         // 2 buffers of 8192: first update must report 50, not 0 (integer-division regression)
         byte[] content = new byte[16384];

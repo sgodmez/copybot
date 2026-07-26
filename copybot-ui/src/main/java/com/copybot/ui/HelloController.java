@@ -2,7 +2,8 @@ package com.copybot.ui;
 
 import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.pipeline.WorkItemExecution;
-import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkStatus;
+import com.copybot.ui.util.PopinUtil;
 import javafx.application.Platform;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
@@ -19,34 +20,62 @@ import javafx.stage.Stage;
 
 import java.io.IOException;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 
 public class HelloController {
+
+    /** Dev pipeline, relative to the project root — same convention as CopybotMainUiDev's config path. */
+    private static final Path TEST_PIPELINE = Path.of("copybot-ui", "src", "dev", "test-pipeline.json");
+
     @FXML
     private Label fileCount;
 
     @FXML
-    private TableView<WorkItem> fileListView;
+    private TableView<WorkItemExecution> fileListView;
 
-    private ObservableList<WorkItem> fileListObservable;
+    @FXML
+    private TableColumn<WorkItemExecution, String> nameColumn;
+
+    @FXML
+    private TableColumn<WorkItemExecution, String> locationColumn;
+
+    @FXML
+    private TableColumn<WorkItemExecution, String> sizeColumn;
+
+    @FXML
+    private TableColumn<WorkItemExecution, String> statusColumn;
+
+    private ObservableList<WorkItemExecution> fileListObservable;
 
     @FXML
     public void initialize() {
         fileListObservable = FXCollections.observableArrayList();
         fileListView.setItems(fileListObservable);
-
-        fileCount.setText("aze");
         fileListView.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
 
-        TableColumn<WorkItem, String> column = new TableColumn<>(
-               "test"
-        );
-        column.setCellValueFactory(cellData -> new SimpleStringProperty(cellData.getValue().getMetadatas().getSizeHr())
-        );
-        fileListView.getColumns().add(column);
+        nameColumn.setCellValueFactory(cell ->
+                new SimpleStringProperty(cell.getValue().getWorkItem().getNameDisplay()));
+        locationColumn.setCellValueFactory(cell ->
+                new SimpleStringProperty(cell.getValue().getWorkItem().getSourceLocationDisplay()));
+        sizeColumn.setCellValueFactory(cell ->
+                new SimpleStringProperty(cell.getValue().getWorkItem().getMetadatas().getSizeHr()));
+        statusColumn.setCellValueFactory(cell ->
+                new SimpleStringProperty(statusText(cell.getValue())));
+
+        fileCount.setText("");
     }
 
+    private static String statusText(WorkItemExecution exec) {
+        return switch (exec.getStatus()) {
+            case RUNNING -> {
+                WorkStatus ws = exec.getWorkStatus();
+                yield ws != null && ws.actionPercent() >= 0 ? "RUNNING " + ws.actionPercent() + "%" : "RUNNING";
+            }
+            case WAITING_RESOURCES -> "WAITING " + exec.getWaitingFor();
+            case ERROR -> exec.getError() != null ? "ERROR: " + exec.getError().getMessage() : "ERROR";
+            default -> exec.getStatus().toString();
+        };
+    }
 
     @FXML
     protected void onTestButtonClick() throws IOException {
@@ -74,31 +103,24 @@ public class HelloController {
     }
 
     @FXML
-    protected void onHelloButtonClick() throws IOException {
-        /*
-        StartExp s = new StartExp();
-        CopybotMainUi.executor.submit(s);
-*/
-        /*
-        CopybotEngine.run(null, null, wi -> {
-            Platform.runLater(() -> {
-                fileListObservable.add(wi);
-                fileCount.setText(String.valueOf(fileListObservable.size()));
+    protected void onHelloButtonClick() {
+        try {
+            CopybotEngine.run(TEST_PIPELINE, state -> {
+                List<WorkItemExecution> list = List.copyOf(state.getWorkItems()); // snapshot outside the FX thread; the queue may evolve concurrently
+                String summary = state.getStatus() + " — " + list.size() + " items"
+                        + (state.isListingInProgress() ? " (listing…)" : "");
+                Platform.runLater(() -> {
+                    if (list.size() != fileListObservable.size()) {
+                        fileListObservable.setAll(list);
+                    } else {
+                        fileListView.refresh(); // same rows, but their status/percent evolved
+                    }
+                    fileCount.setText(summary);
+                });
             });
-        });
-*/
-        CopybotEngine.run(Path.of("C:\\Users\\Steven\\IdeaProjects\\copybot\\copybot-engine\\src\\test\\resources\\com\\copybot\\engine\\test-pipeline.json"),state -> {
-            List<WorkItem> list = new ArrayList<>(state.getWorkItems().stream().map(WorkItemExecution::getWorkItem).toList()); // snapshot outside the FX thread; the queue may evolve concurrently
-            Platform.runLater(() -> {
-                if (list.size() != fileListObservable.size()) { // notifications are coalesced engine-side; only rebuild the table when items were added
-                    fileListObservable.setAll(list);
-                    fileCount.setText(String.valueOf(fileListObservable.size()));
-                }
-            });
-        });
-
-//        welcomeText.setText("Welcome to JavaFX Application!");
+        } catch (Exception e) {
+            // e.g. "Engine already running" or unreadable pipeline file
+            PopinUtil.showError(e);
+        }
     }
-
-
 }

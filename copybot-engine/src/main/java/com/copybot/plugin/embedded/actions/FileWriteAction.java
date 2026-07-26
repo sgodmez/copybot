@@ -57,6 +57,12 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     private void doWrite(WorkItem workItem, Path outPath) throws IOException {
         updateStatus(new WorkStatus("Copy file " + workItem.getSourceLocationDisplay(), -1));
 
+        // the destination folder rarely exists beforehand (fresh output dir, {placeholder} sub-paths)
+        Path parent = outPath.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+
         if (canBeMoved(workItem, outPath)) {
             if (getConfig().overwrite()) {
                 Files.move(workItem.getLocalLocation(), outPath, StandardCopyOption.REPLACE_EXISTING);
