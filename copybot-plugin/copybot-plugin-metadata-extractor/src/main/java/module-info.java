@@ -3,7 +3,7 @@ import com.copybot.plugin.metadataextractor.MetadataExtractorPlugin;
 
 module com.copybot.plugin.metadataextractor {
     requires com.copybot.engine;
-    requires metadata.extractor;
+    requires com.drew.metadata;
 
     exports com.copybot.plugin.metadataextractor;
     exports com.copybot.plugin.metadataextractor.actions;

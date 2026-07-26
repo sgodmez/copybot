@@ -55,6 +55,31 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.2.0</version>
+                <executions>
+                    <execution>
+                        <!-- jpackage's app-image launcher is read-only; Maven's clean plugin can't delete
+                             it on Windows without this, so clear the attribute before pre-clean runs -->
+                        <id>clear-dist-readonly</id>
+                        <phase>pre-clean</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <attrib readonly="false">
+                                    <fileset dir="${project.build.directory}/dist" erroronmissingdir="false">
+                                        <include name="**/*"/>
+                                    </fileset>
+                                </attrib>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.openjfx</groupId>
                 <artifactId>javafx-maven-plugin</artifactId>
                 <version>0.0.8</version>
@@ -82,7 +107,7 @@
             <plugin>
                 <groupId>org.panteleyev</groupId> <!-- hum... -->
                 <artifactId>jpackage-maven-plugin</artifactId>
-                <version>1.6.0</version>
+                <version>1.7.4</version>
                 <executions>
                     <execution>
                         <id>jpackage</id>
@@ -102,7 +127,7 @@
                             <linuxPackageName>Copybot</linuxPackageName>
                             <linuxAppCategory>Utilities</linuxAppCategory>
                             <linuxMenuGroup>Utilities</linuxMenuGroup>
-                            <icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.png</icon>
+                            <icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.ico</icon>
                             <javaOptions>
                                 <option>-Dfile.encoding=UTF-8</option>
                             </javaOptions>

@@ -5,7 +5,7 @@ module com.copybot.plugin.demo.inheritance {
     requires com.copybot.engine;
     requires com.copybot.plugin.demo.module;
     requires com.copybot.plugin.demo.module2;
-    requires metadata.extractor;
+    requires com.drew.metadata;
 
     opens com.copybot.plugin.demo.inheritance.i18n;
 

@@ -3,7 +3,7 @@ import com.copybot.plugin.demo.module2.DemoModule2Plugin;
 
 module com.copybot.plugin.demo.module2 {
     requires com.copybot.engine;
-    requires metadata.extractor;
+    requires com.drew.metadata;
 
     exports com.copybot.plugin.demo.module2;
     exports com.copybot.plugin.demo.module2.actions;
