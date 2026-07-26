@@ -78,6 +78,11 @@ public class HelloController {
     }
 
     @FXML
+    protected void onExitClick() {
+        Platform.exit(); // triggers Application.stop(): executor shutdown + engine destroy
+    }
+
+    @FXML
     protected void onTestButtonClick() throws IOException {
         FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view2.fxml"));
 
