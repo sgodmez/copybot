@@ -49,10 +49,10 @@
             </padding></Label>
          <TableView fx:id="fileListView" prefWidth="722.0" VBox.vgrow="ALWAYS">
            <columns>
-               <TableColumn fx:id="nameColumn" prefWidth="217.0" text="Name" />
-               <TableColumn fx:id="locationColumn" prefWidth="263.0" text="Location" />
-               <TableColumn fx:id="sizeColumn" prefWidth="100.0" text="Size" />
-               <TableColumn fx:id="statusColumn" prefWidth="200.0" text="Status" />
+               <TableColumn fx:id="nameColumn" prefWidth="217.0" text="%table.name" />
+               <TableColumn fx:id="locationColumn" prefWidth="263.0" text="%table.location" />
+               <TableColumn fx:id="sizeColumn" prefWidth="100.0" text="%table.size" />
+               <TableColumn fx:id="statusColumn" prefWidth="200.0" text="%table.status" />
            </columns>
             <VBox.margin>
                <Insets />
