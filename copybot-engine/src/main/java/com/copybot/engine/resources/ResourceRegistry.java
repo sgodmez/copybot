@@ -68,7 +68,9 @@ public final class ResourceRegistry {
             String canonical = settings.canonical(name);
             ResourceCount existing = counts.get(canonical);
             if (existing == null || existing.used == 0) {
-                counts.put(canonical, new ResourceCount(capacity));
+                // clamp: a capacity below 1 (e.g. a misconfigured maxConcurrency of 0) would make
+                // fits() permanently false and hang every acquirer of this resource forever
+                counts.put(canonical, new ResourceCount(Math.max(1, capacity)));
                 grantEligibleWaiters(); // a widened capacity may unblock waiters
                 lock.notifyAll();
             }

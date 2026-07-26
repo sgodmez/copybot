@@ -69,10 +69,13 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             // https://baptiste-wicht.com/posts/2010/08/file-copy-in-java-benchmark.html
             // https://baptiste-wicht.com/wp-content/uploads/2010/08/FileCopyBenchmark2.java
             // https://github.com/wichtounet/java-benchmarks/blob/master/src/com/wicht/benchmarks/FileCopyBenchmark.java
-            StandardOpenOption copyOption = getConfig().overwrite() ? StandardOpenOption.WRITE : StandardOpenOption.CREATE_NEW;
+            // overwrite must also cover the target-does-not-exist-yet case (WRITE alone cannot create)
+            StandardOpenOption[] copyOptions = getConfig().overwrite()
+                    ? new StandardOpenOption[]{StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING}
+                    : new StandardOpenOption[]{StandardOpenOption.CREATE_NEW};
 
             try (InputStream is = workItem.openInputStream();
-                 OutputStream os = Files.newOutputStream(outPath, copyOption);) {
+                 OutputStream os = Files.newOutputStream(outPath, copyOptions)) {
 
                 long transferred = 0;
                 int percent = -1;
@@ -83,7 +86,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
                     transferred += read;
                     Long size = workItem.getMetadatas().getSize();
                     if (size != null) {
-                        percent = (int) (transferred / size * 100);
+                        percent = (int) (transferred * 100 / size); // multiply first: size > transferred would floor to 0
                         updatePercent(percent);
                     }
                 }

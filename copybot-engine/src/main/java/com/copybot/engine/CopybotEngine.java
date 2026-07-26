@@ -13,7 +13,6 @@ import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
@@ -22,13 +21,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
-import java.util.function.Predicate;
-import java.util.stream.Collectors;
 
 public class CopybotEngine {
 
     /** Best-effort grace period given to a cancelled pipeline to release its resources. */
     private static final long SHUTDOWN_AWAIT_SECONDS = 5;
+
+    /** Used when the config declares no pluginPath; a missing directory simply loads no plugins. */
+    private static final Path DEFAULT_PLUGIN_PATH = Path.of("./plugins");
 
     private static ExecutorService executor;
     private static Future<?> mainTask;
@@ -51,15 +51,14 @@ public class CopybotEngine {
 
         executor = Executors.newVirtualThreadPerTaskExecutor();
 
-        //String devPlugins="copybot-plugin/copybot-plugin-optional/copybot-plugin-metadata-extractor/target";
-        String devPlugins = "";
-        List<Path> devPluginPaths = Arrays.stream(devPlugins.split(";"))
-                .filter(Predicate.not(String::isBlank))
-                .map(Path::of)
-                .collect(Collectors.toList());
-
-        //pluginEngine
-        PluginEngine.load(Path.of("D:\\plugins2\\"), devPluginPaths);
+        Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
+        // a configured-but-missing dev directory must not break startup: dev paths reach
+        // ModuleFinder directly, which throws on nonexistent paths (the main pluginPath is
+        // directory-listed first and tolerates absence)
+        List<Path> devPluginPaths = config.devPluginPaths() != null && Files.isDirectory(config.devPluginPaths())
+                ? List.of(config.devPluginPaths())
+                : List.of();
+        PluginEngine.load(pluginPath, devPluginPaths);
     }
 
     /**

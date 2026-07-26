@@ -88,10 +88,12 @@ public class HelloController {
         });
 */
         CopybotEngine.run(Path.of("C:\\Users\\Steven\\IdeaProjects\\copybot\\copybot-engine\\src\\test\\resources\\com\\copybot\\engine\\test-pipeline.json"),state -> {
+            List<WorkItem> list = new ArrayList<>(state.getWorkItems().stream().map(WorkItemExecution::getWorkItem).toList()); // snapshot outside the FX thread; the queue may evolve concurrently
             Platform.runLater(() -> {
-                List<WorkItem> list = new ArrayList<>(state.getWorkItems().stream().map(WorkItemExecution::getWorkItem).toList()); // copy to prevent list to evolve while setting to fileListObservable
-                fileListObservable.setAll(list);
-                fileCount.setText(String.valueOf(fileListObservable.size()));
+                if (list.size() != fileListObservable.size()) { // notifications are coalesced engine-side; only rebuild the table when items were added
+                    fileListObservable.setAll(list);
+                    fileCount.setText(String.valueOf(fileListObservable.size()));
+                }
             });
         });
 

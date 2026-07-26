@@ -214,6 +214,19 @@ public class ResourceRegistryTest {
     }
 
     @Test
+    public void registerCapacityClampsBelowOne() throws Exception {
+        ResourceRegistry reg = registry(Map.of());
+        reg.registerCapacity("step:0", 0); // e.g. a misconfigured "maxConcurrency": 0
+
+        assertEquals(1, reg.snapshot().stream().filter(s -> s.name().equals("step:0")).findFirst().orElseThrow().capacity());
+
+        // an acquirer must still be granted (capacity 0 would hang it forever)
+        Acquirer acquirer = new Acquirer(reg, Set.of("step:0"));
+        assertTrue(acquirer.acquired.await(5, TimeUnit.SECONDS), "clamped capacity must still grant one permit");
+        acquirer.release();
+    }
+
+    @Test
     public void registerCapacityLeavesAnInUseResourceUntouched() throws Exception {
         ResourceRegistry reg = registry(Map.of("r", 1));
         Acquirer holder = new Acquirer(reg, Set.of("r"));
