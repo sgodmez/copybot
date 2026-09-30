@@ -40,6 +40,11 @@
    </ToolBar>
    <VBox prefHeight="200.0" prefWidth="100.0" VBox.vgrow="ALWAYS">
       <children>
+         <Label fx:id="warningBanner" maxWidth="Infinity" wrapText="true" style="-fx-background-color: #fff3cd; -fx-text-fill: #664d03; -fx-padding: 6;">
+            <VBox.margin>
+               <Insets bottom="5.0" />
+            </VBox.margin>
+         </Label>
          <Label fx:id="fileCount">
             <VBox.margin>
                <Insets />

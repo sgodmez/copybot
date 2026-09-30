@@ -108,7 +108,8 @@ final class ControlFakes {
 
     /**
      * Out step counting the writes that started. The first write blocks until gate opens (gate null: never
-     * blocks; a gate never opened blocks until the write is interrupted, which then fails the item).
+     * blocks; a gate never opened blocks until the write is interrupted, which then fails the item, unless the
+     * interrupt comes from a cancel: the item then goes back to PENDING).
      */
     static final class GatedOut extends FakeAction implements IOutAction {
         final Set<String> resources;

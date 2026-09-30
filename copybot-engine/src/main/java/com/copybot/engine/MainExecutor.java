@@ -22,6 +22,8 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
@@ -58,6 +60,12 @@ public class MainExecutor implements Runnable {
     private final Consumer<PipelineState> watcher;
     private final ResourceRegistry registry;
     private final PipelineState state;
+
+    /**
+     * Unique per pipeline run (prepare and execute share it), handed to the out step: it names its temporary
+     * files and recognises the ones a crashed run left behind (spec safe-write §3).
+     */
+    private final WriteContext writeContext = WriteContext.newRun();
 
     private List<PipelineStep<IInAction>> inSteps;
     private List<PipelineStep<?>> itemSteps;
@@ -423,6 +431,27 @@ public class MainExecutor implements Runnable {
         }
     }
 
+    private boolean warningsCollected;
+
+    /** Publishes the configuration warnings of every step, listings included, once (spec safe-write §6). */
+    private void collectConfigWarnings() {
+        if (warningsCollected) {
+            return;
+        }
+        warningsCollected = true;
+        List<String> warnings = new ArrayList<>();
+        inSteps.forEach(step -> addWarnings(warnings, step.getAction()));
+        itemSteps.forEach(step -> addWarnings(warnings, step.getAction()));
+        state.setWarnings(warnings);
+    }
+
+    private static void addWarnings(List<String> warnings, IAction action) {
+        List<String> actionWarnings = action.configWarnings();
+        if (actionWarnings != null) { // a plugin returning null has nothing to say
+            warnings.addAll(actionWarnings);
+        }
+    }
+
     private void resolveStepsIfNeeded() {
         if (pipelineConfig != null && inSteps == null) {
             inSteps = doResolveStep(pipelineConfig.inSteps(), IInAction.class);
@@ -431,6 +460,7 @@ public class MainExecutor implements Runnable {
             startProcessingWhileListing = Boolean.TRUE.equals(pipelineConfig.startProcessingWhileListing());
         }
         registerStepCapacities();
+        collectConfigWarnings();
     }
 
     /** Submits every listing and waits for them AND every item they emitted (including forked ones). */
@@ -640,13 +670,16 @@ public class MainExecutor implements Runnable {
         submitTask(() -> runItem(exec, fromStep, toStep));
     }
 
-    /** Runs the steps [fromStep, toStep); an item stopped at the barrier goes back to PENDING. */
+    /**
+     * Runs the steps [fromStep, toStep); an item stopped at the barrier goes back to PENDING, an item the
+     * out step skipped ends SKIPPED with its reason.
+     */
     private void runItem(WorkItemExecution exec, int fromStep, int toStep) {
         try {
             if (!startProcessingWhileListing) {
                 listingGate.await();
             }
-            boolean filtered = false;
+            StepOutcome outcome = StepOutcome.CONTINUE;
             for (int i = fromStep; i < toStep; i++) {
                 PipelineStep<?> step = itemSteps.get(i);
                 Set<String> footprint = FootprintResolver.resolve(step.getAction(), exec.getWorkItem(), step.getConfig(), i);
@@ -661,18 +694,18 @@ public class MainExecutor implements Runnable {
                 }
                 exec.setRunning(i);
                 notifyWatcher();
-                boolean continueItem;
                 try {
-                    continueItem = runStep(exec, step, i, toStep);
+                    outcome = runStep(exec, step, i, toStep);
                 } finally {
                     registry.releaseAll(footprint);
                 }
-                if (!continueItem) {
-                    filtered = true;
+                if (!outcome.continueItem()) {
                     break;
                 }
             }
-            if (filtered || toStep == itemSteps.size()) {
+            if (outcome.skipReason() != null) {
+                exec.setSkipped(outcome.skipReason());
+            } else if (!outcome.continueItem() || toStep == itemSteps.size()) {
                 exec.setDone();
             } else {
                 exec.setReady();
@@ -685,28 +718,50 @@ public class MainExecutor implements Runnable {
             exec.setReady();
             Thread.currentThread().interrupt();
         } catch (Throwable t) {
-            exec.setError(t);
-            exec.propagateFailureToAncestors(); // a failed fork holds the resume cursor back before its parent
+            if (cancelRequested) {
+                // a failure caused by the cancel (e.g. a ClosedByInterruptException wrapped by the step) is an
+                // interruption like the ones above, not an item error
+                // the cause (t) is intentionally dropped: the item is an interruption and the run ends CANCELLED
+                exec.setReady();
+            } else {
+                exec.setError(t);
+                exec.propagateFailureToAncestors(); // a failed fork holds the resume cursor back before its parent
+            }
         } finally {
             notifyWatcher();
         }
     }
 
     /**
-     * @param toStep exclusive end of the current phase: a forked item stops at the same step as its parent
-     * @return true to continue with the next step, false when the item stops here (filtered out)
+     * How an item goes on after one step.
+     *
+     * @param continueItem false when the item stops here
+     * @param skipReason   non null when the out step skipped the item: it ends SKIPPED with this reason
      */
-    private boolean runStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep) {
+    private record StepOutcome(boolean continueItem, String skipReason) {
+        static final StepOutcome CONTINUE = new StepOutcome(true, null);
+        /** Filtered out by a process step: the item ends DONE. */
+        static final StepOutcome FILTERED = new StepOutcome(false, null);
+
+        static StepOutcome skipped(String reason) {
+            return new StepOutcome(false, reason);
+        }
+    }
+
+    /**
+     * @param toStep exclusive end of the current phase: a forked item stops at the same step as its parent
+     */
+    private StepOutcome runStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep) {
         IAction action = step.getAction();
         WorkItem item = exec.getWorkItem();
         if (action instanceof IAnalyzeAction analyze) {
             analyze.doAnalyze(item);
-            return true;
+            return StepOutcome.CONTINUE;
         }
         if (action instanceof IProcessAction process) {
             List<WorkItem> produced = process.doProcess(item);
             if (produced == null || produced.isEmpty()) {
-                return false; // item filtered out
+                return StepOutcome.FILTERED;
             }
             exec.replaceWorkItem(produced.get(0));
             for (int i = 1; i < produced.size(); i++) {
@@ -723,11 +778,14 @@ public class MainExecutor implements Runnable {
                     throw e;
                 }
             }
-            return true;
+            return StepOutcome.CONTINUE;
         }
         if (action instanceof IOutAction out) {
-            out.writeItem(item);
-            return true;
+            WriteResult result = out.write(item, writeContext);
+            if (result != null && result.isSkipped()) {
+                return StepOutcome.skipped(result.reason()); // the steps after it, if any, do not run
+            }
+            return StepOutcome.CONTINUE;
         }
         throw new UnsupportedOperationException("Unsupported action type: " + action.getClass());
     }
@@ -820,5 +878,9 @@ public class MainExecutor implements Runnable {
     /** True once {@link #cancel()} took effect (requested before the pipeline terminated). */
     boolean isCancelRequested() {
         return cancelRequested;
+    }
+
+    String getRunId() {
+        return writeContext.runId();
     }
 }

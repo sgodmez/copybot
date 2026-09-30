@@ -9,6 +9,7 @@ import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumeStateStore;
+import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.channels.ClosedByInterruptException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
@@ -430,6 +432,52 @@ public class MainExecutorControlTest {
         assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
         assertNull(exec.getState().getResumeProposal(), "the state file is not read");
         assertTrue(interruptKept.get(), "an external interrupt is restored for the caller");
+    }
+
+    @Test
+    public void anIoFailureCausedByTheCancelIsAnInterruptionNotAnItemError() throws Exception {
+        InterruptedIoOut out = new InterruptedIoOut();
+        ResourceRegistry reg = registry(Map.of("disk:*", 1000));
+        MainExecutor exec = singlePhase(new DatedIn(tempDir, 1, null), out, reg);
+        Thread runner = Thread.ofVirtual().start(exec);
+        assertTrue(out.entered.await(5, TimeUnit.SECONDS));
+
+        exec.cancel();
+        runner.join(TimeUnit.SECONDS.toMillis(20));
+
+        assertFalse(runner.isAlive());
+        assertTrue(out.interrupted.get(), "the out step really caught the InterruptedException");
+        assertTrue(out.threw.get(), "the out step failed with the wrapped ClosedByInterruptException");
+        assertEquals(1, exec.getState().getWorkItems().size());
+        assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
+        WorkItemExecution item = exec.getState().getWorkItems().peek();
+        assertEquals(ItemStatus.PENDING, item.getStatus(), "an item interrupted by the cancel is not an error");
+        assertNull(item.getError());
+        assertNull(exec.getState().getFailure(), "a cancelled write is not a failure");
+        assertTrue(allReleased(reg), "got " + reg.snapshot());
+    }
+
+    /**
+     * Out step that blocks until it is interrupted, then fails like an interrupted channel copy: a
+     * ClosedByInterruptException wrapped in a CopybotException, the interrupt flag still set.
+     */
+    private static final class InterruptedIoOut extends FakeAction implements IOutAction {
+        final CountDownLatch entered = new CountDownLatch(1);
+        final AtomicBoolean threw = new AtomicBoolean();
+        final AtomicBoolean interrupted = new AtomicBoolean();
+
+        @Override
+        public void writeItem(WorkItem item) {
+            entered.countDown();
+            try {
+                new CountDownLatch(1).await(20, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+                Thread.currentThread().interrupt();
+            }
+            threw.set(true);
+            throw CopybotException.of(new ClosedByInterruptException(), "copy interrupted");
+        }
     }
 
     /** Out step whose resolveTarget (resume point resolution) requests a cancel, then fails. */

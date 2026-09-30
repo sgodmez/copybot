@@ -156,8 +156,8 @@ public class ResumeEndToEndTest {
         assertEquals(0, cli(pipeline));
         Files.delete(nas.resolve("IMG_01.JPG"));
 
-        // IMG_02.JPG still exists and overwrite=false: that item fails (exit code 1), which does not stop IMG_01
-        assertEquals(1, cli(pipeline, "--all"));
+        // IMG_02.JPG is still there and identical: overwrite=false now skips it (spec safe-write §1), IMG_01 is copied again
+        assertEquals(0, cli(pipeline, "--all"));
 
         assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
     }
@@ -248,5 +248,77 @@ public class ResumeEndToEndTest {
 
         assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
         assertFalse(Files.exists(tempDir.resolve("sd.state.json")));
+    }
+
+    /** file.read -> file.write to nas/{name}; outConfig is appended to the write actionConfig, mode null: no resume. */
+    private Path pipelineWithOut(String mode, String outConfig) throws IOException {
+        String resume = mode == null ? "" : ",\"resume\":{\"mode\":\"" + mode + "\"}";
+        return Files.writeString(tempDir.resolve("sd.json"), """
+                {
+                  "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}"%s } }%s
+                }
+                """.formatted(json(card), json(nas), outConfig, resume));
+    }
+
+    @Test
+    public void overwriteWithOnConflictIsAConfigurationErrorAndCopiesNothing() throws IOException {
+        Path pipeline = pipelineWithOut(null, ", \"overwrite\": true, \"onConflict\": { \"ifDifferent\": \"rename\" }");
+
+        String[] result = capture(pipeline);
+
+        assertEquals("2", result[0], result[2]);
+        assertFalse(Files.exists(nas), "nothing is copied");
+    }
+
+    @Test
+    public void aSecondRunSkipsTheFilesAlreadyThereAndSucceeds() throws IOException {
+        Path pipeline = pipelineWithOut(null, "");
+        assertEquals(0, cli(pipeline));
+
+        String[] again = capture(pipeline);
+
+        assertEquals("0", again[0], again[2]);
+        assertFalse(again[2].contains("ERROR"), again[2]);
+        assertFalse(Files.exists(nas.resolve("IMG_01 (1).JPG")), "an identical file is not copied twice");
+    }
+
+    private static boolean hasWarning(String output) {
+        return output.lines().anyMatch(line -> line.startsWith("Warning: "));
+    }
+
+    @Test
+    public void dryRunPrintsTheConfigurationWarningsAndDeletesNothing() throws IOException {
+        Path pipeline = pipelineWithOut("state", ", \"deleteSource\": true");
+
+        String[] result = capture(pipeline, "--dry-run");
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(hasWarning(result[1]), result[1]);
+        assertTrue(Files.exists(card.resolve("IMG_01.JPG")), "a dry run deletes nothing");
+    }
+
+    @Test
+    public void aRunPrintsTheConfigurationWarningsOnStderrThenMovesTheFiles() throws IOException {
+        Path pipeline = pipelineWithOut(null, ", \"deleteSource\": true");
+
+        String[] result = capture(pipeline);
+
+        assertEquals("0", result[0], result[2]);
+        assertEquals(1, result[2].lines().filter(line -> line.startsWith("Warning: ")).count(), result[2]);
+        assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
+        assertFalse(Files.exists(card.resolve("IMG_01.JPG")), "deleteSource: the source is gone once copied and verified");
+    }
+
+    @Test
+    public void aSafeConfigurationPrintsNoWarning() throws IOException {
+        Path pipeline = pipelineWithOut("state", ", \"deleteSource\": true, \"verify\": \"readBack\"");
+
+        String[] dryRun = capture(pipeline, "--dry-run");
+        String[] run = capture(pipeline);
+
+        assertFalse(hasWarning(dryRun[1]), dryRun[1]);
+        assertFalse(hasWarning(run[2]), run[2]);
+        assertEquals("0", run[0], run[2]);
     }
 }

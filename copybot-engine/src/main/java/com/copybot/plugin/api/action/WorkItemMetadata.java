@@ -16,6 +16,8 @@ public record WorkItemMetadata(
 
     public static final String CAPTURE_DATE = "captureDate";
     public static final String LAST_MODIFIED = "lastModified";
+    /** raw key: SHA-256 of the content (hex), computed by file.write during the copy. */
+    public static final String SHA256 = "sha256";
 
     public WorkItemMetadata() {
         this(new HashMap<>(), new HashMap<>());

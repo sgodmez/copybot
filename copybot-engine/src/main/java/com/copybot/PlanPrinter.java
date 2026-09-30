@@ -9,7 +9,10 @@ import java.io.PrintStream;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 
-/** Dry-run output: the resume point, its origin, the warnings, then one line per item. */
+/**
+ * Dry-run output: the resume point, its origin, the warnings (the steps' configuration first, then the
+ * resume ones), then one line per item.
+ */
 final class PlanPrinter {
 
     private static final DateTimeFormatter DATE =
@@ -22,6 +25,7 @@ final class PlanPrinter {
         ResumeProposal proposal = plan.getProposal();
         ResumePoint point = override != null ? override : proposal.point();
         out.println("Resume point: " + describe(point) + " [" + (override != null ? "MANUAL" : proposal.source()) + "]");
+        plan.getState().getWarnings().forEach(w -> out.println("Warning: " + w));
         proposal.warnings().forEach(w -> out.println("Warning: " + w));
         for (WorkItemExecution item : plan.getOrderedItems()) {
             String name = Copybot.name(item);

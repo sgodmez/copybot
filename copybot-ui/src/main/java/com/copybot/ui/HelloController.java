@@ -28,6 +28,9 @@ public class HelloController {
     private static final Path TEST_PIPELINE = Path.of("copybot-ui", "src", "dev", "test-pipeline.json");
 
     @FXML
+    private Label warningBanner;
+
+    @FXML
     private Label fileCount;
 
     @FXML
@@ -63,6 +66,7 @@ public class HelloController {
                 new SimpleStringProperty(statusText(cell.getValue())));
 
         fileCount.setText("");
+        showWarnings(List.of());
     }
 
     private static String statusText(WorkItemExecution exec) {
@@ -73,8 +77,17 @@ public class HelloController {
             }
             case WAITING_RESOURCES -> "WAITING " + exec.getWaitingFor();
             case ERROR -> exec.getError() != null ? "ERROR: " + exec.getError().getMessage() : "ERROR";
+            case SKIPPED -> exec.getSkipReason() != null ? "SKIPPED: " + exec.getSkipReason() : "SKIPPED";
             default -> exec.getStatus().toString();
         };
+    }
+
+    /** The configuration warnings of the pipeline (spec safe-write §5), hidden when there is none. */
+    private void showWarnings(List<String> warnings) {
+        warningBanner.setText(String.join("\n", warnings));
+        boolean visible = !warnings.isEmpty();
+        warningBanner.setVisible(visible);
+        warningBanner.setManaged(visible);
     }
 
     @FXML
@@ -125,6 +138,7 @@ public class HelloController {
         try {
             CopybotMainUi.ENGINE.run(TEST_PIPELINE, state -> {
                 List<WorkItemExecution> list = List.copyOf(state.getWorkItems()); // snapshot outside the FX thread; the queue may evolve concurrently
+                List<String> warnings = state.getWarnings();
                 String summary = state.getStatus() + " — " + list.size() + " items"
                         + (state.isListingInProgress() ? " (listing…)" : "");
                 Platform.runLater(() -> {
@@ -134,6 +148,7 @@ public class HelloController {
                         fileListView.refresh(); // same rows, but their status/percent evolved
                     }
                     fileCount.setText(summary);
+                    showWarnings(warnings);
                 });
             });
         } catch (Exception e) {

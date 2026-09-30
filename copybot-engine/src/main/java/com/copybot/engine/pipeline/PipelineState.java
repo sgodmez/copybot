@@ -23,6 +23,7 @@ public class PipelineState {
 
     // written by the pipeline thread, read by watchers/UI on other threads
     private volatile ResumeProposal resumeProposal;
+    private volatile List<String> warnings = List.of();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private volatile boolean preparationFailed;
 
@@ -78,6 +79,18 @@ public class PipelineState {
 
     public void setResumeProposal(ResumeProposal resumeProposal) {
         this.resumeProposal = resumeProposal;
+    }
+
+    /**
+     * The configuration warnings of the steps ({@code IAction#configWarnings}), set once the steps are
+     * resolved; empty before. Shown before the run: dry-run output, CLI start, UI banner.
+     */
+    public List<String> getWarnings() {
+        return warnings;
+    }
+
+    public void setWarnings(List<String> warnings) {
+        this.warnings = List.copyOf(warnings);
     }
 
     /** A pipeline-level failure that is not tied to an item (e.g. the state file could not be written). */

@@ -1,0 +1,9 @@
+Task 4: minor (deferred): no nextCursor-level guard test for a non-selected prep-SKIPPED item between successes; e2e test only skips the last item
+Task 5: minor (deferred): warningsCollected set before loop; field placement/comment; weak empty-warnings test; no test for throwing configWarnings nor prepare→execute collect-once
+Task 6: minor (deferred): secondary unknown-value tests assert only exception type
+Task 7: minor (deferred): skipNBytes EOF on stale size (IOException → item error, safe); non-local item without size read twice; boundary tests at 128KiB+1/64KiB+1, 2.001s, URL-without-date not covered
+Task 8: minor (deferred): skip-reason keys not distinguished in tests; ifIdentical=overwrite/rename and mixed rename branches untested; no "free target = no I/O" test; directory at candidate path → item error
+Task 11: minor (deferred): no DOS-hidden directory subtree test; lowercasing InvalidPath theoretical; excluded dirs still traversed; a few coverage gaps
+Task 9: minor (deferred): removeIf on runId change re-cleans a dir when runs alternate (overlapping runs are a spec §3 limit); guard not symlink/case-insensitive aware; move fallback untested (no FS seam); POSIX race documented; long names fail in tempAndRename
+Task 10: minor (deferred): move fast path bypasses in-flight guard (unreachable today); temp-item deleteSource kept silently (unreachable)
+Task 12: minor (deferred): no CLI exit-2 test for file.read without path; SecurityException no longer caught in readAttributes; banner only on the run button path

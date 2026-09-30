@@ -95,6 +95,8 @@ public final class ResumeResolver {
     /**
      * The cursor to persist once the run is over: the last item of the longest run of successes among
      * the selected items (in key order), never before the automatic resume point nor the previous cursor.
+     * A selected item succeeded when it ended DONE, or SKIPPED during the execution (the out step found it
+     * already at the destination: spec safe-write §2), and none of its forks failed.
      *
      * @return empty when there is nothing (new) to write
      */
@@ -106,7 +108,7 @@ public final class ResumeResolver {
             if (key.isEmpty() || !point.selects(key.get())) {
                 continue;
             }
-            if (item.getStatus() != ItemStatus.DONE || item.hasFailedFork()) {
+            if (!succeeded(item)) {
                 break;
             }
             lastSuccess = key.get();
@@ -120,6 +122,12 @@ public final class ResumeResolver {
             return Optional.empty();
         }
         return next;
+    }
+
+    /** For a selected item: SKIPPED can only come from the execution, the resume point skipped only the others. */
+    private static boolean succeeded(WorkItemExecution item) {
+        ItemStatus status = item.getStatus();
+        return (status == ItemStatus.DONE || status == ItemStatus.SKIPPED) && !item.hasFailedFork();
     }
 
     private Optional<ResumeProposal> fromState() {

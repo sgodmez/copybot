@@ -4,6 +4,7 @@ import com.copybot.plugin.api.definition.IPlugin;
 import com.google.gson.JsonElement;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -44,6 +45,15 @@ public interface IAction {
      */
     default Set<Path> touchedPaths(WorkItem item) {
         return Set.of();
+    }
+
+    /**
+     * Warnings about this action's configuration, valid but risky (e.g. sources deleted after a light
+     * verification). Called once the configuration is loaded; the engine shows them before the run
+     * (dry-run output, CLI start, UI banner). Empty by default; a null result means none. It must not throw.
+     */
+    default List<String> configWarnings() {
+        return List.of();
     }
 
     void setStatusWatcher(Consumer<WorkStatus> watcher);

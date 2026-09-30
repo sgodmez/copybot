@@ -257,4 +257,29 @@ public class ResumeResolverTest {
 
         assertEquals(Optional.of(key(ordered.get(2))), resolver.nextCursor(ordered, p.point(), p.source()));
     }
+
+    @Test
+    public void anItemSkippedDuringTheExecutionCountsAsASuccess() throws IOException {
+        List<WorkItemExecution> ordered = card();
+        ResumeResolver resolver = new ResumeResolver(ResumeMode.STATE, store(), null);
+        ResumeProposal p = resolver.propose(ordered);
+        ordered.get(0).setDone();
+        ordered.get(1).setSkipped("identical to the destination"); // selected, then skipped by the out step
+        ordered.get(2).setDone();
+
+        assertEquals(Optional.of(key(ordered.get(2))), resolver.nextCursor(ordered, p.point(), p.source()));
+    }
+
+    @Test
+    public void anItemSkippedDuringTheExecutionWithAFailedForkHoldsTheCursor() throws IOException {
+        List<WorkItemExecution> ordered = card();
+        ResumeResolver resolver = new ResumeResolver(ResumeMode.STATE, store(), null);
+        ResumeProposal p = resolver.propose(ordered);
+        ordered.get(0).setDone();
+        ordered.get(1).setSkipped("identical to the destination");
+        ordered.get(1).markForkFailed();
+        ordered.get(2).setDone();
+
+        assertEquals(Optional.of(key(ordered.get(0))), resolver.nextCursor(ordered, p.point(), p.source()));
+    }
 }

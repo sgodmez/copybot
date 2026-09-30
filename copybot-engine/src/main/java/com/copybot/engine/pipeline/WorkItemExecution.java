@@ -128,7 +128,7 @@ public class WorkItemExecution {
         this.status = ItemStatus.ERROR;
     }
 
-    /** Not selected by the resume point; the reason is shown to the user. */
+    /** Not selected by the resume point, or skipped by the out step (e.g. already at the destination); the reason is shown to the user. */
     public void setSkipped(String reason) {
         this.skipReason = reason;
         this.waitingFor = Set.of();

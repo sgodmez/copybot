@@ -6,6 +6,6 @@ public enum ItemStatus {
     RUNNING,
     DONE,
     ERROR,
-    /** not selected by the resume point: see WorkItemExecution#getSkipReason() */
+    /** not selected by the resume point, or skipped by the out step: see WorkItemExecution#getSkipReason() */
     SKIPPED
 }

@@ -15,10 +15,12 @@ import picocli.CommandLine;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Optional;
 import java.util.ServiceConfigurationError;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 @CommandLine.Command(name = "Copybot", version = "0.1", mixinStandardHelpOptions = true)
@@ -103,8 +105,10 @@ public class Copybot implements Callable<Integer> {
     /** The exit code is decided on the final status (and the preparation marker), never on the failure. */
     private int doRun(CopybotEngine engine) throws InterruptedException {
         Execution execution;
+        // a dry run prints the warnings with the plan (stdout), a real run on stderr as soon as they are known
+        Consumer<PipelineState> watcher = isDryRun ? null : warningsOnStderrOnce();
         if (isDryRun || resumeOverride != null) {
-            Plan plan = engine.prepare(pipelinePath, null);
+            Plan plan = engine.prepare(pipelinePath, watcher);
             PipelineStatus prepared = plan.getState().getStatus();
             if (prepared == PipelineStatus.CANCELLED) {
                 System.out.println("Cancelled !");
@@ -121,7 +125,7 @@ public class Copybot implements Callable<Integer> {
             }
             execution = engine.execute(plan, override);
         } else {
-            execution = engine.run(pipelinePath, null);
+            execution = engine.run(pipelinePath, watcher);
         }
         PipelineStatus status = awaitCancellingOnCtrlC(execution);
         if (status == PipelineStatus.CANCELLED) {
@@ -147,6 +151,20 @@ public class Copybot implements Callable<Integer> {
         }
         System.err.println(ResourcesEngine.getString("pipeline.prepare-failed"));
         return EXIT_FATAL;
+    }
+
+    /**
+     * A watcher printing the configuration warnings of the steps on stderr, once, as soon as the steps are
+     * resolved (spec safe-write §5): the first notifications come before, the terminal one never misses them.
+     */
+    private static Consumer<PipelineState> warningsOnStderrOnce() {
+        AtomicBoolean printed = new AtomicBoolean();
+        return state -> {
+            List<String> warnings = state.getWarnings();
+            if (!warnings.isEmpty() && printed.compareAndSet(false, true)) {
+                warnings.forEach(w -> System.err.println("Warning: " + w));
+            }
+        };
     }
 
     /**

@@ -457,4 +457,203 @@ public class MainExecutorResumeTest {
         assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
         assertFalse(exec.getState().isPreparationFailed());
     }
+
+    /** Reports the item named skipOn as skipped through write(item, context), writes the others. */
+    static final class SkippingOut extends FakeAction implements IOutAction {
+        final Set<String> written = ConcurrentHashMap.newKeySet();
+        final Set<String> runIds = ConcurrentHashMap.newKeySet();
+        final String skipOn;
+
+        SkippingOut(String skipOn) {
+            this.skipOn = skipOn;
+        }
+
+        @Override
+        public void writeItem(WorkItem item) {
+            throw new AssertionError("the engine calls write(item, context)");
+        }
+
+        @Override
+        public WriteResult write(WorkItem item, WriteContext context) {
+            runIds.add(context.runId());
+            if (item.getNameDisplay().equals(skipOn)) {
+                return WriteResult.skipped(null, "identical to the destination");
+            }
+            written.add(item.getNameDisplay());
+            return WriteResult.written(null);
+        }
+    }
+
+    /** DatedIn -> RecordingAnalyze -> out; a null resume runs a single phase. */
+    private MainExecutor outExecutor(int days, IOutAction out, ResumeContext resume) {
+        return new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(days), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()), new PipelineStep<>(null, out, emptyConfig())),
+                1, false, null, registry(), resume);
+    }
+
+    private static WorkItemExecution named(MainExecutor exec, String name) {
+        return exec.getState().getWorkItems().stream()
+                .filter(w -> w.getWorkItem().getNameDisplay().equals(name))
+                .findFirst().orElseThrow();
+    }
+
+    @Test
+    public void anItemSkippedByTheOutStepEndsSkippedWithItsReason() {
+        SkippingOut out = new SkippingOut("IMG_02.JPG");
+        MainExecutor exec = outExecutor(3, out, new ResumeContext(ResumeMode.NONE, store()));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus(), "a skipped item is not a failure");
+        assertEquals(Set.of("IMG_01.JPG", "IMG_03.JPG"), out.written);
+        WorkItemExecution skipped = named(exec, "IMG_02.JPG");
+        assertEquals(ItemStatus.SKIPPED, skipped.getStatus());
+        assertEquals("identical to the destination", skipped.getSkipReason());
+        assertEquals(ItemStatus.DONE, named(exec, "IMG_01.JPG").getStatus());
+    }
+
+    @Test
+    public void aSinglePhaseRunAlsoEndsTheSkippedItemsSkipped() {
+        SkippingOut out = new SkippingOut("IMG_01.JPG");
+        MainExecutor exec = outExecutor(2, out, null);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(ItemStatus.SKIPPED, named(exec, "IMG_01.JPG").getStatus());
+        assertEquals(ItemStatus.DONE, named(exec, "IMG_02.JPG").getStatus());
+    }
+
+    @Test
+    public void theOutStepGetsTheRunIdOfItsExecution() {
+        SkippingOut out = new SkippingOut(null);
+        MainExecutor exec = outExecutor(3, out, new ResumeContext(ResumeMode.NONE, store()));
+
+        exec.run();
+
+        assertEquals(Set.of(exec.getRunId()), out.runIds, "one run id for every item of the execution");
+        assertNotEquals(exec.getRunId(), outExecutor(1, new SkippingOut(null), null).getRunId(),
+                "one run id per execution");
+    }
+
+    @Test
+    public void anItemSkippedByTheOutStepAdvancesTheCursor() {
+        SkippingOut out = new SkippingOut("IMG_03.JPG"); // the last one: already at the destination
+        MainExecutor exec = outExecutor(3, out, new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(day(3), store().readCursor().orElseThrow(), "a skipped item counts as imported");
+    }
+
+    /** A listing of nothing whose configuration is valid but risky. */
+    static final class WarningIn extends FakeAction implements IInAction {
+        @Override
+        public void listFiles(Consumer<WorkItem> consumer) {
+        }
+
+        @Override
+        public List<String> configWarnings() {
+            return List.of("risky listing");
+        }
+    }
+
+    /** An analyse step whose configuration is valid but risky. */
+    static final class WarningAnalyze extends FakeAction implements IAnalyzeAction {
+        @Override
+        public void doAnalyze(WorkItem item) {
+        }
+
+        @Override
+        public List<String> configWarnings() {
+            return List.of("risky analyse");
+        }
+    }
+
+    private MainExecutor warningExecutor(ResumeContext resume) {
+        return new MainExecutor(
+                List.of(new PipelineStep<>(null, new WarningIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, new WarningAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, null, registry(), resume);
+    }
+
+    @Test
+    public void theConfigWarningsOfEveryStepAreInTheStateOnceThePipelineIsPrepared() {
+        MainExecutor exec = warningExecutor(new ResumeContext(ResumeMode.STATE, store()));
+        assertEquals(List.of(), exec.getState().getWarnings(), "nothing before the steps are resolved");
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(List.of("risky listing", "risky analyse"), exec.getState().getWarnings());
+    }
+
+    @Test
+    public void aSinglePhaseRunAlsoPublishesTheConfigWarnings() {
+        MainExecutor exec = warningExecutor(null);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(List.of("risky listing", "risky analyse"), exec.getState().getWarnings());
+    }
+
+    @Test
+    public void stepsWithoutWarningsLeaveTheWarningsEmpty() {
+        MainExecutor exec = executor(1, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.STATE);
+
+        exec.prepare();
+
+        assertEquals(List.of(), exec.getState().getWarnings());
+    }
+
+    /** An analyse step whose configWarnings returns null. */
+    static final class NullWarningAnalyze extends FakeAction implements IAnalyzeAction {
+        @Override
+        public void doAnalyze(WorkItem item) {
+        }
+
+        @Override
+        public List<String> configWarnings() {
+            return null;
+        }
+    }
+
+    @Test
+    public void aNullConfigWarningsContributesNothing() {
+        IAnalyzeAction nullWarnings = new NullWarningAnalyze();
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new WarningIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, nullWarnings, emptyConfig())),
+                1, false, null, registry(), null);
+
+        exec.run();
+
+        assertEquals(List.of("risky listing"), exec.getState().getWarnings());
+    }
+
+    /** An out step whose write returns null: a plugin that has nothing to report. */
+    static final class NullResultOut extends FakeAction implements IOutAction {
+        @Override
+        public void writeItem(WorkItem item) {
+        }
+
+        @Override
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return null;
+        }
+    }
+
+    @Test
+    public void anItemWhoseOutStepReturnsANullWriteResultEndsDone() {
+        MainExecutor exec = outExecutor(1, new NullResultOut(), null);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(ItemStatus.DONE, named(exec, "IMG_01.JPG").getStatus());
+    }
 }
