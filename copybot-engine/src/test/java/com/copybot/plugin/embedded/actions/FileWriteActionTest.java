@@ -1,6 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
@@ -93,5 +95,21 @@ public class FileWriteActionTest {
         List<Integer> percents = statuses.stream().map(WorkStatus::actionPercent).filter(p -> p >= 0).toList();
         assertTrue(percents.contains(50), "mid-copy percent must be 50, got " + percents);
         assertEquals(100, percents.getLast().intValue());
+    }
+
+    @Test
+    public void resolveTargetAppliesTheOutPatternWithoutWriting(@TempDir Path dir) throws Exception {
+        Path source = Files.writeString(dir.resolve("DSC_1.NEF"), "x");
+        WorkItem item = new WorkItem(source);
+        item.getMetadatas().display().put("name", "DSC_1.NEF");
+        item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, Instant.parse("2026-09-28T10:00:00Z"));
+        FileWriteAction action = new FileWriteAction();
+        String outPattern = dir.resolve("out").toString().replace('\\', '/') + "/{captureDate.Y}/{name}";
+        action.loadConfig(JsonParser.parseString("{\"outPattern\":\"" + outPattern + "\",\"overwrite\":false}"));
+
+        Path target = action.resolveTarget(item).orElseThrow();
+
+        assertEquals(dir.resolve("out").resolve("2026").resolve("DSC_1.NEF"), target.toAbsolutePath().normalize());
+        assertFalse(Files.exists(dir.resolve("out")), "resolving a target must not create anything");
     }
 }

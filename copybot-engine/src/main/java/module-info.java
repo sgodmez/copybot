@@ -16,6 +16,7 @@ module com.copybot.engine {
     opens com.copybot.engine to javafx.base, info.picocli;
 
     exports com.copybot.engine.pipeline to com.google.gson, com.copybot.ui;
+    exports com.copybot.engine.resume to com.google.gson, com.copybot.ui;
     exports com.copybot.engine.resources to com.copybot.ui;
 
     exports com.copybot.plugin.api.action;

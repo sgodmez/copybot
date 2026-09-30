@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -45,6 +46,11 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "plugin.embedded.file.write.error.io", outPath);
         }
+    }
+
+    @Override
+    public Optional<Path> resolveTarget(WorkItem workItem) {
+        return Optional.of(Path.of(resolveFileName(workItem)));
     }
 
     private String resolveFileName(WorkItem workItem) {

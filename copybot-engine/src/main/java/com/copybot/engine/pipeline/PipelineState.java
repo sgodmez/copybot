@@ -2,6 +2,7 @@ package com.copybot.engine.pipeline;
 
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resources.ResourceSnapshot;
+import com.copybot.engine.resume.ResumeProposal;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -18,6 +19,10 @@ public class PipelineState {
     private volatile boolean listingInProgress;
 
     private ResourceRegistry registry;
+
+    // written by the pipeline thread, read by watchers/UI on other threads
+    private volatile ResumeProposal resumeProposal;
+    private volatile Throwable failure;
 
     public PipelineState(List<PipelineStepState> stepStates) {
         this.stepStates = stepStates;
@@ -55,5 +60,21 @@ public class PipelineState {
 
     public List<ResourceSnapshot> getResourceSnapshot() {
         return registry == null ? List.of() : registry.snapshot();
+    }
+    public ResumeProposal getResumeProposal() {
+        return resumeProposal;
+    }
+
+    public void setResumeProposal(ResumeProposal resumeProposal) {
+        this.resumeProposal = resumeProposal;
+    }
+
+    /** A pipeline-level failure that is not tied to an item (e.g. the state file could not be written). */
+    public Throwable getFailure() {
+        return failure;
+    }
+
+    public void setFailure(Throwable failure) {
+        this.failure = failure;
     }
 }

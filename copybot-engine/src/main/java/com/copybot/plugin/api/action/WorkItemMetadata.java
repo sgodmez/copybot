@@ -7,11 +7,15 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 
 public record WorkItemMetadata(
         Map<String, Object> raw,
         Map<String, String> display
 ) {
+
+    public static final String CAPTURE_DATE = "captureDate";
+    public static final String LAST_MODIFIED = "lastModified";
 
     public WorkItemMetadata() {
         this(new HashMap<>(), new HashMap<>());
@@ -32,7 +36,7 @@ public record WorkItemMetadata(
     }
 
     public void setTime(String key, Instant time) {
-        raw.put("key", time);
+        raw.put(key, time);
 
         var localDateTime = LocalDateTime.ofInstant(time, ZoneOffset.systemDefault());
         display.put(key + ".Y", String.format("%04d", localDateTime.getYear()));
@@ -40,5 +44,9 @@ public record WorkItemMetadata(
         display.put(key + ".m", String.format("%02d", localDateTime.getMonthValue()));
         display.put(key + ".D", String.format("%02d", localDateTime.getDayOfMonth()));
         // TODO : more !
+    }
+
+    public Optional<Instant> getTime(String key) {
+        return raw.get(key) instanceof Instant instant ? Optional.of(instant) : Optional.empty();
     }
 }

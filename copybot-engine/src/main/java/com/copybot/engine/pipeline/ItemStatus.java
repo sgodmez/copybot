@@ -5,5 +5,7 @@ public enum ItemStatus {
     WAITING_RESOURCES,
     RUNNING,
     DONE,
-    ERROR
+    ERROR,
+    /** not selected by the resume point: see WorkItemExecution#getSkipReason() */
+    SKIPPED
 }

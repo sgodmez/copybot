@@ -34,13 +34,6 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
                             Integer.MAX_VALUE,
                             (filePath, fileAttr) -> fileAttr.isRegularFile())
                     .forEach(p -> {
-
-                        try {
-                            Thread.currentThread().sleep(5);
-                        } catch (InterruptedException e) {
-                            throw new RuntimeException(e);
-                        }
-
                         WorkItem wi;
                         try {
                             wi = new WorkItem(p);
@@ -63,7 +56,7 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
         BasicFileAttributes attr = Files.readAttributes(path, BasicFileAttributes.class);
         metadatas.setSize(attr.size());
         metadatas.setTime("creation", attr.creationTime().toInstant());
-        metadatas.setTime("lastModified", attr.lastModifiedTime().toInstant());
+        metadatas.setTime(WorkItemMetadata.LAST_MODIFIED, attr.lastModifiedTime().toInstant());
         metadatas.setTime("lastAccess", attr.lastAccessTime().toInstant());
     }
 }

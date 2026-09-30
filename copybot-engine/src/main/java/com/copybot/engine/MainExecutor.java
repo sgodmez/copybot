@@ -10,6 +10,12 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resources.FootprintResolver;
 import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.engine.resume.ResumeContext;
+import com.copybot.engine.resume.ResumeMode;
+import com.copybot.engine.resume.ResumePoint;
+import com.copybot.engine.resume.ResumeProposal;
+import com.copybot.engine.resume.ResumeResolver;
+import com.copybot.engine.resume.ResumeSource;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
@@ -55,6 +61,19 @@ public class MainExecutor implements Runnable {
     private List<PipelineStep<?>> itemSteps;
     private boolean startProcessingWhileListing;
 
+    /** null: single-phase run without barrier nor resume (historical behaviour of run()). */
+    private final ResumeContext resume;
+
+    /** Number of item steps before the preparation barrier (the analyse steps). */
+    private int barrierIndex;
+
+    /** Exclusive end of the steps run by the items the listings emit: the barrier while preparing, all steps otherwise. */
+    private volatile int phaseEnd;
+
+    private ResumeResolver resolver;
+    private ResumeProposal proposal;
+    private List<WorkItemExecution> orderedItems = List.of();
+
     private ExecutorService taskExecutor;
     private CountDownLatch listingGate;
     private final AtomicBoolean listingFailed = new AtomicBoolean(false);
@@ -75,50 +94,64 @@ public class MainExecutor implements Runnable {
      *                swallowed. The {@link PipelineState} handed over is the live, mutating state:
      *                read it, do not retain it.
      */
-    public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry) {
+    public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
+                        ResumeContext resume) {
         this.pipelineConfig = pipelineConfig;
         this.watcher = watcher;
         this.registry = registry;
+        this.resume = resume;
         this.state = new PipelineState(List.of());
         this.state.setRegistry(registry);
     }
 
-    // visible for tests: runs with pre-resolved steps, bypassing PluginEngine
+    // visible for tests: runs with pre-resolved steps, bypassing PluginEngine, without barrier
     MainExecutor(List<PipelineStep<IInAction>> inSteps, List<PipelineStep<?>> itemSteps,
                  boolean startProcessingWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry) {
+        this(inSteps, itemSteps, itemSteps.size(), startProcessingWhileListing, watcher, registry, null);
+    }
+
+    // visible for tests: pre-resolved steps, the first barrierIndex item steps run before the barrier
+    MainExecutor(List<PipelineStep<IInAction>> inSteps, List<PipelineStep<?>> itemSteps, int barrierIndex,
+                 boolean startProcessingWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry,
+                 ResumeContext resume) {
         this.pipelineConfig = null;
         this.watcher = watcher;
         this.registry = registry;
+        this.resume = resume;
         this.inSteps = inSteps;
         this.itemSteps = itemSteps;
+        this.barrierIndex = barrierIndex;
         this.startProcessingWhileListing = startProcessingWhileListing;
         this.state = new PipelineState(List.of());
         this.state.setRegistry(registry);
     }
 
+    /**
+     * Without resume: one phase, every step, as before. With resume: {@link #prepare()} then, when the
+     * preparation succeeded, {@link #execute(ResumePoint)} with the proposed resume point.
+     */
     @Override
     public void run() {
+        if (resume == null) {
+            runSinglePhase();
+            return;
+        }
+        prepare();
+        if (state.getStatus() == PipelineStatus.PREPARED) {
+            execute(null);
+        }
+    }
+
+    private void runSinglePhase() {
         state.setStatus(PipelineStatus.RUNNING);
         state.setListingInProgress(true);
-        taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
-        startNotifier();
-        notifyWatcher();
-
+        startPhase();
         try {
             // Step resolution is INSIDE the try: a missing plugin/action must be reported as a
             // failed run (status ERROR + watcher notified), not as an exception out of a state-less run.
-            if (pipelineConfig != null) {
-                inSteps = doResolveStep(pipelineConfig.inSteps(), IInAction.class);
-                itemSteps = resolveOtherSteps(pipelineConfig);
-                startProcessingWhileListing = Boolean.TRUE.equals(pipelineConfig.startProcessingWhileListing());
-            }
-            registerStepCapacities();
-            listingGate = new CountDownLatch(inSteps.size());
-
-            for (PipelineStep<IInAction> inStep : inSteps) {
-                submitTask(() -> runListing(inStep));
-            }
-            awaitCompletion(); // waits for all listings AND all items (including forked ones)
+            resolveStepsIfNeeded();
+            phaseEnd = itemSteps.size();
+            runListings();
             state.setStatus(resolveFinalStatus());
         } catch (InterruptedException e) {
             // Cancellation: unblock every item still parked in acquireAll/IO and let it release its
@@ -132,9 +165,160 @@ public class MainExecutor implements Runnable {
             throw e;
         } finally {
             state.setListingInProgress(false);
-            shutdownTasks();
-            stopNotifier(); // includes the final, guaranteed notification
+            endPhase();
         }
+    }
+
+    /**
+     * Lists and analyses every item, then resolves the resume point: items end PENDING (selected),
+     * SKIPPED (with a reason) or ERROR, and the pipeline PREPARED. Nothing after the analyses runs.
+     * A listing failure leaves the pipeline in ERROR: a partial listing would give a wrong resume point.
+     *
+     * @throws RuntimeException when the resume point cannot be resolved (e.g. invalid state file),
+     *                          after the status has been set to ERROR
+     */
+    public void prepare() {
+        if (resume == null) {
+            throw new IllegalStateException("prepare() requires a resume context");
+        }
+        state.setStatus(PipelineStatus.RUNNING);
+        state.setListingInProgress(true);
+        startPhase();
+        try {
+            resolveStepsIfNeeded();
+            phaseEnd = barrierIndex;
+            runListings();
+            if (listingFailed.get()) {
+                state.setStatus(PipelineStatus.ERROR);
+                return;
+            }
+            orderedItems = ResumeResolver.order(state.getWorkItems());
+            resolver = new ResumeResolver(resume.mode(), resume.store(), findOutAction());
+            proposal = resolver.propose(orderedItems);
+            state.setResumeProposal(proposal);
+            resolver.apply(proposal.point(), proposal.source(), orderedItems);
+            state.setStatus(PipelineStatus.PREPARED);
+        } catch (InterruptedException e) {
+            state.setStatus(PipelineStatus.ERROR);
+            shutdownTasks();
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException | Error e) {
+            state.setStatus(PipelineStatus.ERROR);
+            state.setFailure(e);
+            throw e;
+        } finally {
+            state.setListingInProgress(false);
+            endPhase();
+        }
+    }
+
+    /** Applies a manual resume point to the item statuses (also used by the dry-run preview). */
+    void applyOverride(ResumePoint override) {
+        if (override != null) {
+            resolver.apply(override, ResumeSource.MANUAL, orderedItems);
+        }
+    }
+
+    /**
+     * Runs the steps after the barrier for the selected items, then advances the resume cursor
+     * (only when the run completed normally and the mode is not NONE).
+     *
+     * @param override resume point chosen by the user, null for the proposed one
+     */
+    public void execute(ResumePoint override) {
+        if (state.getStatus() != PipelineStatus.PREPARED) {
+            throw new IllegalStateException("Pipeline is not prepared: " + state.getStatus());
+        }
+        ResumePoint point = override != null ? override : proposal.point();
+        ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
+        applyOverride(override);
+        state.setStatus(PipelineStatus.RUNNING);
+        startPhase();
+        try {
+            for (WorkItemExecution exec : orderedItems) {
+                if (exec.getStatus() == ItemStatus.PENDING) {
+                    submitItem(exec, barrierIndex, itemSteps.size());
+                }
+            }
+            awaitCompletion();
+            // The final status is published once, after the cursor save: a cursor write failure
+            // must never be seen by watchers as SUCCESS followed by ERROR.
+            PipelineStatus finalStatus = resolveFinalStatus();
+            if (!saveCursor(point, source)) {
+                finalStatus = PipelineStatus.ERROR;
+            }
+            state.setStatus(finalStatus);
+        } catch (InterruptedException e) {
+            state.setStatus(PipelineStatus.ERROR);
+            shutdownTasks();
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException | Error e) {
+            state.setStatus(PipelineStatus.ERROR);
+            state.setFailure(e);
+            throw e;
+        } finally {
+            endPhase();
+        }
+    }
+
+    /** @return false when the cursor could not be written */
+    private boolean saveCursor(ResumePoint point, ResumeSource source) {
+        if (resume.mode() == ResumeMode.NONE) {
+            return true;
+        }
+        try {
+            resolver.nextCursor(orderedItems, point, source).ifPresent(resume.store()::writeCursor);
+            return true;
+        } catch (RuntimeException e) {
+            // the files are copied, but the next resume would not know it: this run is not a success
+            state.setFailure(e);
+            return false;
+        }
+    }
+
+    private void resolveStepsIfNeeded() {
+        if (pipelineConfig != null && inSteps == null) {
+            inSteps = doResolveStep(pipelineConfig.inSteps(), IInAction.class);
+            itemSteps = resolveOtherSteps(pipelineConfig);
+            barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
+            startProcessingWhileListing = Boolean.TRUE.equals(pipelineConfig.startProcessingWhileListing());
+        }
+        registerStepCapacities();
+    }
+
+    /** Submits every listing and waits for them AND every item they emitted (including forked ones). */
+    private void runListings() throws InterruptedException {
+        listingGate = new CountDownLatch(inSteps.size());
+        for (PipelineStep<IInAction> inStep : inSteps) {
+            submitTask(() -> runListing(inStep));
+        }
+        awaitCompletion();
+    }
+
+    private void startPhase() {
+        taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        startNotifier();
+        notifyWatcher();
+    }
+
+    private void endPhase() {
+        shutdownTasks();
+        stopNotifier(); // includes the final, guaranteed notification
+    }
+
+    private IOutAction findOutAction() {
+        if (!itemSteps.isEmpty() && itemSteps.getLast().getAction() instanceof IOutAction out) {
+            return out;
+        }
+        return null;
+    }
+
+    ResumeProposal getProposal() {
+        return proposal;
+    }
+
+    List<WorkItemExecution> getOrderedItems() {
+        return orderedItems;
     }
 
     /**
@@ -236,6 +420,9 @@ public class MainExecutor implements Runnable {
         } catch (Throwable t) {
             // A failing listing must not silently look like success: the whole run is marked ERROR.
             listingFailed.set(true);
+            if (state.getFailure() == null) {
+                state.setFailure(t);
+            }
         } finally {
             listingGate.countDown();
             if (listingGate.getCount() == 0) {
@@ -249,19 +436,21 @@ public class MainExecutor implements Runnable {
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
         state.getWorkItems().add(exec);
         notifyWatcher();
-        submitItem(exec, 0);
+        submitItem(exec, 0, phaseEnd);
     }
 
-    private void submitItem(WorkItemExecution exec, int fromStep) {
-        submitTask(() -> runItem(exec, fromStep));
+    private void submitItem(WorkItemExecution exec, int fromStep, int toStep) {
+        submitTask(() -> runItem(exec, fromStep, toStep));
     }
 
-    private void runItem(WorkItemExecution exec, int fromStep) {
+    /** Runs the steps [fromStep, toStep); an item stopped at the barrier goes back to PENDING. */
+    private void runItem(WorkItemExecution exec, int fromStep, int toStep) {
         try {
             if (!startProcessingWhileListing) {
                 listingGate.await();
             }
-            for (int i = fromStep; i < itemSteps.size(); i++) {
+            boolean filtered = false;
+            for (int i = fromStep; i < toStep; i++) {
                 PipelineStep<?> step = itemSteps.get(i);
                 Set<String> footprint = FootprintResolver.resolve(step.getAction(), exec.getWorkItem(), step.getConfig(), i);
                 exec.setWaitingResources(i, footprint);
@@ -271,28 +460,35 @@ public class MainExecutor implements Runnable {
                 notifyWatcher();
                 boolean continueItem;
                 try {
-                    continueItem = runStep(exec, step, i);
+                    continueItem = runStep(exec, step, i, toStep);
                 } finally {
                     registry.releaseAll(footprint);
                 }
                 if (!continueItem) {
+                    filtered = true;
                     break;
                 }
             }
-            exec.setDone();
+            if (filtered || toStep == itemSteps.size()) {
+                exec.setDone();
+            } else {
+                exec.setReady();
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         } catch (Throwable t) {
             exec.setError(t);
+            exec.propagateFailureToAncestors(); // a failed fork holds the resume cursor back before its parent
         } finally {
             notifyWatcher();
         }
     }
 
     /**
+     * @param toStep exclusive end of the current phase: a forked item stops at the same step as its parent
      * @return true to continue with the next step, false when the item stops here (filtered out)
      */
-    private boolean runStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex) {
+    private boolean runStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep) {
         IAction action = step.getAction();
         WorkItem item = exec.getWorkItem();
         if (action instanceof IAnalyzeAction analyze) {
@@ -307,9 +503,10 @@ public class MainExecutor implements Runnable {
             exec.replaceWorkItem(produced.get(0));
             for (int i = 1; i < produced.size(); i++) {
                 WorkItemExecution forked = new WorkItemExecution(produced.get(i), itemSteps);
+                forked.setParent(exec);
                 state.getWorkItems().add(forked);
                 notifyWatcher();
-                submitItem(forked, stepIndex + 1);
+                submitItem(forked, stepIndex + 1, toStep);
             }
             return true;
         }
