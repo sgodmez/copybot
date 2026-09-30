@@ -1,0 +1,15 @@
+Ruling: C1 Task 5 FR bundle line must use é/à escapes + check grep -c $'\xc3' = 0 — GC24 — cost if wrong: garbled FR warning
+Ruling: C2 Tasks 6/7 tests: bounded waits (ControlFakes.awaitStatus with await(20,SECONDS) asserted) and @Timeout(60) on CopybotExitCodeTest — GC27 — cost if wrong: hung CI
+Ruling: C3 Task 7: preparation failure on default run path exits 2 (PipelineState.isPreparationFailed()), listing/item/cursor failures stay 1; add default-path test — spec §6 — cost if wrong: exit code semantics to revisit
+Ruling: C4 Task 3: emitItem throws a private marker exception on cancel; runListing ignores only that marker, any other exception → listing failure/ERROR — spec §2 — cost if wrong: silent partial listing
+Ruling: C5 Task 6: "busy"/"closed" IllegalStateException texts from bundles (engine.busy, engine.closed), EN+FR byte-safe — GC23 — cost if wrong: low
+Ruling: C6 Task 6: check resume.mode JSON type in the tree BEFORE fromJson; any non-string, non-null mode → resume.mode.unknown — spec §2 — cost if wrong: misleading message for rare typo
+Ruling: fold T3 minors 1-3 into Task 4 (same catch blocks it rewrites): onPhaseInterrupted nulls phaseThread; RejectedExecutionException while shut down in emitItem → ListingCancelled; RuntimeException catch checks cancelRequested → CANCELLED; commitPhase also honours a pending external interrupt → CANCELLED — spec §2/§3 — cost if wrong: slightly bigger T4 diff
+Task 5: Ruling: plan-mandated weak concurrency test — fold into Task 8: package-private PluginEngine.resetForTest() used by PluginEngineTest, assert !isAlive after join — test power without prod change — cost if wrong: tiny test-only hook
+Ruling: carry to T6/T7: Execution and CLI decide on STATUS only, never on getFailure()!=null — CANCELLED may carry a cause
+Ruling: carry to T7: runSinglePhase step-resolution failure counts as preparation failure (isPreparationFailed) → exit 2; remove dead ExecutionException branch/stale comment in Copybot.awaitEngine
+Ruling: carry to T8: onPhaseFailed under cancel keeps the cause (setFailure before CANCELLED) + fix commitPhase javadoc; rejected fork during cancel treated as interrupted (not item ERROR); commitPhase interrupt test on runSinglePhase
+Ruling: fold T6 minors into Task 8: single 5 s deadline for close(); close() preserves grace period when caller interrupted (clear then restore flag); start() safety net keeps CANCELLED when cancel pending; try/finally engine.close() in the 3 tests; engine.not-prepared bundle key; follow-up op after not-prepared refusal test; javadoc on preparedPlan tracking — cost if wrong: small
+Ruling: T8 item 6 edge — start() safety net with cancel pending and non-terminal status → CANCELLED; terminal statuses untouched; no cancel → ERROR — an execution must never stay non-terminal — cost if wrong: none significant
+Ruling: dry-run whose analyses left items in ERROR returns 0 ("préparé sans erreur" = pipeline-level) — cost if wrong: scripts miss per-item analysis errors in dry-run
+Ruling: items interrupted by a cancel go back to PENDING (not a new ItemStatus) — simplest for UI; cost if wrong: UI shows "à copier" for interrupted items

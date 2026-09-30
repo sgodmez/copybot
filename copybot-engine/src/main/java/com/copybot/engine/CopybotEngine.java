@@ -4,14 +4,15 @@ import com.copybot.config.CopybotConfig;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.engine.plugin.PluginEngine;
+import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeStateStore;
-import com.copybot.engine.plugin.PluginEngine;
-import com.copybot.engine.resources.ResourceRegistry;
-import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.exception.CopybotException;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.GsonUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
@@ -23,47 +24,329 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-public class CopybotEngine {
+/**
+ * One Copybot engine: a configuration, the plugins and at most one pipeline operation at a time
+ * ({@link #prepare}, {@link #execute} or {@link #run}); several pipelines in parallel need several
+ * instances. Closing it cancels what is still running and releases its threads.
+ *
+ * <pre>{@code
+ * try (CopybotEngine engine = CopybotEngine.create(Optional.of(configPath))) {
+ *     Plan plan = engine.prepare(pipelinePath, watcher);
+ *     Execution run = engine.execute(plan, null);
+ *     PipelineStatus status = run.await();
+ * }
+ * }</pre>
+ */
+public final class CopybotEngine implements AutoCloseable {
 
     /** Best-effort grace period given to a cancelled pipeline to release its resources. */
     private static final long SHUTDOWN_AWAIT_SECONDS = 5;
 
+    private static final Path DEFAULT_CONFIG_PATH = Path.of("./config.json");
+
     /** Used when the config declares no pluginPath; a missing directory simply loads no plugins. */
     private static final Path DEFAULT_PLUGIN_PATH = Path.of("./plugins");
 
-    private static ExecutorService executor;
-    private static Future<?> mainTask;
+    private final CopybotConfig config;
 
-    private static CopybotConfig config;
+    /**
+     * Runs the executions. Its virtual threads are <em>daemon</em> threads: {@link #close()} waits for
+     * them, otherwise the JVM could exit while a file write is still streaming and leave a truncated file.
+     */
+    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-    /** PluginEngine.load is not re-entrant: load the plugins once per JVM. */
-    private static boolean pluginsLoaded;
+    private final Object lock = new Object();
+    /** An operation (a blocking prepare or a running execution) holds the engine. Guarded by lock. */
+    private boolean busy;
+    /** The pipeline of the current operation, null while idle or while it is being built. Guarded by lock. */
+    private MainExecutor active;
+    /**
+     * The last plan prepared and not executed yet: close() lifts a pause left on it. Only the last one is
+     * tracked: a plan prepared earlier and never executed is forgotten by the next prepare, and a pause
+     * left on it is not lifted on close. Guarded by lock.
+     */
+    private MainExecutor preparedPlan;
+    /** Guarded by lock. */
+    private boolean closed;
 
-    public static void init(Optional<Path> configPathOpt) {
-        Path configPath = configPathOpt.orElse(Path.of("./config.json"));
+    // visible for tests: an engine on an in-memory configuration, the plugins left as they are
+    CopybotEngine(CopybotConfig config) {
+        this.config = config;
+    }
 
+    /**
+     * Reads the configuration (default {@code ./config.json}), makes sure the plugins are loaded (once
+     * per JVM) and creates the engine.
+     *
+     * @throws CopybotException config.not-found / config.not-json
+     */
+    public static CopybotEngine create(Optional<Path> configPath) {
+        CopybotConfig config = readConfig(configPath.orElse(DEFAULT_CONFIG_PATH));
+        loadPlugins(config);
+        return new CopybotEngine(config);
+    }
+
+    /**
+     * Lists and analyses the pipeline input and resolves the resume point, without writing anything.
+     * Blocking, runs in the calling thread (call it outside the UI thread) and counts as the active
+     * operation for its whole duration. A failure during the preparation is not thrown: the plan is ERROR
+     * with the cause in {@code getState().getFailure()} (decide on the status, not on the failure).
+     *
+     * @param watcher optional progress observer (see {@link #run}); here its terminal notification is
+     *                delivered on the caller's thread, before this method returns. It must not call
+     *                {@link #close()} nor any other blocking engine operation.
+     * @throws IllegalStateException when another operation is active or the engine is closed
+     * @throws CopybotException      when the pipeline file is missing or invalid, or its resume mode unknown
+     */
+    public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher) {
+        begin();
+        MainExecutor mainExecutor = endOnFailure(() -> {
+            PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            return new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
+        });
+        return prepareBegun(mainExecutor);
+    }
+
+    // visible for tests: prepares a pipeline built from pre-resolved steps
+    Plan prepare(MainExecutor mainExecutor) {
+        begin();
+        return prepareBegun(mainExecutor);
+    }
+
+    /**
+     * Executes a prepared plan on a background thread.
+     *
+     * @param override resume point chosen by the user, null for the proposed one
+     * @throws IllegalStateException when another operation is active, the engine is closed or the plan
+     *                               is not PREPARED (checked before anything is submitted)
+     */
+    public Execution execute(Plan plan, ResumePoint override) {
+        begin();
+        return endOnFailure(() -> {
+            if (plan.getState().getStatus() != PipelineStatus.PREPARED) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", plan.getState().getStatus()));
+            }
+            MainExecutor mainExecutor = plan.getExecutor();
+            synchronized (lock) {
+                if (preparedPlan == mainExecutor) {
+                    preparedPlan = null; // from now on the execution owns it (and close() cancels it)
+                }
+            }
+            return start(mainExecutor, () -> mainExecutor.execute(override));
+        });
+    }
+
+    /**
+     * Prepares then executes the pipeline on a background thread (a single phase when the pipeline has
+     * no resume block). Failures end in the final state, never as an exception of the background thread.
+     *
+     * @param watcher optional progress observer, invoked from a background thread, at most ~10 times
+     *                per second (notifications are coalesced, so the observer sees the latest state
+     *                rather than every transition) plus one terminal notification at the end of each
+     *                phase. Exceptions it throws are swallowed. It must not call {@link #close()} nor any
+     *                other blocking engine operation (the operation notifying it would wait for itself).
+     * @throws IllegalStateException when another operation is active or the engine is closed
+     * @throws CopybotException      when the pipeline file is missing or invalid, or its resume mode unknown
+     */
+    public Execution run(Path pipelinePath, Consumer<PipelineState> watcher) {
+        begin();
+        return endOnFailure(() -> {
+            PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE
+                    ? null
+                    : resumeContext(pipelinePath, pipelineConfig);
+            MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
+            return start(mainExecutor, mainExecutor::run);
+        });
+    }
+
+    // visible for tests: runs a pipeline built from pre-resolved steps
+    Execution submit(MainExecutor mainExecutor, Runnable task) {
+        begin();
+        return endOnFailure(() -> start(mainExecutor, task));
+    }
+
+    /**
+     * Cancels the active operation, lifts a pause left on the last prepared plan (only the last one, see
+     * {@code preparedPlan}), waits for the operation then stops the executor, within one grace period of
+     * {@value #SHUTDOWN_AWAIT_SECONDS} s for both. A caller already interrupted still waits (its interrupt
+     * flag is restored on return): the pipeline keeps its grace period to release its resources.
+     * Idempotent. Afterwards every operation is refused.
+     */
+    @Override
+    public void close() {
+        MainExecutor toCancel;
+        MainExecutor toResume;
+        synchronized (lock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            toCancel = active;
+            toResume = preparedPlan;
+            preparedPlan = null;
+        }
+        if (toCancel != null) {
+            toCancel.cancel(); // lifts its pause too
+        }
+        if (toResume != null) {
+            toResume.resume(); // a plan never executed: nothing stays paused
+        }
+        // an interrupt already pending would end both waits at once and cut the pipeline's grace period short
+        boolean interrupted = Thread.interrupted();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(SHUTDOWN_AWAIT_SECONDS);
+        try {
+            awaitIdle(deadline);
+        } catch (InterruptedException e) {
+            interrupted = true;
+        }
+        executor.shutdownNow();
+        try {
+            executor.awaitTermination(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            interrupted = true;
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    // ---- one operation at a time ----
+
+    private void begin() {
+        synchronized (lock) {
+            if (closed) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.closed"));
+            }
+            if (busy) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.busy"));
+            }
+            busy = true;
+        }
+    }
+
+    /** Runs the rest of an operation begun with begin(); a failure ends the operation, then is rethrown. */
+    private <T> T endOnFailure(Supplier<T> operation) {
+        try {
+            return operation.get();
+        } catch (RuntimeException | Error e) {
+            end();
+            throw e;
+        }
+    }
+
+    /** Publishes the pipeline of the current operation, so that close() can cancel it. */
+    private void track(MainExecutor mainExecutor) {
+        boolean closing;
+        synchronized (lock) {
+            active = mainExecutor;
+            closing = closed;
+        }
+        if (closing) {
+            mainExecutor.cancel(); // closed while the operation was being set up
+        }
+    }
+
+    private void end() {
+        synchronized (lock) {
+            busy = false;
+            active = null;
+            lock.notifyAll();
+        }
+    }
+
+    /** @param deadline a {@link System#nanoTime()} instant */
+    private void awaitIdle(long deadline) throws InterruptedException {
+        synchronized (lock) {
+            while (busy) {
+                long left = deadline - System.nanoTime();
+                if (left <= 0) {
+                    return;
+                }
+                TimeUnit.NANOSECONDS.timedWait(lock, left);
+            }
+        }
+    }
+
+    /** begin() was called; end() is called once the preparation is over. */
+    private Plan prepareBegun(MainExecutor mainExecutor) {
+        try {
+            track(mainExecutor);
+            mainExecutor.prepare();
+            boolean kept = false;
+            if (mainExecutor.getState().getStatus() == PipelineStatus.PREPARED) {
+                synchronized (lock) {
+                    if (!closed) { // otherwise close() already looked for a plan to resume
+                        preparedPlan = mainExecutor;
+                        kept = true;
+                    }
+                }
+            }
+            if (!kept) {
+                mainExecutor.resume(); // a failed, cancelled or orphan preparation leaves nothing paused
+            }
+            return new Plan(mainExecutor);
+        } finally {
+            end();
+        }
+    }
+
+    /** Runs the task on the engine executor; begin() was called, end() is called when the task is over. */
+    private Execution start(MainExecutor mainExecutor, Runnable task) {
+        Execution execution = new Execution(mainExecutor);
+        track(mainExecutor);
+        executor.submit(() -> {
+            try {
+                task.run();
+            } catch (RuntimeException | Error e) {
+                // MainExecutor reports pipeline failures in its state; this is only a safety net
+                PipelineState state = mainExecutor.getState();
+                state.recordFailureIfAbsent(e);
+                PipelineStatus status = state.getStatus();
+                boolean terminal = status == PipelineStatus.SUCCESS || status == PipelineStatus.ERROR
+                        || status == PipelineStatus.CANCELLED;
+                if (mainExecutor.isCancelRequested()) {
+                    // a failure while cancelling is a consequence of the cancel: never ERROR, but always terminal
+                    if (!terminal) {
+                        state.setStatus(PipelineStatus.CANCELLED);
+                    }
+                } else if (status != PipelineStatus.CANCELLED) {
+                    state.setStatus(PipelineStatus.ERROR);
+                }
+            } finally {
+                mainExecutor.resume(); // a terminated pipeline leaves nothing paused
+                end(); // before markDone(): once await() returns the engine accepts the next operation
+                execution.markDone();
+            }
+        });
+        return execution;
+    }
+
+    // ---- reading ----
+
+    private static CopybotConfig readConfig(Path configPath) {
         if (!configPath.toFile().canRead()) {
             throw CopybotException.ofResource("config.not-found", configPath.toAbsolutePath());
         }
-
+        CopybotConfig config;
         try {
-            String configString = Files.readString(configPath);
-            config = GsonUtil.getGson().fromJson(configString, CopybotConfig.class);
+            config = GsonUtil.getGson().fromJson(Files.readString(configPath), CopybotConfig.class);
         } catch (IOException | JsonSyntaxException e) {
             throw CopybotException.ofResource(e, "config.not-json", configPath);
         }
-
-        if (executor == null || executor.isShutdown()) {
-            executor = Executors.newVirtualThreadPerTaskExecutor();
+        if (config == null) { // empty file
+            throw CopybotException.ofResource("config.not-json", configPath);
         }
+        return config;
+    }
 
+    private static void loadPlugins(CopybotConfig config) {
         Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
         // a configured-but-missing dev directory must not break startup: dev paths reach
         // ModuleFinder directly, which throws on nonexistent paths (the main pluginPath is
@@ -71,129 +354,69 @@ public class CopybotEngine {
         List<Path> devPluginPaths = config.devPluginPaths() != null && Files.isDirectory(config.devPluginPaths())
                 ? List.of(config.devPluginPaths())
                 : List.of();
-        if (!pluginsLoaded) {
-            PluginEngine.load(pluginPath, devPluginPaths);
-            pluginsLoaded = true;
-        }
+        PluginEngine.load(pluginPath, devPluginPaths); // idempotent: only the first load of the JVM counts
     }
 
-    /**
-     * Cancels a running pipeline and waits briefly for it to unwind. The wait is not cosmetic:
-     * pipeline tasks run on <em>daemon</em> virtual threads, so returning immediately lets the JVM
-     * exit while a file write is still streaming and leave a truncated output file behind.
-     */
-    public static void destroy() {
-        if (executor != null) {
-            executor.shutdownNow();
-            try {
-                executor.awaitTermination(SHUTDOWN_AWAIT_SECONDS, TimeUnit.SECONDS);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
-    /**
-     * Starts the pipeline on a background thread and returns immediately;
-     * use {@link #waitForCompletion()} to join it.
-     *
-     * @param watcher optional progress observer, invoked from a background thread, at most ~10 times
-     *                per second (notifications are coalesced, so the observer sees the latest state
-     *                rather than every transition) plus one final notification once the run has
-     *                terminated. Exceptions it throws are swallowed.
-     */
-    public static void run(Path pipelinePath, Consumer<PipelineState> watcher) {
-        PipelineConfig pipelineConfig = readPipeline(pipelinePath);
-        ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE
-                ? null
-                : resumeContext(pipelinePath, pipelineConfig);
-
-        ResourceRegistry registry = new ResourceRegistry(ResourceSettings.from(config));
-        MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, registry, resume);
-
-        submit(mainExecutor::run);
-    }
-
-    /**
-     * Lists and analyses the pipeline input and resolves the resume point, without writing anything.
-     * Blocking, runs in the calling thread.
-     */
-    public static Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher) {
-        PipelineConfig pipelineConfig = readPipeline(pipelinePath);
-        ResourceRegistry registry = new ResourceRegistry(ResourceSettings.from(config));
-        MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, registry, resumeContext(pipelinePath, pipelineConfig));
-        mainExecutor.prepare();
-        return new Plan(mainExecutor);
-    }
-
-    /**
-     * Executes a prepared plan on a background thread; join it with {@link #waitForCompletion()}.
-     *
-     * @param override resume point chosen by the user, null for the proposed one
-     * @throws IllegalStateException when the plan is not PREPARED (checked before anything is submitted)
-     */
-    public static void execute(Plan plan, ResumePoint override) {
-        if (plan.getState().getStatus() != PipelineStatus.PREPARED) {
-            throw new IllegalStateException("Pipeline is not prepared: " + plan.getState().getStatus());
-        }
-        submit(() -> plan.getExecutor().execute(override));
-    }
-
-    private static void submit(Runnable task) {
-        synchronized (CopybotEngine.class) {
-            if (mainTask != null) {
-                throw new IllegalStateException("Engine already running");
-            }
-            mainTask = executor.submit(() -> {
-                try {
-                    task.run();
-                } finally {
-                    synchronized (CopybotEngine.class) {
-                        mainTask = null;
-                    }
-                }
-            });
-        }
+    private ResourceRegistry newRegistry() {
+        return new ResourceRegistry(ResourceSettings.from(config));
     }
 
     private static PipelineConfig readPipeline(Path pipelinePath) {
+        if (!Files.isReadable(pipelinePath)) {
+            throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
+        }
         JsonElement tree;
-        PipelineConfig pipelineConfig;
         try (var reader = Files.newBufferedReader(pipelinePath)) {
             tree = JsonParser.parseReader(reader);
-            pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
         } catch (IOException | JsonParseException e) {
+            throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
+        }
+        // before Gson: its enum adapter may fail on a non-string mode, which would read as "not a JSON"
+        checkResumeModeType(tree);
+        PipelineConfig pipelineConfig;
+        try {
+            pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
+        } catch (JsonParseException e) {
             throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
         }
         if (pipelineConfig == null) { // empty file
             throw CopybotException.ofResource("pipeline.not-json", pipelinePath);
         }
-        checkResumeMode(tree, pipelineConfig);
+        checkResumeModeName(tree, pipelineConfig);
         return pipelineConfig;
     }
 
+    /** A present, non-null resume mode that is not a string (number, boolean, object, array) is unknown. */
+    private static void checkResumeModeType(JsonElement tree) {
+        JsonElement mode = resumeMode(tree);
+        if (mode == null || mode.isJsonNull() || mode.isJsonPrimitive() && mode.getAsJsonPrimitive().isString()) {
+            return;
+        }
+        throw CopybotException.ofResource("resume.mode.unknown",
+                mode.isJsonPrimitive() ? mode.getAsString() : mode.toString());
+    }
+
     /** Gson maps an unknown enum name to null, which would silently mean the default mode. */
-    private static void checkResumeMode(JsonElement tree, PipelineConfig pipelineConfig) {
+    private static void checkResumeModeName(JsonElement tree, PipelineConfig pipelineConfig) {
         if (pipelineConfig.resume() == null || pipelineConfig.resume().mode() != null) {
             return;
         }
-        JsonElement resume = tree.getAsJsonObject().get("resume");
-        JsonElement mode = resume != null && resume.isJsonObject() ? resume.getAsJsonObject().get("mode") : null;
+        JsonElement mode = resumeMode(tree);
         if (mode != null && mode.isJsonPrimitive() && mode.getAsJsonPrimitive().isString()) {
             throw CopybotException.ofResource("resume.mode.unknown", mode.getAsString());
         }
     }
 
+    /** The raw {@code resume.mode} element of the pipeline tree, null when absent. */
+    private static JsonElement resumeMode(JsonElement tree) {
+        if (!tree.isJsonObject()) {
+            return null;
+        }
+        JsonElement resume = tree.getAsJsonObject().get("resume");
+        return resume != null && resume.isJsonObject() ? resume.getAsJsonObject().get("mode") : null;
+    }
+
     private static ResumeContext resumeContext(Path pipelinePath, PipelineConfig pipelineConfig) {
         return new ResumeContext(pipelineConfig.resumeMode(), ResumeStateStore.forPipeline(pipelinePath));
-    }
-    public static void waitForCompletion() throws InterruptedException, ExecutionException {
-        Future<?> task;
-        synchronized (CopybotEngine.class) {
-            task = mainTask;
-        }
-        if (task != null) {
-            task.get();
-        }
     }
 }

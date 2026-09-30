@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 
@@ -300,5 +301,124 @@ public class ResourceRegistryTest {
 
         holder.release();
         assertEquals(0, used(reg, "r"));
+    }
+
+    // ---- pause ----
+
+    @Test
+    @Timeout(30)
+    public void pauseHoldsEveryNewGrantUntilResume() throws Exception {
+        ResourceRegistry reg = registry(Map.of("r", 2));
+        reg.pause();
+        assertTrue(reg.isPaused());
+
+        Acquirer waiter = new Acquirer(reg, Set.of("r"));
+        awaitTrue(() -> waiting(reg, "r") == 1);
+        assertFalse(waiter.acquired.await(200, TimeUnit.MILLISECONDS),
+                "nothing is granted while paused, even with free capacity");
+
+        reg.resume();
+        assertFalse(reg.isPaused());
+        assertTrue(waiter.acquired.await(5, TimeUnit.SECONDS), "resume grants what became grantable");
+        waiter.release();
+    }
+
+    @Test
+    @Timeout(30)
+    public void holdersKeepTheirPermitsAndReleaseThemDuringThePause() throws Exception {
+        ResourceRegistry reg = registry(Map.of("r", 1));
+        Acquirer holder = new Acquirer(reg, Set.of("r"));
+        assertTrue(holder.acquired.await(5, TimeUnit.SECONDS));
+        reg.pause();
+        Acquirer next = new Acquirer(reg, Set.of("r"));
+        awaitTrue(() -> waiting(reg, "r") == 1);
+
+        holder.release(); // a step already running ends and releases normally
+        assertEquals(0, used(reg, "r"));
+        assertFalse(next.acquired.await(200, TimeUnit.MILLISECONDS),
+                "the released permit is not handed over while paused");
+
+        reg.resume();
+        assertTrue(next.acquired.await(5, TimeUnit.SECONDS));
+        next.release();
+    }
+
+    @Test
+    @Timeout(30)
+    public void interruptingAWaiterDuringThePauseLeavesNothingBehind() throws Exception {
+        ResourceRegistry reg = registry(Map.of("r", 1));
+        reg.pause();
+        Acquirer waiter = new Acquirer(reg, Set.of("r"));
+        awaitTrue(() -> waiting(reg, "r") == 1);
+
+        waiter.thread.interrupt();
+        waiter.thread.join(5000);
+
+        assertFalse(waiter.thread.isAlive());
+        assertEquals(1, waiter.acquired.getCount(), "an interrupted waiter is never granted");
+        assertEquals(0, waiting(reg, "r"));
+        reg.resume();
+        assertEquals(0, used(reg, "r"), "resume must not grant a permit to the interrupted waiter");
+    }
+
+    @Test
+    @Timeout(30)
+    public void anEmptyFootprintAlsoWaitsForTheResume() throws Exception {
+        ResourceRegistry reg = registry(Map.of());
+        reg.pause();
+        Acquirer nothing = new Acquirer(reg, Set.of());
+        assertFalse(nothing.acquired.await(200, TimeUnit.MILLISECONDS), "no step starts while paused");
+
+        reg.resume();
+        assertTrue(nothing.acquired.await(5, TimeUnit.SECONDS));
+        nothing.release();
+    }
+
+    @Test
+    @Timeout(30)
+    public void awaitNotPausedBlocksUntilResumeAndIsInterruptible() throws Exception {
+        ResourceRegistry reg = registry(Map.of());
+        reg.pause();
+        CountDownLatch passed = new CountDownLatch(1);
+        Thread blocked = Thread.ofVirtual().start(() -> {
+            try {
+                reg.awaitNotPaused();
+                passed.countDown();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        AtomicBoolean interrupted = new AtomicBoolean();
+        Thread cancelled = Thread.ofVirtual().start(() -> {
+            try {
+                reg.awaitNotPaused();
+            } catch (InterruptedException e) {
+                interrupted.set(true);
+            }
+        });
+        assertFalse(passed.await(200, TimeUnit.MILLISECONDS), "awaitNotPaused must block while paused");
+
+        cancelled.interrupt();
+        cancelled.join(5000);
+        assertTrue(interrupted.get(), "awaitNotPaused must be interruptible");
+
+        reg.resume();
+        assertTrue(passed.await(5, TimeUnit.SECONDS), "resume must wake awaitNotPaused");
+        blocked.join(5000);
+    }
+
+    @Test
+    @Timeout(30)
+    public void snapshotExposesThePause() throws Exception {
+        ResourceRegistry reg = registry(Map.of("r", 1));
+        reg.acquireAll(Set.of("r"));
+        reg.releaseAll(Set.of("r"));
+        assertTrue(reg.snapshot().stream().noneMatch(ResourceSnapshot::paused));
+
+        reg.pause();
+        assertTrue(reg.snapshot().stream().allMatch(ResourceSnapshot::paused));
+
+        reg.resume();
+        assertTrue(reg.snapshot().stream().noneMatch(ResourceSnapshot::paused));
     }
 }

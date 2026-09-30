@@ -172,7 +172,7 @@ public class MainExecutorTest {
     }
 
     @Test
-    public void interruptingTheRunReleasesEveryPermitAndReportsError() throws Exception {
+    public void interruptingTheRunReleasesEveryPermitAndReportsCancelled() throws Exception {
         CountDownLatch itemStarted = new CountDownLatch(1);
         CountDownLatch neverReleased = new CountDownLatch(1);
         FakeProcessAction process = new FakeProcessAction(Set.of("proc"), item -> {
@@ -200,7 +200,7 @@ public class MainExecutorTest {
         runner.join(20_000);
         assertFalse(runner.isAlive(), "run() must return after the pipeline thread is interrupted");
 
-        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus(), "a cancelled run is not a success");
+        assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus(), "an interrupted run is cancelled, not failed");
         assertTrue(reg.snapshot().stream().allMatch(s -> s.used() == 0),
                 "cancellation must release every permit, got " + reg.snapshot());
         assertTrue(reg.snapshot().stream().allMatch(s -> s.waiting() == 0),
@@ -379,5 +379,17 @@ public class MainExecutorTest {
         assertEquals(PipelineStatus.ERROR, exec.getState().getStatus(),
                 "a failing listing must not be silently reported as SUCCESS");
         assertEquals(1, processed.get(), "the item emitted before the listing failure must still be processed");
+    }
+
+    @Test
+    public void anUnresolvableStepEndsInErrorWithItsCauseInsteadOfThrowing() {
+        PipelineStepConfig unknown = new PipelineStepConfig("no.such.plugin", "file.read", null, null, null, null, null, null);
+        MainExecutor exec = new MainExecutor(new PipelineConfig(List.of(unknown), null, null, null, null, null),
+                null, registry(Map.of("disk:*", 1000)), null);
+
+        assertDoesNotThrow(exec::run);
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertNotNull(exec.getState().getFailure(), "the cause is kept in the state");
     }
 }

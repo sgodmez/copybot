@@ -1,6 +1,5 @@
 package com.copybot.ui;
 
-import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.resources.ResourcesEngine;
@@ -80,7 +79,7 @@ public class HelloController {
 
     @FXML
     protected void onExitClick() {
-        Platform.exit(); // triggers Application.stop(): executor shutdown + engine destroy
+        Platform.exit(); // triggers Application.stop(): executor shutdown + engine close
     }
 
     @FXML
@@ -124,7 +123,7 @@ public class HelloController {
     @FXML
     protected void onHelloButtonClick() {
         try {
-            CopybotEngine.run(TEST_PIPELINE, state -> {
+            CopybotMainUi.ENGINE.run(TEST_PIPELINE, state -> {
                 List<WorkItemExecution> list = List.copyOf(state.getWorkItems()); // snapshot outside the FX thread; the queue may evolve concurrently
                 String summary = state.getStatus() + " — " + list.size() + " items"
                         + (state.isListingInProgress() ? " (listing…)" : "");
@@ -138,7 +137,7 @@ public class HelloController {
                 });
             });
         } catch (Exception e) {
-            // e.g. "Engine already running" or unreadable pipeline file
+            // e.g. an operation already running on the engine, or an unreadable pipeline file
             PopinUtil.showError(e);
         }
     }

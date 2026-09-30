@@ -6,6 +6,7 @@ import com.copybot.engine.resume.ResumeProposal;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class PipelineState {
     private List<PipelineStepState> stepStates;
@@ -22,7 +23,8 @@ public class PipelineState {
 
     // written by the pipeline thread, read by watchers/UI on other threads
     private volatile ResumeProposal resumeProposal;
-    private volatile Throwable failure;
+    private final AtomicReference<Throwable> failure = new AtomicReference<>();
+    private volatile boolean preparationFailed;
 
     public PipelineState(List<PipelineStepState> stepStates) {
         this.stepStates = stepStates;
@@ -34,8 +36,17 @@ public class PipelineState {
         return status;
     }
 
-    public void setStatus(PipelineStatus status) {
+    public synchronized void setStatus(PipelineStatus status) {
         this.status = status;
+    }
+
+    /** Atomically replaces the status when it is still the expected one (pause / resume vs. the end of the run). */
+    public synchronized boolean compareAndSetStatus(PipelineStatus expected, PipelineStatus next) {
+        if (status != expected) {
+            return false;
+        }
+        status = next;
+        return true;
     }
 
     public List<PipelineStepState> getStepStates() {
@@ -71,10 +82,32 @@ public class PipelineState {
 
     /** A pipeline-level failure that is not tied to an item (e.g. the state file could not be written). */
     public Throwable getFailure() {
-        return failure;
+        return failure.get();
     }
 
     public void setFailure(Throwable failure) {
-        this.failure = failure;
+        this.failure.set(failure);
+    }
+
+    /**
+     * Records the failure only when none is recorded yet (atomically: concurrent listings may fail together).
+     *
+     * @return true when this failure was recorded
+     */
+    public boolean recordFailureIfAbsent(Throwable failure) {
+        return this.failure.compareAndSet(null, failure);
+    }
+
+    /**
+     * True when the pipeline ended ERROR because its preparation failed (unresolvable step, invalid state
+     * file, "destination" mode without target paths...): nothing was written. A listing failure,
+     * items in error or a cursor write failure are run failures: false.
+     */
+    public boolean isPreparationFailed() {
+        return preparationFailed;
+    }
+
+    public void setPreparationFailed(boolean preparationFailed) {
+        this.preparationFailed = preparationFailed;
     }
 }

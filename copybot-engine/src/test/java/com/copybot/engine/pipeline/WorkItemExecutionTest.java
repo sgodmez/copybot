@@ -1,5 +1,6 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.engine.resume.ItemKey;
 import com.copybot.plugin.api.action.WorkItem;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -7,7 +8,9 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -55,5 +58,26 @@ public class WorkItemExecutionTest {
         WorkItem replacement = new WorkItem(Files.createFile(tempDir.resolve("out.txt")));
         exec.replaceWorkItem(replacement);
         assertSame(replacement, exec.getWorkItem());
+    }
+
+    @Test
+    public void theResumeKeyIsFrozenByTheFirstCall() throws IOException {
+        WorkItemExecution exec = newExecution();
+        ItemKey first = new ItemKey(Instant.parse("2026-09-01T10:00:00Z"), "a.jpg");
+
+        exec.setResumeKey(first);
+        exec.setResumeKey(new ItemKey(Instant.parse("2026-09-02T10:00:00Z"), "b.jpg"));
+
+        assertEquals(Optional.of(first), exec.getResumeKey(), "a second call is ignored");
+    }
+
+    @Test
+    public void aResumeKeyFrozenToNoneStaysEmpty() throws IOException {
+        WorkItemExecution exec = newExecution();
+
+        exec.setResumeKey(null); // an item without date
+        exec.setResumeKey(new ItemKey(Instant.parse("2026-09-02T10:00:00Z"), "b.jpg"));
+
+        assertTrue(exec.getResumeKey().isEmpty());
     }
 }

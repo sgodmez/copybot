@@ -22,6 +22,7 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -30,6 +31,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
@@ -85,14 +87,27 @@ public class MainExecutor implements Runnable {
     private final Object watcherLock = new Object();
     private volatile Thread notifier;
 
+    /** Guards phaseThread, cancelInterruptSent and paused against the start and the end of a phase. */
+    private final Object phaseLock = new Object();
+    /** The thread running the current phase (single-phase run, prepare or execute), null between phases
+     * and once the phase passed its point of no return (see {@link #commitPhase()}). */
+    private Thread phaseThread;
+    /** True when cancel() interrupted the phase thread: that interrupt must not leak to the caller. */
+    private boolean cancelInterruptSent;
+    private boolean paused;
+    private volatile boolean cancelRequested;
+
     /**
-     * @param watcher optional progress observer. It is invoked from a <em>background thread</em>
-     *                (never from the caller's thread), at most once every
-     *                {@value #WATCHER_PERIOD_MILLIS} ms (notifications are coalesced: the observer
-     *                always sees the latest state, not every single transition), plus one final
-     *                guaranteed notification once the run has terminated. Exceptions it throws are
-     *                swallowed. The {@link PipelineState} handed over is the live, mutating state:
-     *                read it, do not retain it.
+     * @param watcher optional progress observer. Its periodic notifications are invoked from a
+     *                <em>background thread</em>, at most once every {@value #WATCHER_PERIOD_MILLIS} ms
+     *                (notifications are coalesced: the observer always sees the latest state, not every
+     *                single transition), plus one terminal, guaranteed notification per phase: once for a
+     *                run without resume, once after prepare() and once after execute() otherwise. That
+     *                terminal notification is delivered on the thread running the phase: for
+     *                {@link #prepare()}, the caller's thread. Exceptions it throws are swallowed. The
+     *                {@link PipelineState} handed over is the live, mutating state: read it, do not
+     *                retain it. The watcher must not call close() nor any other blocking engine operation
+     *                (the phase notifying it would wait for itself).
      */
     public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
                         ResumeContext resume) {
@@ -142,27 +157,162 @@ public class MainExecutor implements Runnable {
         }
     }
 
+    /**
+     * Stops the pipeline cleanly: lifts a pause (the steps it lets through do not start, the listings emit
+     * nothing more), then interrupts the current phase, whose listings and items are interrupted in turn,
+     * release their permits and go back to PENDING. The pipeline ends CANCELLED and the resume
+     * cursor is not written. A phase that has not started yet ends CANCELLED as soon as it starts; a phase
+     * already past its point of no return (all its work done, publishing its outcome) is not affected.
+     * Idempotent; no effect once the pipeline has terminated. Callable from any thread.
+     */
+    public void cancel() {
+        synchronized (phaseLock) {
+            if (cancelRequested || isTerminated()) {
+                return;
+            }
+            cancelRequested = true;
+            liftPause();
+            if (phaseThread != null) {
+                cancelInterruptSent = true;
+                phaseThread.interrupt();
+            }
+        }
+    }
+
+    /**
+     * Stops granting resources: no new step starts and the listings wait before emitting their next item;
+     * the steps already running finish normally. Status PAUSED until {@link #resume()}. No effect once
+     * the pipeline has terminated or is being cancelled. Callable from any thread.
+     */
+    public void pause() {
+        synchronized (phaseLock) {
+            if (paused || cancelRequested || isTerminated()) {
+                return;
+            }
+            paused = true;
+            registry.pause();
+            state.compareAndSetStatus(PipelineStatus.RUNNING, PipelineStatus.PAUSED);
+        }
+    }
+
+    /** Lifts a {@link #pause()}: back to RUNNING, the waiting steps and listings go on. */
+    public void resume() {
+        synchronized (phaseLock) {
+            liftPause();
+        }
+    }
+
+    /** Caller holds phaseLock. */
+    private void liftPause() {
+        if (!paused) {
+            return;
+        }
+        paused = false;
+        registry.resume();
+        state.compareAndSetStatus(PipelineStatus.PAUSED, PipelineStatus.RUNNING);
+    }
+
+    /** Status at the start of a phase: RUNNING, or PAUSED when a pause was requested beforehand. */
+    private void markRunning() {
+        synchronized (phaseLock) {
+            state.setStatus(paused ? PipelineStatus.PAUSED : PipelineStatus.RUNNING);
+        }
+    }
+
+    /** Turns a cancel() requested before the phase started into the phase's cancellation path. */
+    private void checkCancelled() throws InterruptedException {
+        if (cancelRequested) {
+            throw new InterruptedException("cancelled");
+        }
+    }
+
+    /**
+     * Point of no return of a phase, once all its work is done: a cancel() requested until now cancels
+     * the phase, and so does an external interrupt still pending. A later cancel() no longer interrupts it
+     * (it would hit the resume cursor write or the state file read): the phase publishes its outcome,
+     * except that a failure of the phase from then on ends CANCELLED rather than ERROR, with its cause kept
+     * (see {@link #onPhaseFailed}). A phase started afterwards is cancelled as soon as it starts.
+     */
+    private void commitPhase() throws InterruptedException {
+        synchronized (phaseLock) {
+            // an external interrupt still pending (e.g. nothing was left to wait for) cancels the phase too:
+            // it must never reach the resume cursor write or the state file read
+            if (Thread.interrupted()) {
+                throw new InterruptedException("interrupted");
+            }
+            checkCancelled();
+            phaseThread = null;
+        }
+    }
+
+    private boolean isTerminated() {
+        PipelineStatus status = state.getStatus();
+        return status == PipelineStatus.SUCCESS || status == PipelineStatus.ERROR || status == PipelineStatus.CANCELLED;
+    }
+
+    /**
+     * Cancellation (cancel() or an interrupt of the phase thread): unblock every task still parked in
+     * acquireAll/IO and let it release its permits, THEN restore an external interrupt (awaitTermination
+     * would return immediately with the flag set, leaving writers to be killed mid-stream by JVM exit).
+     * The interrupt sent by cancel() is not restored: it must not leak to the caller (e.g. a UI worker).
+     */
+    private void onPhaseInterrupted() {
+        boolean byCancel;
+        synchronized (phaseLock) { // cancel() interrupts under this lock: its interrupt is already delivered
+            byCancel = cancelRequested;
+            // a later cancel() must not interrupt again: it would cut the grace period of shutdownTasks()
+            // short, or wipe (in endPhase) the external interrupt restored below
+            phaseThread = null;
+        }
+        if (byCancel) {
+            Thread.interrupted();
+        }
+        state.setStatus(PipelineStatus.CANCELLED);
+        shutdownTasks();
+        if (!byCancel) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * A pipeline failure (e.g. a missing plugin/action, an invalid state file): reported in the state,
+     * never thrown out of the pipeline thread (spec engine-instance §2), the cause set before the status.
+     * A failure while a cancel() is pending is taken as a consequence of the cancellation: the phase ends
+     * CANCELLED, its cause still kept in the state.
+     *
+     * @param duringPreparation the failure happened while preparing (see {@link PipelineState#isPreparationFailed()})
+     */
+    private void onPhaseFailed(Throwable failure, boolean duringPreparation) {
+        if (cancelRequested) {
+            state.recordFailureIfAbsent(failure); // the first cause wins; before the status, like below
+            state.setStatus(PipelineStatus.CANCELLED);
+            return;
+        }
+        state.setFailure(failure);
+        state.setPreparationFailed(duringPreparation); // before the status, like the cause
+        state.setStatus(PipelineStatus.ERROR);
+    }
+
     private void runSinglePhase() {
-        state.setStatus(PipelineStatus.RUNNING);
+        markRunning();
         state.setListingInProgress(true);
         startPhase();
+        boolean preparing = true;
         try {
+            checkCancelled();
             // Step resolution is INSIDE the try: a missing plugin/action must be reported as a
             // failed run (status ERROR + watcher notified), not as an exception out of a state-less run.
+            // It is this run's preparation: its failure is a preparation failure.
             resolveStepsIfNeeded();
+            preparing = false;
             phaseEnd = itemSteps.size();
             runListings();
+            commitPhase();
             state.setStatus(resolveFinalStatus());
         } catch (InterruptedException e) {
-            // Cancellation: unblock every item still parked in acquireAll/IO and let it release its
-            // permits, THEN restore the interrupt flag (awaitTermination would return immediately
-            // with the flag set, leaving writers to be killed mid-stream by JVM exit).
-            state.setStatus(PipelineStatus.ERROR);
-            shutdownTasks();
-            Thread.currentThread().interrupt();
+            onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            state.setStatus(PipelineStatus.ERROR);
-            throw e;
+            onPhaseFailed(e, preparing);
         } finally {
             state.setListingInProgress(false);
             endPhase();
@@ -173,21 +323,24 @@ public class MainExecutor implements Runnable {
      * Lists and analyses every item, then resolves the resume point: items end PENDING (selected),
      * SKIPPED (with a reason) or ERROR, and the pipeline PREPARED. Nothing after the analyses runs.
      * A listing failure leaves the pipeline in ERROR: a partial listing would give a wrong resume point.
-     *
-     * @throws RuntimeException when the resume point cannot be resolved (e.g. invalid state file),
-     *                          after the status has been set to ERROR
+     * Never throws for a pipeline failure (unresolvable step, invalid state file, "destination" mode
+     * without target paths...): the pipeline ends ERROR with the cause in {@link PipelineState#getFailure()}
+     * and {@link PipelineState#isPreparationFailed()} set (not for a listing failure).
+     * Cancellable ({@link #cancel()}): it then ends CANCELLED.
      */
     public void prepare() {
         if (resume == null) {
             throw new IllegalStateException("prepare() requires a resume context");
         }
-        state.setStatus(PipelineStatus.RUNNING);
+        markRunning();
         state.setListingInProgress(true);
         startPhase();
         try {
+            checkCancelled();
             resolveStepsIfNeeded();
             phaseEnd = barrierIndex;
             runListings();
+            commitPhase();
             if (listingFailed.get()) {
                 state.setStatus(PipelineStatus.ERROR);
                 return;
@@ -199,13 +352,9 @@ public class MainExecutor implements Runnable {
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
             state.setStatus(PipelineStatus.PREPARED);
         } catch (InterruptedException e) {
-            state.setStatus(PipelineStatus.ERROR);
-            shutdownTasks();
-            Thread.currentThread().interrupt();
+            onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            state.setStatus(PipelineStatus.ERROR);
-            state.setFailure(e);
-            throw e;
+            onPhaseFailed(e, true);
         } finally {
             state.setListingInProgress(false);
             endPhase();
@@ -227,20 +376,22 @@ public class MainExecutor implements Runnable {
      */
     public void execute(ResumePoint override) {
         if (state.getStatus() != PipelineStatus.PREPARED) {
-            throw new IllegalStateException("Pipeline is not prepared: " + state.getStatus());
+            throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
         }
         ResumePoint point = override != null ? override : proposal.point();
         ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
         applyOverride(override);
-        state.setStatus(PipelineStatus.RUNNING);
+        markRunning();
         startPhase();
         try {
+            checkCancelled();
             for (WorkItemExecution exec : orderedItems) {
                 if (exec.getStatus() == ItemStatus.PENDING) {
                     submitItem(exec, barrierIndex, itemSteps.size());
                 }
             }
             awaitCompletion();
+            commitPhase(); // a cancelled run never writes the cursor, a later cancel never interrupts its write
             // The final status is published once, after the cursor save: a cursor write failure
             // must never be seen by watchers as SUCCESS followed by ERROR.
             PipelineStatus finalStatus = resolveFinalStatus();
@@ -249,13 +400,9 @@ public class MainExecutor implements Runnable {
             }
             state.setStatus(finalStatus);
         } catch (InterruptedException e) {
-            state.setStatus(PipelineStatus.ERROR);
-            shutdownTasks();
-            Thread.currentThread().interrupt();
+            onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            state.setStatus(PipelineStatus.ERROR);
-            state.setFailure(e);
-            throw e;
+            onPhaseFailed(e, false);
         } finally {
             endPhase();
         }
@@ -296,12 +443,28 @@ public class MainExecutor implements Runnable {
     }
 
     private void startPhase() {
+        synchronized (phaseLock) {
+            phaseThread = Thread.currentThread(); // what cancel() interrupts
+        }
         taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
         startNotifier();
         notifyWatcher();
     }
 
     private void endPhase() {
+        boolean clearCancelInterrupt;
+        synchronized (phaseLock) {
+            phaseThread = null;
+            clearCancelInterrupt = cancelInterruptSent;
+            cancelInterruptSent = false;
+            if (isTerminated()) {
+                liftPause(); // a pause never outlives the run
+            }
+        }
+        if (clearCancelInterrupt) {
+            // the interrupt came from cancel(): it must not leak to the caller of prepare() (e.g. a UI worker)
+            Thread.interrupted();
+        }
         shutdownTasks();
         stopNotifier(); // includes the final, guaranteed notification
     }
@@ -417,12 +580,13 @@ public class MainExecutor implements Runnable {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        } catch (PhaseStopped e) {
+            // the phase is being stopped (see emitItem): not a listing failure. Only this private marker is
+            // ignored: any other exception, a plugin's own CancellationException included, fails the run.
         } catch (Throwable t) {
             // A failing listing must not silently look like success: the whole run is marked ERROR.
+            state.recordFailureIfAbsent(t); // the first listing failure wins, atomically
             listingFailed.set(true);
-            if (state.getFailure() == null) {
-                state.setFailure(t);
-            }
         } finally {
             listingGate.countDown();
             if (listingGate.getCount() == 0) {
@@ -432,11 +596,44 @@ public class MainExecutor implements Runnable {
         }
     }
 
+    /**
+     * The phase is being stopped (cancel, interrupt): thrown by emitItem through the plugin's listFiles,
+     * and by runStep when the fork of an item is rejected by the executor the phase shut down.
+     */
+    private static final class PhaseStopped extends RuntimeException {
+        PhaseStopped() {
+            super("phase stopped", null, false, false);
+        }
+    }
+
     private void emitItem(WorkItem workItem) {
+        // The listing holds its disk for its whole duration, so the registry pause alone would not
+        // freeze it: wait here, before creating the item.
+        try {
+            registry.awaitNotPaused();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            if (cancelRequested || taskExecutor.isShutdown()) {
+                throw new PhaseStopped();
+            }
+            // not an interrupt of ours: the listing stops short, which must fail the run
+            throw new IllegalStateException("listing interrupted", e);
+        }
+        if (cancelRequested) {
+            throw new PhaseStopped(); // woken by the pause cancel() lifted: emit nothing more
+        }
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
         state.getWorkItems().add(exec);
         notifyWatcher();
-        submitItem(exec, 0, phaseEnd);
+        try {
+            submitItem(exec, 0, phaseEnd);
+        } catch (RejectedExecutionException e) {
+            if (taskExecutor.isShutdown()) {
+                // the phase shut its executor down (cancel, interrupt) while this listing was emitting
+                throw new PhaseStopped();
+            }
+            throw e;
+        }
     }
 
     private void submitItem(WorkItemExecution exec, int fromStep, int toStep) {
@@ -456,6 +653,12 @@ public class MainExecutor implements Runnable {
                 exec.setWaitingResources(i, footprint);
                 notifyWatcher();
                 registry.acquireAll(footprint);
+                if (cancelRequested) {
+                    // cancel() lifts a pause before the tasks are shut down: the waiters it grants must not
+                    // start their step
+                    registry.releaseAll(footprint);
+                    throw new InterruptedException("cancelled");
+                }
                 exec.setRunning(i);
                 notifyWatcher();
                 boolean continueItem;
@@ -475,6 +678,11 @@ public class MainExecutor implements Runnable {
                 exec.setReady();
             }
         } catch (InterruptedException e) {
+            exec.setReady(); // not left WAITING_RESOURCES / RUNNING: the item is simply not done
+            Thread.currentThread().interrupt();
+        } catch (PhaseStopped e) {
+            // a fork rejected because the phase is being stopped: an interrupt, not an item failure
+            exec.setReady();
             Thread.currentThread().interrupt();
         } catch (Throwable t) {
             exec.setError(t);
@@ -506,7 +714,14 @@ public class MainExecutor implements Runnable {
                 forked.setParent(exec);
                 state.getWorkItems().add(forked);
                 notifyWatcher();
-                submitItem(forked, stepIndex + 1, toStep);
+                try {
+                    submitItem(forked, stepIndex + 1, toStep);
+                } catch (RejectedExecutionException e) {
+                    if (taskExecutor.isShutdown()) {
+                        throw new PhaseStopped(); // the phase shut its executor down (cancel, interrupt)
+                    }
+                    throw e;
+                }
             }
             return true;
         }
@@ -600,5 +815,10 @@ public class MainExecutor implements Runnable {
 
     PipelineState getState() {
         return state;
+    }
+
+    /** True once {@link #cancel()} took effect (requested before the pipeline terminated). */
+    boolean isCancelRequested() {
+        return cancelRequested;
     }
 }

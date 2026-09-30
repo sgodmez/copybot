@@ -21,6 +21,9 @@ import java.util.concurrent.Executors;
 public class CopybotMainUi extends Application {
     public static Stage STAGE;
 
+    /** The engine of this window: created at startup, closed on exit (one pipeline at a time). */
+    public static CopybotEngine ENGINE;
+
     public static ExecutorService executor;
 
 
@@ -33,7 +36,7 @@ public class CopybotMainUi extends Application {
             ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
             ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
             UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
-            CopybotEngine.init(pathArg);
+            ENGINE = CopybotEngine.create(pathArg);
         } catch (Exception e) {
             PopinUtil.showError(e);
             System.exit(1);
@@ -71,7 +74,9 @@ public class CopybotMainUi extends Application {
         if (executor != null) {
             executor.shutdown();
         }
-        CopybotEngine.destroy();
+        if (ENGINE != null) {
+            ENGINE.close(); // cancels a running copy and waits for it to release its files
+        }
     }
 
     public static void main(String[] args) {

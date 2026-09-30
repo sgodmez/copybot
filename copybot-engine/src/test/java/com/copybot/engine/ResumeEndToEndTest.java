@@ -156,8 +156,8 @@ public class ResumeEndToEndTest {
         assertEquals(0, cli(pipeline));
         Files.delete(nas.resolve("IMG_01.JPG"));
 
-        // IMG_02.JPG still exists and overwrite=false: that item fails, which does not stop IMG_01
-        assertEquals(0, cli(pipeline, "--all"));
+        // IMG_02.JPG still exists and overwrite=false: that item fails (exit code 1), which does not stop IMG_01
+        assertEquals(1, cli(pipeline, "--all"));
 
         assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
     }

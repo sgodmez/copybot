@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.*;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.engine.resume.*;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.plugin.api.action.*;
 import com.copybot.plugin.api.definition.IPlugin;
 import org.junit.jupiter.api.Test;
@@ -185,8 +186,9 @@ public class MainExecutorResumeTest {
         Files.writeString(store().getPath(), "not json");
         MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.STATE);
 
-        assertThrows(RuntimeException.class, exec::prepare);
+        assertDoesNotThrow(exec::prepare);
         assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertNotNull(exec.getState().getFailure(), "the cause of the failure is in the state");
         assertThrows(IllegalStateException.class, () -> exec.execute(null));
     }
 
@@ -296,17 +298,27 @@ public class MainExecutorResumeTest {
         runner.join(TimeUnit.SECONDS.toMillis(20));
 
         assertFalse(runner.isAlive());
-        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
         assertArrayEquals(before, Files.readAllBytes(store().getPath()), "a cancelled run never moves the cursor");
     }
 
     @Test
-    public void engineRefusesToExecuteAPlanThatIsNotPrepared() throws IOException {
+    public void engineRefusesToExecuteAPlanThatIsNotPrepared() throws Exception {
         Files.writeString(store().getPath(), "not json");
         MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.STATE);
-        assertThrows(RuntimeException.class, exec::prepare);
+        exec.prepare();
 
-        assertThrows(IllegalStateException.class, () -> CopybotEngine.execute(new Plan(exec), null));
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null, Map.of(), null))) {
+            IllegalStateException refused = assertThrows(IllegalStateException.class, () -> engine.execute(new Plan(exec), null));
+            assertFalse(refused.getMessage().startsWith("%"), "a message read from the bundles: " + refused.getMessage());
+            assertEquals(ResourcesEngine.getString("engine.not-prepared", PipelineStatus.ERROR), refused.getMessage());
+            assertTrue(refused.getMessage().contains("ERROR"), "the status is cited: " + refused.getMessage());
+
+            RecordingOut out = new RecordingOut(null);
+            Plan next = engine.prepare(executor(0, new RecordingAnalyze(), out, ResumeMode.NONE));
+            assertEquals(PipelineStatus.PREPARED, next.getState().getStatus(), "a refused execute never keeps the engine busy");
+            assertEquals(PipelineStatus.SUCCESS, ControlFakes.awaitStatus(engine.execute(next, null)));
+        }
     }
 
     @Test
@@ -325,5 +337,124 @@ public class MainExecutorResumeTest {
         assertEquals(2, out.written.size(), "the files were copied");
         assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
         assertNotNull(exec.getState().getFailure());
+    }
+
+    @Test
+    public void destinationModeWithoutTargetPathsIsAPreparationFailureNotAnException() {
+        // RecordingOut does not implement resolveTarget
+        MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.DESTINATION);
+
+        assertDoesNotThrow(exec::prepare);
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertNotNull(exec.getState().getFailure());
+    }
+
+    @Test
+    public void anUnresolvableStepIsAPreparationFailureNotAnException() {
+        PipelineStepConfig unknown = new PipelineStepConfig("no.such.plugin", "file.read", null, null, null, null, null, null);
+        MainExecutor exec = new MainExecutor(new PipelineConfig(List.of(unknown), null, null, null, null, null),
+                null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        assertDoesNotThrow(exec::prepare);
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertNotNull(exec.getState().getFailure());
+    }
+
+    static final class FailingIn extends FakeAction implements IInAction {
+        @Override
+        public void listFiles(Consumer<WorkItem> consumer) {
+            throw new IllegalStateException("listing boom");
+        }
+    }
+
+    @Test
+    public void aListingFailureIsAPreparationFailureWithItsCause() {
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new FailingIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertEquals("listing boom", exec.getState().getFailure().getMessage());
+    }
+
+    // ---- isPreparationFailed: the CLI exits 2 on a preparation failure, 1 on a listing or run failure ----
+
+    @Test
+    public void anInvalidStateFileMarksThePreparationFailed() throws IOException {
+        Files.writeString(store().getPath(), "not json");
+        MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.STATE);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertTrue(exec.getState().isPreparationFailed());
+    }
+
+    @Test
+    public void destinationModeWithoutTargetPathsMarksThePreparationFailed() {
+        MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.DESTINATION);
+
+        exec.prepare();
+
+        assertTrue(exec.getState().isPreparationFailed());
+    }
+
+    @Test
+    public void anUnresolvableStepMarksThePreparationFailed() {
+        PipelineStepConfig unknown = new PipelineStepConfig("no.such.plugin", "file.read", null, null, null, null, null, null);
+        MainExecutor exec = new MainExecutor(new PipelineConfig(List.of(unknown), null, null, null, null, null),
+                null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertTrue(exec.getState().isPreparationFailed());
+    }
+
+    @Test
+    public void anUnresolvableStepMarksThePreparationFailedWithoutResumeBlock() {
+        PipelineStepConfig unknown = new PipelineStepConfig("no.such.plugin", "file.read", null, null, null, null, null, null);
+        MainExecutor exec = new MainExecutor(new PipelineConfig(List.of(unknown), null, null, null, null, null),
+                null, registry(), null);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertTrue(exec.getState().isPreparationFailed());
+    }
+
+    @Test
+    public void aListingFailureDoesNotMarkThePreparationFailed() {
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new FailingIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertFalse(exec.getState().isPreparationFailed(), "a listing failure is a run failure (exit code 1)");
+    }
+
+    @Test
+    public void aCursorWriteFailureDoesNotMarkThePreparationFailed() throws IOException {
+        Path file = Files.createFile(tempDir.resolve("afile"));
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(2), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, null, registry(),
+                new ResumeContext(ResumeMode.STATE, new ResumeStateStore(file.resolve("p.state.json"))));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertFalse(exec.getState().isPreparationFailed());
     }
 }

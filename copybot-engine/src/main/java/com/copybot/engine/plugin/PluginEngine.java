@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.PluginLoader;
 import com.copybot.exception.PluginNotFoundException;
+import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 import com.copybot.utils.FileUtil;
@@ -18,10 +19,31 @@ import java.util.List;
 
 public final class PluginEngine {
 
-    private static List<PluginDefinition> loadedPlugins = new ArrayList<>();
-    private static List<PluginDefinition> errorPlugins = new ArrayList<>();
+    private static final CopybotLogger LOG = CopybotLogger.getLogger(PluginEngine.class);
 
-    public static void load(Path pluginDir, List<Path> devPluginDirs) {
+    // replaced as a whole, once, by load(): readers never see a partially filled list
+    private static volatile List<PluginDefinition> loadedPlugins = List.of();
+    private static volatile List<PluginDefinition> errorPlugins = List.of();
+
+    /** Directories of the first (and only) load, null before it. Guarded by the class lock. */
+    private static List<Path> loadedFrom;
+
+    /**
+     * Loads the plugins of these directories. Thread-safe and idempotent: only the first successful call
+     * of the JVM loads (JPMS module layers cannot be unloaded); later calls are ignored, with a warning in
+     * the log when they ask for other directories. A first call that failed can be retried.
+     */
+    public static synchronized void load(Path pluginDir, List<Path> devPluginDirs) {
+        List<Path> requested = new ArrayList<>();
+        requested.add(pluginDir.toAbsolutePath().normalize());
+        devPluginDirs.forEach(dir -> requested.add(dir.toAbsolutePath().normalize()));
+        if (loadedFrom != null) {
+            if (!loadedFrom.equals(requested)) {
+                LOG.warn("plugin.load.ignored", requested, loadedFrom);
+            }
+            return;
+        }
+
         PluginLoader pl = new PluginLoader();
 
         pl.resolve(FileUtil.listDirectory(pluginDir), false);
@@ -32,15 +54,25 @@ public final class PluginEngine {
                 .comparing(PluginDefinition::getName)
                 .thenComparing(PluginDefinition::getVersion, Comparator.reverseOrder()));
 
+        List<PluginDefinition> loaded = new ArrayList<>();
+        List<PluginDefinition> errors = new ArrayList<>();
         for (PluginDefinition pluginDefinition : allPlugins) {
             if (pluginDefinition.getErrorMessage() == null) {
-                loadedPlugins.add(pluginDefinition);
+                loaded.add(pluginDefinition);
             } else {
-                errorPlugins.add(pluginDefinition);
+                errors.add(pluginDefinition);
             }
         }
-        loadedPlugins = Collections.unmodifiableList(loadedPlugins);
-        errorPlugins = Collections.unmodifiableList(errorPlugins);
+        loadedPlugins = Collections.unmodifiableList(loaded);
+        errorPlugins = Collections.unmodifiableList(errors);
+        loadedFrom = List.copyOf(requested);
+    }
+
+    // visible for tests: forgets the load of the JVM, so that the next load() really loads again
+    static synchronized void resetForTest() {
+        loadedPlugins = List.of();
+        errorPlugins = List.of();
+        loadedFrom = null;
     }
 
     public static List<PluginDefinition> getLoadedPlugins() {

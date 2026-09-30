@@ -28,8 +28,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * End-to-end run of the CLI on the fixture pipeline: file.read (in step) -> file.write (out step).
  * Paths are relative to the module directory, which is the working directory of the test JVM.
  *
- * <p>Ordering matters: {@code testMain} is what loads the plugins (through
- * {@code CopybotEngine.init}), and {@code PluginEngine.load} may only run once per JVM.
+ * <p>Ordering matters: {@code outStepResolvesThroughThePluginEngine} relies on the plugins loaded by
+ * {@code testMain} (through {@code CopybotEngine.create}). {@code PluginEngine.load} itself is
+ * idempotent: whichever test class loads the plugins first, later loads are ignored.
  */
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 public class MainTest {

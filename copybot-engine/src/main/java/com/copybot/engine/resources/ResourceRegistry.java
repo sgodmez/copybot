@@ -56,6 +56,9 @@ public final class ResourceRegistry {
     private final Map<String, Set<Waiter>> waitersByResource = new HashMap<>();
     private final Object lock = new Object();
 
+    /** While true nothing is granted (see {@link #pause()}). Guarded by lock. */
+    private boolean paused;
+
     public ResourceRegistry(ResourceSettings settings) {
         this.settings = settings;
     }
@@ -86,13 +89,59 @@ public final class ResourceRegistry {
     }
 
     /**
+     * Stops granting permits: every acquirer, new or already waiting, keeps waiting (interruptibly)
+     * until {@link #resume()}. Permits already held are unaffected and are released normally.
+     */
+    public void pause() {
+        synchronized (lock) {
+            paused = true;
+        }
+    }
+
+    /** Lifts a {@link #pause()}: grants whatever became grantable and wakes {@link #awaitNotPaused()} callers. */
+    public void resume() {
+        synchronized (lock) {
+            if (!paused) {
+                return;
+            }
+            paused = false;
+            grantEligibleWaiters();
+            lock.notifyAll();
+        }
+    }
+
+    public boolean isPaused() {
+        synchronized (lock) {
+            return paused;
+        }
+    }
+
+    /**
+     * Blocks while the registry is paused. Interruptible, and throws at once when the calling thread is
+     * already interrupted (a cancelled listing must stop emitting even when nothing is paused).
+     */
+    public void awaitNotPaused() throws InterruptedException {
+        synchronized (lock) {
+            if (Thread.interrupted()) {
+                throw new InterruptedException();
+            }
+            while (paused) {
+                lock.wait();
+            }
+        }
+    }
+
+    /**
      * Blocks until ALL requested resources are simultaneously available, then takes
      * one permit on each. Interruptible; on interruption nothing stays acquired.
      */
     public void acquireAll(Set<String> names) throws InterruptedException {
         Set<String> canonical = canonicalize(names);
         if (canonical.isEmpty()) {
-            return; // nothing to arbitrate; an empty waiter would never be indexed, hence never scanned
+            // nothing to arbitrate (an empty waiter would never be indexed, hence never scanned),
+            // but a pause must still hold the step
+            awaitNotPaused();
+            return;
         }
         Waiter me = new Waiter(canonical, System.currentTimeMillis());
         synchronized (lock) {
@@ -135,7 +184,8 @@ public final class ResourceRegistry {
                             e.getKey(),
                             e.getValue().capacity,
                             e.getValue().used,
-                            waitersByResource.getOrDefault(e.getKey(), Set.of()).size()))
+                            waitersByResource.getOrDefault(e.getKey(), Set.of()).size(),
+                            paused))
                     .sorted(Comparator.comparing(ResourceSnapshot::name))
                     .toList();
         }
@@ -156,6 +206,9 @@ public final class ResourceRegistry {
      * a queue saturated on one disk costs O(1) per event instead of a full walk.
      */
     private void grantEligibleWaiters() {
+        if (paused) {
+            return; // resume() rescans
+        }
         Set<String> grantable = new HashSet<>();
         for (Map.Entry<String, ResourceCount> entry : counts.entrySet()) {
             if (entry.getValue().used < entry.getValue().capacity && waitersByResource.containsKey(entry.getKey())) {

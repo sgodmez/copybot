@@ -27,6 +27,8 @@ public class WorkItemExecution {
      * null when the item has no date or when no resume preparation took place.
      */
     private volatile ItemKey resumeKey;
+    /** True once the resume key has been frozen, possibly to null (an item without date). */
+    private volatile boolean resumeKeyFrozen;
 
     /** The execution this one was forked from by a process step, null for a listed item. */
     private volatile WorkItemExecution parent;
@@ -70,8 +72,17 @@ public class WorkItemExecution {
         return Optional.ofNullable(resumeKey);
     }
 
-    public void setResumeKey(ItemKey resumeKey) {
+    /**
+     * Freezes the resume ordering key (called by {@link com.copybot.engine.resume.ResumeResolver#order}
+     * at the preparation barrier). Only the first call counts, later calls are ignored: the item keeps the
+     * place it had when the resume point was applied. null freezes "no key".
+     */
+    public synchronized void setResumeKey(ItemKey resumeKey) {
+        if (resumeKeyFrozen) {
+            return;
+        }
         this.resumeKey = resumeKey;
+        this.resumeKeyFrozen = true;
     }
 
     public List<PipelineStep<?>> getPipelineSteps() {
@@ -128,7 +139,10 @@ public class WorkItemExecution {
         return skipReason;
     }
 
-    /** Back to PENDING: stopped at the preparation barrier, or selected again by a manual resume point. */
+    /**
+     * Back to PENDING: stopped at the preparation barrier, selected again by a manual resume point, or
+     * interrupted by a cancel before it was done.
+     */
     public void setReady() {
         this.skipReason = null;
         this.waitingFor = Set.of();
