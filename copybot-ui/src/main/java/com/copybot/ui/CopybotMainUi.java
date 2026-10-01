@@ -4,14 +4,13 @@ import com.copybot.engine.CopybotEngine;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.UiPreferences;
+import com.copybot.ui.util.Views;
 import javafx.application.Application;
-import javafx.fxml.FXMLLoader;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.image.Image;
 import javafx.stage.Stage;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Optional;
@@ -24,11 +23,16 @@ public class CopybotMainUi extends Application {
     /** The engine of this window: created at startup, closed on exit (one pipeline at a time). */
     public static CopybotEngine ENGINE;
 
+    /**
+     * The background work of the views (engine operations, file checks), never on the JavaFX thread.
+     * Daemon threads: a file check stuck on a disconnected share must not keep the application alive;
+     * the engine operations are waited for by {@link CopybotEngine#close()} in {@link #stop()}.
+     */
     public static ExecutorService executor;
 
 
     @Override
-    public void start(Stage stage) throws IOException {
+    public void start(Stage stage) {
         var params = getParameters();
         Optional<Path> pathArg = Optional.ofNullable(params.getNamed().get("config-file")).map(Path::of);
 
@@ -43,30 +47,33 @@ public class CopybotMainUi extends Application {
         }
 
         STAGE = stage;
-        Scene scene = new Scene(loadMainView());
+        executor = Executors.newCachedThreadPool(task -> {
+            Thread thread = new Thread(task, "copybot-ui-background");
+            thread.setDaemon(true);
+            return thread;
+        });
+        Scene scene = new Scene(loadMainView()); // the home screen: nothing runs at startup (spec desktop-ui §1)
         stage.setMaximized(true);
         stage.setTitle("Copybot");
         stage.getIcons().add(new Image(CopybotMainUi.class.getResourceAsStream("Copybot.png")));
         stage.setScene(scene);
         stage.show();
-
-        executor = Executors.newCachedThreadPool();
-
     }
 
-    /** Rebuilds the main view with the current resource bundle (e.g. after a language change). */
+    /**
+     * Rebuilds the main view with the current resource bundle (e.g. after a language change): the home
+     * screen, or the plan view of the same pipeline, not prepared.
+     */
     public static void reloadMainView() {
         try {
             STAGE.getScene().setRoot(loadMainView());
-        } catch (IOException e) {
+        } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }
     }
 
-    private static Parent loadMainView() throws IOException {
-        FXMLLoader fxmlLoader = new FXMLLoader(CopybotMainUi.class.getResource("views/hello-view.fxml"));
-        fxmlLoader.setResources(ResourcesEngine.getResourceBundle());
-        return fxmlLoader.load();
+    private static Parent loadMainView() {
+        return Views.load("main-view.fxml").root();
     }
 
     @Override
@@ -75,7 +82,7 @@ public class CopybotMainUi extends Application {
             executor.shutdown();
         }
         if (ENGINE != null) {
-            ENGINE.close(); // cancels a running copy and waits for it to release its files
+            ENGINE.close(); // cancels a running preparation or copy and waits for it to release its files
         }
     }
 

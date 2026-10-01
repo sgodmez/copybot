@@ -17,6 +17,11 @@
             <artifactId>copybot-engine</artifactId>
             <version>${project.parent.version}</version>
         </dependency>
+        <!-- used directly (module-info "requires com.google.gson"): version managed by copybot-dependencies -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.openjfx</groupId>
@@ -38,6 +43,19 @@
             <groupId>org.kordamp.bootstrapfx</groupId>
             <artifactId>bootstrapfx-core</artifactId>
         </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <dependencyManagement>
@@ -54,6 +72,17 @@
 
     <build>
         <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- tests never reach the user's real preferences: every Preferences root is in-memory -->
+                    <argLine>--add-exports com.copybot.ui/com.copybot.ui.util=java.prefs</argLine>
+                    <systemPropertyVariables>
+                        <java.util.prefs.PreferencesFactory>com.copybot.ui.util.GuardedPreferencesFactory</java.util.prefs.PreferencesFactory>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-antrun-plugin</artifactId>

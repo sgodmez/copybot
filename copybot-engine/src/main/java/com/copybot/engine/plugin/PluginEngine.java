@@ -6,8 +6,13 @@ import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.loader.PluginLoader;
 import com.copybot.exception.PluginNotFoundException;
 import com.copybot.logger.CopybotLogger;
+import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.action.IAction;
+import com.copybot.plugin.api.config.ConfigField;
+import com.copybot.plugin.api.config.ConfigSchema;
+import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
+import com.copybot.resources.CombinedResourceBundle;
 import com.copybot.utils.FileUtil;
 import com.copybot.utils.VersionUtil;
 
@@ -15,7 +20,10 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 
 public final class PluginEngine {
 
@@ -83,6 +91,79 @@ public final class PluginEngine {
         return errorPlugins;
     }
 
+    /**
+     * Every action of the loaded plugins (desktop-ui spec, part 4), in plugin order (name, then most recent
+     * version first) then step type (IN, ANALYZE, PROCESS, OUT), texts in the current language. Empty
+     * before {@link #load}. A plugin whose actions cannot be listed (e.g. a missing class) is left out, with
+     * a warning in the log: it never hides the others.
+     */
+    public static List<CatalogAction> catalog() {
+        return catalogOf(loadedPlugins);
+    }
+
+    // visible for tests: the catalog of these plugins
+    static List<CatalogAction> catalogOf(List<PluginDefinition> plugins) {
+        List<CatalogAction> actions = new ArrayList<>();
+        for (PluginDefinition plugin : plugins) {
+            List<CatalogAction> pluginActions = new ArrayList<>();
+            try {
+                IPlugin instance = plugin.getPluginInstance();
+                addActions(pluginActions, plugin, StepType.IN, instance.getInActions());
+                addActions(pluginActions, plugin, StepType.ANALYZE, instance.getAnalyzeActions());
+                addActions(pluginActions, plugin, StepType.PROCESS, instance.getProcessActions());
+                addActions(pluginActions, plugin, StepType.OUT, instance.getOutActions());
+            } catch (LinkageError | RuntimeException e) {
+                LOG.warn(e, "plugin.catalog.failed", plugin.getName(), plugin.getVersion(), String.valueOf(e));
+                continue;
+            }
+            actions.addAll(pluginActions);
+        }
+        return List.copyOf(actions);
+    }
+
+    private static void addActions(List<CatalogAction> actions, PluginDefinition plugin, StepType type,
+                                   List<? extends ActionDefinition<?>> definitions) {
+        IPlugin instance = plugin.getPluginInstance();
+        CombinedResourceBundle bundle = instance.getResourceBundle();
+        for (ActionDefinition<?> definition : definitions) {
+            String keyPrefix = "plugin." + instance.getPluginCode() + "." + definition.actionCode();
+            ConfigSchema schema = schemaOf(plugin, definition).map(s -> s.withKeyPrefix(keyPrefix)).orElse(null);
+            Map<String, String> texts = new HashMap<>();
+            if (schema != null) {
+                for (ConfigField field : schema.allFields()) {
+                    text(bundle, field.labelKey()).ifPresent(t -> texts.put(field.labelKey(), t));
+                    text(bundle, field.descriptionKey()).ifPresent(t -> texts.put(field.descriptionKey(), t));
+                }
+            }
+            actions.add(new CatalogAction(plugin.getName(), instance.getPluginCode(), plugin.getVersion(),
+                    definition.actionCode(), type,
+                    text(bundle, keyPrefix + ".name").orElse(definition.actionCode()),
+                    text(bundle, keyPrefix + ".description").orElse(""),
+                    schema, texts));
+        }
+    }
+
+    /**
+     * The schema of a fresh instance; an action that cannot be instantiated or describe itself describes
+     * nothing (warned in the log; the step resolution reports the failure again, with its context).
+     */
+    private static Optional<ConfigSchema> schemaOf(PluginDefinition plugin, ActionDefinition<?> definition) {
+        try {
+            return definition.getInstance().configSchema();
+        } catch (LinkageError | RuntimeException e) {
+            LOG.warn(e, "plugin.catalog.no-schema", plugin.getName(), definition.actionCode(), String.valueOf(e));
+            return Optional.empty();
+        }
+    }
+
+    /** The text of the key in the plugin bundle (which falls back on the engine one), empty when absent. */
+    private static Optional<String> text(CombinedResourceBundle bundle, String key) {
+        if (bundle == null) {
+            return Optional.empty();
+        }
+        String value = bundle.getString(key);
+        return value.startsWith("%") ? Optional.empty() : Optional.of(value); // "%key": no such key
+    }
 
     public static <A extends IAction> PipelineStep<A> resolve(PipelineStepConfig stepConfig, Class<A> actionClass) {
         StepType type = StepType.getType(actionClass);

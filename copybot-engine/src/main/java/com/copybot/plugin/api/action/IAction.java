@@ -1,10 +1,12 @@
 package com.copybot.plugin.api.action;
 
+import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.definition.IPlugin;
 import com.google.gson.JsonElement;
 
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
 
@@ -54,6 +56,15 @@ public interface IAction {
      */
     default List<String> configWarnings() {
         return List.of();
+    }
+
+    /**
+     * The fields of this action's configuration, for the pipeline editor (desktop-ui spec, part 4). Empty by
+     * default: the editor then keeps the configuration JSON as is. {@link AbstractActionWithConfig}
+     * introspects its configuration record; override it when introspection is not enough.
+     */
+    default Optional<ConfigSchema> configSchema() {
+        return Optional.empty();
     }
 
     void setStatusWatcher(Consumer<WorkStatus> watcher);

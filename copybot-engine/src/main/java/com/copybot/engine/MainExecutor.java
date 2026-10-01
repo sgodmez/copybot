@@ -499,8 +499,9 @@ public class MainExecutor implements Runnable {
         stopNotifier(); // includes the final, guaranteed notification
     }
 
-    private IOutAction findOutAction() {
-        if (!itemSteps.isEmpty() && itemSteps.getLast().getAction() instanceof IOutAction out) {
+    /** The out step's action, null when the pipeline has none or its steps are not resolved (yet). */
+    IOutAction findOutAction() {
+        if (itemSteps != null && !itemSteps.isEmpty() && itemSteps.getLast().getAction() instanceof IOutAction out) {
             return out;
         }
         return null;

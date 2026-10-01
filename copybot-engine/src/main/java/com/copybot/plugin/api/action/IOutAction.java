@@ -22,6 +22,10 @@ public interface IOutAction extends IAction {
     /**
      * Where {@link #writeItem} would write this item, without writing anything. Used to detect what
      * was already imported. Empty when the action cannot tell (the default).
+     * <p>
+     * May be called from any thread, concurrently with {@link #write} / {@link #writeItem} of other items
+     * (e.g. the desktop UI shows the target of each listed item while a copy runs): it must be thread-safe
+     * and free of side effects (no file created, no counter or state changed).
      */
     default Optional<Path> resolveTarget(WorkItem workItem) {
         return Optional.empty();

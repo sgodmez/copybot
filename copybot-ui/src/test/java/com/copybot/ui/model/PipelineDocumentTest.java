@@ -1,0 +1,531 @@
+package com.copybot.ui.model;
+
+import com.copybot.engine.plugin.CatalogAction;
+import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.config.ConfigField;
+import com.copybot.ui.model.PipelineDocument.Problem;
+import com.copybot.ui.model.PipelineDocument.Section;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Optional;
+
+import static com.copybot.ui.model.TestCatalog.CATALOG;
+import static com.copybot.ui.model.TestCatalog.EXIF_2;
+import static com.copybot.ui.model.TestCatalog.READ;
+import static com.copybot.ui.model.TestCatalog.WRITE;
+import static org.junit.jupiter.api.Assertions.*;
+
+/** The pipeline being edited: a JSON tree of which only the known fields are rewritten (spec desktop-ui §3). */
+public class PipelineDocumentTest {
+
+    @TempDir
+    Path tempDir;
+
+    static final String PIPELINE = """
+            {
+              "comment": "kept as is",
+              "inSteps": [
+                { "action": "file.read", "filterCondition": "size > 0",
+                  "actionConfig": { "path": "D:/DCIM", "future": { "x": 1 } } }
+              ],
+              "analyseSteps": [
+                { "plugin": "com.missing", "action": "faces", "actionConfig": { "model": "big" } }
+              ],
+              "outStep": { "action": "file.write", "actionConfig": { "outPattern": "nas/{name}", "bufferSize": 8 } },
+              "resume": { "mode": "state" },
+              "ui": { "theme": "dark" }
+            }
+            """;
+
+    private static JsonObject tree(String json) {
+        return JsonParser.parseString(json).getAsJsonObject();
+    }
+
+    // ---- load / save ----
+
+    @Test
+    public void savingAnUntouchedDocumentKeepsEveryMember() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
+        PipelineDocument document = PipelineDocument.load(file);
+
+        document.save(file);
+
+        assertFalse(document.isModified());
+        assertEquals(tree(PIPELINE), tree(Files.readString(file)));
+    }
+
+    @Test
+    public void theSavedJsonIsPrettyAndKeepsSpecialCharacters() {
+        PipelineDocument document = PipelineDocument.parse(
+                "{\"outStep\":{\"action\":\"file.write\",\"actionConfig\":{\"outPattern\":\"<nas>/{name}='x'\"}}}");
+
+        String json = document.toJson();
+
+        assertTrue(json.contains("<nas>/{name}='x'"), json);
+        assertTrue(json.contains("\n  \"outStep\""), json);
+        assertTrue(json.endsWith("}\n"), json);
+    }
+
+    @Test
+    public void anUnreadablePipelineIsRefused() throws IOException {
+        assertThrows(CopybotException.class, () -> PipelineDocument.load(tempDir.resolve("missing.json")));
+        for (String json : List.of("not json {", "[1, 2]", "{\"inSteps\": [1]}", "{\"inSteps\": {}}", "{\"outStep\": []}")) {
+            Path file = Files.writeString(tempDir.resolve("bad.json"), json);
+            assertThrows(CopybotException.class, () -> PipelineDocument.load(file), json);
+        }
+    }
+
+    @Test
+    public void aNewDocumentHasNoStep() {
+        PipelineDocument document = PipelineDocument.empty();
+
+        for (Section section : Section.values()) {
+            assertEquals(List.of(), document.steps(section));
+        }
+        assertEquals("{}\n", document.toJson());
+        assertFalse(document.isModified());
+    }
+
+    @Test
+    public void theStepsAreTheObjectsOfTheirSection() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+
+        assertEquals("file.read", document.steps(Section.IN).getFirst().get("action").getAsString());
+        assertEquals("faces", document.steps(Section.ANALYZE).getFirst().get("action").getAsString());
+        assertEquals(List.of(), document.steps(Section.PROCESS));
+        assertEquals("file.write", document.steps(Section.OUT).getFirst().get("action").getAsString());
+    }
+
+    // ---- pipeline fields ----
+
+    @Test
+    public void autoExecuteLivesInTheUiBlock() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertFalse(document.autoExecute());
+
+        document.setAutoExecute(true);
+        assertTrue(document.autoExecute());
+        assertTrue(document.isModified());
+
+        document.setAutoExecute(false);
+        assertEquals(tree("{\"theme\":\"dark\"}"), tree(document.toJson()).getAsJsonObject("ui"), "the other ui members stay");
+
+        PipelineDocument bare = PipelineDocument.empty();
+        bare.setAutoExecute(true);
+        bare.setAutoExecute(false);
+        assertEquals("{}\n", bare.toJson(), "an emptied ui block is removed");
+    }
+
+    @Test
+    public void startProcessingWhileListingIsWrittenOnlyWhenTrue() {
+        PipelineDocument document = PipelineDocument.empty();
+
+        document.setStartProcessingWhileListing(false);
+        assertFalse(document.isModified(), "false is the default");
+
+        document.setStartProcessingWhileListing(true);
+        assertTrue(document.startProcessingWhileListing());
+        assertTrue(tree(document.toJson()).get("startProcessingWhileListing").getAsBoolean());
+    }
+
+    @Test
+    public void theResumeModeIsTheEffectiveOne() {
+        assertEquals(Optional.empty(), PipelineDocument.empty().resumeMode());
+        assertEquals(Optional.of("stateThenDestination"), PipelineDocument.parse("{\"resume\":{}}").resumeMode());
+        assertEquals(Optional.of("state"), PipelineDocument.parse(PIPELINE).resumeMode());
+    }
+
+    @Test
+    public void noResumeRemovesTheBlockUnlessItHoldsOtherMembers() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        document.setResumeMode("destination");
+        assertEquals("destination", tree(document.toJson()).getAsJsonObject("resume").get("mode").getAsString());
+
+        document.setResumeMode(null);
+        assertFalse(tree(document.toJson()).has("resume"));
+
+        PipelineDocument other = PipelineDocument.parse("{\"resume\":{\"mode\":\"state\",\"keep\":1}}");
+        other.setResumeMode(null);
+        assertEquals(tree("{\"mode\":\"none\",\"keep\":1}"), tree(other.toJson()).getAsJsonObject("resume"));
+        assertThrows(IllegalArgumentException.class, () -> other.setResumeMode("sometimes"));
+    }
+
+    // ---- atomic save ----
+
+    @Test
+    public void aFailingSaveLeavesTheOriginalFileIntactAndNoTempFile() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
+        PipelineDocument document = PipelineDocument.parse("{\"comment\":\"new\"}");
+        document.setAutoExecute(true);
+
+        assertThrows(IOException.class, () -> document.save(file, temp -> {
+            assertTrue(Files.exists(temp), "the temp file exists when the hook runs");
+            assertTrue(Files.size(temp) > 0, "the new content is in the temp file, not in the target");
+            assertEquals(PIPELINE, Files.readString(file));
+            throw new IOException("simulated failure before the move");
+        }));
+
+        assertEquals(PIPELINE, Files.readString(file));
+        assertTrue(document.isModified(), "a failed save does not clear the modified flag");
+        try (var entries = Files.list(tempDir)) {
+            assertEquals(List.of("p.json"), entries.map(p -> p.getFileName().toString()).toList());
+        }
+    }
+
+    @Test
+    public void aMoveThatFailsLeavesNoTempFile() throws IOException {
+        Path target = Files.createDirectory(tempDir.resolve("target"));
+        Files.writeString(target.resolve("keep.txt"), "x");
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+
+        assertThrows(IOException.class, () -> document.save(target));
+
+        try (var entries = Files.list(tempDir)) {
+            assertEquals(List.of("target"), entries.map(p -> p.getFileName().toString()).toList());
+        }
+    }
+
+    @Test
+    public void saveReplacesAnExistingFileAndClearsTheModifiedFlag() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), "old");
+        PipelineDocument document = PipelineDocument.empty();
+        document.setAutoExecute(true);
+
+        document.save(file);
+
+        assertFalse(document.isModified());
+        assertTrue(tree(Files.readString(file)).getAsJsonObject("ui").get("autoExecute").getAsBoolean());
+        try (var entries = Files.list(tempDir)) {
+            assertEquals(1, entries.count());
+        }
+    }
+
+    @Test
+    public void aRuntimeFailureDuringSaveLeavesTheOriginalAndNoTempFile() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+
+        assertThrows(IllegalStateException.class, () -> document.save(file, temp -> {
+            throw new IllegalStateException("boom");
+        }));
+
+        assertEquals(PIPELINE, Files.readString(file));
+        try (var entries = Files.list(tempDir)) {
+            assertEquals(List.of("p.json"), entries.map(p -> p.getFileName().toString()).toList());
+        }
+    }
+
+    @Test
+    public void nullMembersSurviveALoadAndSave() throws IOException {
+        String json = "{\"a\":null,\"inSteps\":[{\"action\":\"file.read\",\"actionConfig\":{\"b\":{\"c\":null}}}]}";
+        Path file = Files.writeString(tempDir.resolve("p.json"), json);
+
+        PipelineDocument.load(file).save(file);
+
+        JsonObject saved = tree(Files.readString(file));
+        assertEquals(tree(json), saved);
+        assertTrue(saved.has("a"));
+        assertTrue(saved.getAsJsonArray("inSteps").get(0).getAsJsonObject()
+                .getAsJsonObject("actionConfig").getAsJsonObject("b").has("c"));
+    }
+
+    @Test
+    public void noResumeOnAnAlreadyNoneBlockWithOtherMembersChangesNothing() {
+        PipelineDocument document = PipelineDocument.parse("{\"resume\":{\"keep\":1,\"mode\":\"none\"}}");
+        String before = document.toJson();
+
+        document.setResumeMode(null);
+
+        assertFalse(document.isModified());
+        assertEquals(before, document.toJson());
+    }
+
+    // ---- steps ----
+
+    @Test
+    public void anAddedStepNamesItsPluginUnlessEmbedded() {
+        PipelineDocument document = PipelineDocument.empty();
+
+        document.addStep(Section.IN, READ);
+        document.addStep(Section.ANALYZE, EXIF_2);
+
+        assertEquals(tree("{\"action\":\"file.read\",\"actionConfig\":{}}"), document.steps(Section.IN).getFirst());
+        assertEquals(tree("{\"plugin\":\"com.acme.exif\",\"action\":\"exif.read\",\"actionConfig\":{}}"),
+                document.steps(Section.ANALYZE).getFirst());
+        assertTrue(document.isModified());
+    }
+
+    @Test
+    public void theOutputHoldsOneStep() {
+        PipelineDocument document = PipelineDocument.empty();
+        assertTrue(document.canAdd(Section.OUT));
+
+        document.addStep(Section.OUT, WRITE);
+
+        assertFalse(document.canAdd(Section.OUT));
+        assertThrows(IllegalStateException.class, () -> document.addStep(Section.OUT, WRITE));
+        assertTrue(tree(document.toJson()).get("outStep").isJsonObject());
+        document.removeStep(Section.OUT, 0);
+        assertTrue(document.canAdd(Section.OUT));
+        assertFalse(tree(document.toJson()).has("outStep"));
+    }
+
+    @Test
+    public void stepsMoveWithinTheirSection() {
+        PipelineDocument document = PipelineDocument.parse(
+                "{\"inSteps\":[{\"action\":\"a\"},{\"action\":\"b\"},{\"action\":\"c\"}],\"after\":true}");
+
+        document.moveStep(Section.IN, 2, -1);
+        assertEquals(List.of("a", "c", "b"), actions(document));
+        document.moveStep(Section.IN, 0, 1);
+        assertEquals(List.of("c", "a", "b"), actions(document));
+
+        assertFalse(document.canMove(Section.IN, 0, -1));
+        assertFalse(document.canMove(Section.IN, 2, 1));
+        document.moveStep(Section.IN, 0, -1);
+        assertEquals(List.of("c", "a", "b"), actions(document), "no effect at the top");
+        assertEquals(List.of("inSteps", "after"), List.copyOf(tree(document.toJson()).keySet()), "the list keeps its place");
+    }
+
+    @Test
+    public void aRemovedStepLeavesItsListInTheFile() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+
+        document.removeStep(Section.ANALYZE, 0);
+
+        assertEquals(List.of(), document.steps(Section.ANALYZE));
+        assertTrue(tree(document.toJson()).getAsJsonArray("analyseSteps").isEmpty());
+        assertThrows(IndexOutOfBoundsException.class, () -> document.removeStep(Section.ANALYZE, 0));
+    }
+
+    private static List<String> actions(PipelineDocument document) {
+        return document.steps(Section.IN).stream().map(s -> s.get("action").getAsString()).toList();
+    }
+
+    // ---- fields ----
+
+    private static ConfigField field(CatalogAction action, String path) {
+        return action.configSchema().orElseThrow().field(path).orElseThrow();
+    }
+
+    @Test
+    public void editingAKnownFieldKeepsTheUnknownOnes() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
+        PipelineDocument document = PipelineDocument.load(file);
+
+        document.setConfigText(document.steps(Section.IN).getFirst(), field(READ, "path"), "E:/DCIM");
+        document.save(file);
+
+        JsonObject expected = tree(PIPELINE);
+        expected.getAsJsonArray("inSteps").get(0).getAsJsonObject().getAsJsonObject("actionConfig")
+                .addProperty("path", "E:/DCIM");
+        assertEquals(expected, tree(Files.readString(file)));
+    }
+
+    @Test
+    public void aFieldReadsAndWritesItsText() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject out = document.steps(Section.OUT).getFirst();
+
+        assertEquals("nas/{name}", document.configText(out, field(WRITE, "outPattern")));
+        assertEquals("8", document.configText(out, field(WRITE, "bufferSize")));
+        assertEquals("", document.configText(out, field(WRITE, "onConflict.compare")));
+
+        document.setConfigText(out, field(WRITE, "bufferSize"), " 16 ");
+
+        assertEquals(16, out.getAsJsonObject("actionConfig").get("bufferSize").getAsInt());
+    }
+
+    @Test
+    public void theSameValueRewritesNothing() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject out = document.steps(Section.OUT).getFirst();
+
+        document.setConfigText(out, field(WRITE, "bufferSize"), "8");
+        document.setConfigText(out, field(WRITE, "onConflict.compare"), "  ");
+
+        assertFalse(document.isModified());
+        assertEquals(tree(PIPELINE), tree(document.toJson()));
+    }
+
+    @Test
+    public void aNestedFieldCreatesItsRecordAndAnEmptyOneIsRemoved() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject out = document.steps(Section.OUT).getFirst();
+
+        document.setConfigText(out, field(WRITE, "onConflict.compare"), "fullHash");
+        assertEquals(tree("{\"compare\":\"fullHash\"}"), out.getAsJsonObject("actionConfig").getAsJsonObject("onConflict"));
+
+        document.setConfigText(out, field(WRITE, "onConflict.compare"), "");
+        assertFalse(out.getAsJsonObject("actionConfig").has("onConflict"));
+        assertTrue(out.has("actionConfig"), "actionConfig itself stays");
+    }
+
+    @Test
+    public void aStepWithoutActionConfigGetsOneOnItsFirstValue() {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}]}");
+        JsonObject in = document.steps(Section.IN).getFirst();
+
+        assertEquals("", document.configText(in, field(READ, "path")));
+        assertFalse(in.has("actionConfig"), "reading creates nothing");
+        document.setConfigText(in, field(READ, "path"), "D:/");
+        assertEquals("D:/", in.getAsJsonObject("actionConfig").get("path").getAsString());
+    }
+
+    @Test
+    public void booleansAndListsHaveTheirOwnText() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject in = document.steps(Section.IN).getFirst();
+
+        document.setConfigText(in, field(READ, "recursive"), "FALSE");
+        document.setConfigText(in, field(READ, "include"), "**/*.NEF\n\n  **/*.jpg  \n");
+
+        JsonObject config = in.getAsJsonObject("actionConfig");
+        assertFalse(config.get("recursive").getAsBoolean());
+        assertEquals(JsonParser.parseString("[\"**/*.NEF\",\"**/*.jpg\"]"), config.get("include"));
+        assertEquals("**/*.NEF\n**/*.jpg", document.configText(in, field(READ, "include")));
+    }
+
+    @Test
+    public void anInvalidValueIsRefusedAndChangesNothing() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject in = document.steps(Section.IN).getFirst();
+        JsonObject out = document.steps(Section.OUT).getFirst();
+
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(out, field(WRITE, "bufferSize"), "8 MB"));
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(in, field(READ, "recursive"), "yes"));
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(out, field(WRITE, "onConflict"), "x"));
+
+        assertFalse(document.isModified());
+    }
+
+    @Test
+    public void theAdvancedFieldsAreMembersOfTheStep() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject in = document.steps(Section.IN).getFirst();
+        ConfigField maxConcurrency = PipelineDocument.ADVANCED_FIELDS.getFirst();
+        ConfigField resources = PipelineDocument.ADVANCED_FIELDS.get(1);
+
+        document.setAdvancedText(in, maxConcurrency, "4");
+        document.setAdvancedText(in, resources, "gpu\nnet:flickr");
+
+        assertEquals(4, in.get("maxConcurrency").getAsInt());
+        assertEquals(JsonParser.parseString("[\"gpu\",\"net:flickr\"]"), in.get("resources"));
+        assertEquals("size > 0", in.get("filterCondition").getAsString(), "a member outside the editor stays");
+        assertEquals("4", document.advancedText(in, maxConcurrency));
+        assertEquals(List.of("maxConcurrency", "resources", "priority", "version"),
+                PipelineDocument.ADVANCED_FIELDS.stream().map(ConfigField::name).toList());
+    }
+
+    @Test
+    public void aValueNotEditedAsTextIsShownAsJson() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject in = document.steps(Section.IN).getFirst();
+
+        String json = PipelineDocument.json(in.getAsJsonObject("actionConfig").get("future"));
+
+        assertEquals(tree("{\"x\":1}"), tree(json));
+        assertEquals("", PipelineDocument.json(null));
+        assertEquals(JsonParser.parseString("\"D:/DCIM\""), document.configValue(in, field(READ, "path")));
+    }
+
+    // ---- validation ----
+
+    @Test
+    public void emptyRequiredFieldsAreReported() {
+        PipelineDocument document = PipelineDocument.empty();
+        document.addStep(Section.IN, READ);
+        document.addStep(Section.OUT, WRITE);
+
+        assertEquals(List.of(new Problem(Section.IN, 0, "path"), new Problem(Section.OUT, 0, "outPattern")),
+                document.validate(CATALOG));
+
+        document.setConfigText(document.steps(Section.IN).getFirst(), field(READ, "path"), "D:/");
+        document.setConfigText(document.steps(Section.OUT).getFirst(), field(WRITE, "outPattern"), "nas/{name}");
+        assertEquals(List.of(), document.validate(CATALOG));
+    }
+
+    @Test
+    public void aRequiredFieldOfARecordCountsOnlyWhenTheRecordIsThere() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject out = document.steps(Section.OUT).getFirst();
+        assertEquals(List.of(), document.validate(CATALOG), "no onConflict: nothing required");
+
+        document.setConfigText(out, field(WRITE, "onConflict.ifIdentical"), "skip");
+
+        assertEquals(List.of(new Problem(Section.OUT, 0, "onConflict.compare")), document.validate(CATALOG));
+    }
+
+    @Test
+    public void stepsOfAMissingPluginAreNotValidatedButAStepNeedsAnAction() {
+        PipelineDocument document = PipelineDocument.parse(
+                "{\"analyseSteps\":[{\"plugin\":\"com.missing\",\"action\":\"faces\"},{\"plugin\":\"com.acme.exif\"}]}");
+
+        assertEquals(List.of(new Problem(Section.ANALYZE, 1, "action")), document.validate(CATALOG));
+    }
+
+    // ---- final fixes ----
+
+    @Test
+    public void anUnchangedTextIsNotParsedAgain() {
+        PipelineDocument document = PipelineDocument.parse(
+                "{\"outStep\":{\"action\":\"file.write\",\"actionConfig\":{\"outPattern\":\"x\",\"bufferSize\":\"big\"}}}");
+        JsonObject out = document.steps(Section.OUT).getFirst();
+
+        assertDoesNotThrow(() -> document.setConfigText(out, field(WRITE, "bufferSize"), "big"),
+                "the value shown, invalid in the file, is not refused while untouched");
+        assertDoesNotThrow(() -> document.setConfigText(out, field(WRITE, "bufferSize"), " big "));
+        assertFalse(document.isModified());
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(out, field(WRITE, "bufferSize"), "bigger"));
+    }
+
+    @Test
+    public void anIntegerAcceptsAZeroFractionWithinTheIntRange() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject out = document.steps(Section.OUT).getFirst();
+        ConfigField bufferSize = field(WRITE, "bufferSize");
+
+        document.setConfigText(out, bufferSize, "8.0");
+        assertFalse(document.isModified(), "8.0 is the 8 already there");
+
+        document.setConfigText(out, bufferSize, "16.00");
+        assertEquals(JsonParser.parseString("16"), out.getAsJsonObject("actionConfig").get("bufferSize"));
+        assertEquals("16", document.configText(out, bufferSize));
+        document.setConfigText(out, bufferSize, String.valueOf(Integer.MAX_VALUE));
+        assertEquals(Integer.MAX_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsInt());
+
+        for (String invalid : List.of("8.5", "2147483648", "-2147483649", "1e10")) {
+            assertThrows(IllegalArgumentException.class, () -> document.setConfigText(out, bufferSize, invalid), invalid);
+        }
+        assertEquals(Integer.MAX_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsInt());
+    }
+
+    @Test
+    public void aNonStrictJsonFileIsDetected() throws IOException {
+        assertFalse(PipelineDocument.parse(PIPELINE).isLenient());
+        assertFalse(PipelineDocument.empty().isLenient());
+        for (String json : List.of("{\n  // a comment\n  \"inSteps\": []\n}", "{ /* c */ }", "{'inSteps': []}",
+                "{inSteps: []}", "{\"a\": \"x\";\"b\": 1}")) {
+            PipelineDocument document = assertDoesNotThrow(() -> PipelineDocument.parse(json), json);
+            assertTrue(document.isLenient(), json);
+        }
+        Path file = Files.writeString(tempDir.resolve("commented.json"), "{\n  # hash comment\n  \"inSteps\": []\n}");
+        assertTrue(PipelineDocument.load(file).isLenient());
+    }
+
+    @Test
+    public void aResumeCursorIsNotAPipeline() {
+        assertTrue(PipelineDocument.isResumeCursor(Path.of("dir", "sd-to-nas.state.json")));
+        assertTrue(PipelineDocument.isResumeCursor(Path.of("SD.STATE.JSON")));
+        assertFalse(PipelineDocument.isResumeCursor(Path.of("dir", "sd-to-nas.json")));
+        assertFalse(PipelineDocument.isResumeCursor(Path.of("state.json")));
+        assertFalse(PipelineDocument.isResumeCursor(Path.of("my.state.json.bak")));
+    }
+}

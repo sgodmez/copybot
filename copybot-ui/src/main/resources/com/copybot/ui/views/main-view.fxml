@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.Menu?>
+<?import javafx.scene.control.MenuBar?>
+<?import javafx.scene.control.MenuItem?>
+<?import javafx.scene.layout.BorderPane?>
+
+<BorderPane fx:id="root" prefHeight="768.0" prefWidth="1024.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.MainController">
+   <top>
+      <MenuBar>
+         <menus>
+            <Menu mnemonicParsing="false" text="%menu.file">
+               <items>
+                  <MenuItem mnemonicParsing="false" onAction="#onExitClick" text="%menu.file.exit" />
+               </items>
+            </Menu>
+            <Menu mnemonicParsing="false" text="%menu.edit">
+               <items>
+                  <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
+               </items>
+            </Menu>
+            <Menu mnemonicParsing="false" text="%menu.help">
+               <items>
+                  <MenuItem mnemonicParsing="false" text="%menu.help.about" />
+               </items>
+            </Menu>
+         </menus>
+      </MenuBar>
+   </top>
+</BorderPane>

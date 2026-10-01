@@ -483,4 +483,33 @@ public class FileWriteActionTest {
         assertEquals(dir.resolve("out").resolve("2026").resolve("DSC_1.NEF"), target.toAbsolutePath().normalize());
         assertFalse(Files.exists(dir.resolve("out")), "resolving a target must not create anything");
     }
+
+    /** The target of a {sizeHr} pattern for a 300000-byte file, with this language loaded (restored afterwards). */
+    private static Path sizeHrTarget(Path dir, java.util.Locale language) throws IOException {
+        java.util.Locale previous = java.util.Locale.getDefault();
+        try {
+            com.copybot.resources.ResourcesEngine.loadLanguage(language);
+            Path source = dir.resolve("big.bin");
+            if (!Files.exists(source)) {
+                Files.writeString(source, "x");
+            }
+            WorkItem item = new WorkItem(source);
+            item.getMetadatas().setSize(300_000L); // sizeHr is computed here, in the loaded language
+            FileWriteAction action = new FileWriteAction();
+            String outPattern = dir.resolve("out").toString().replace('\\', '/') + "/{sizeHr}/x.bin";
+            action.loadConfig(JsonParser.parseString("{\"outPattern\":\"" + outPattern + "\",\"overwrite\":false}"));
+            return action.resolveTarget(item).orElseThrow();
+        } finally {
+            com.copybot.resources.ResourcesEngine.loadLanguage(previous);
+        }
+    }
+
+    @Test
+    public void aSizeHrPatternResolvesTheSameInEveryLanguage(@TempDir Path dir) throws Exception {
+        Path french = sizeHrTarget(dir, java.util.Locale.FRENCH);
+        Path english = sizeHrTarget(dir, java.util.Locale.ENGLISH);
+
+        assertEquals(english, french, "a file name never depends on the UI language or the machine locale");
+        assertTrue(french.getParent().getFileName().toString().startsWith("292.97 "), french.toString());
+    }
 }

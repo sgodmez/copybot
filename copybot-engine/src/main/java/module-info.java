@@ -18,9 +18,11 @@ module com.copybot.engine {
     exports com.copybot.engine.pipeline to com.google.gson, com.copybot.ui;
     exports com.copybot.engine.resume to com.google.gson, com.copybot.ui;
     exports com.copybot.engine.resources to com.copybot.ui;
+    exports com.copybot.engine.plugin to com.copybot.ui;
 
     exports com.copybot.plugin.api.action;
     exports com.copybot.plugin.api.definition;
+    exports com.copybot.plugin.api.config;
 
     exports com.copybot.plugin.embedded.actions;
     exports com.copybot to com.copybot.ui;
