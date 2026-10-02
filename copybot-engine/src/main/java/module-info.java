@@ -7,7 +7,7 @@ module com.copybot.engine {
     requires info.picocli;
     requires com.google.gson;
 
-    exports com.copybot.config to com.google.gson;
+    exports com.copybot.config to com.google.gson, com.copybot.ui;
     exports com.copybot.exception;
     exports com.copybot.resources;
     exports com.copybot.utils;
@@ -19,6 +19,7 @@ module com.copybot.engine {
     exports com.copybot.engine.resume to com.google.gson, com.copybot.ui;
     exports com.copybot.engine.resources to com.copybot.ui;
     exports com.copybot.engine.plugin to com.copybot.ui;
+    exports com.copybot.engine.plugin.report to com.copybot.ui;
 
     exports com.copybot.plugin.api.action;
     exports com.copybot.plugin.api.definition;

@@ -34,6 +34,8 @@ public final class PluginEngine {
     // replaced as a whole, once, by load(): readers never see a partially filled list
     private static volatile List<PluginDefinition> loadedPlugins = List.of();
     private static volatile List<PluginDefinition> errorPlugins = List.of();
+    // every definition of the load, loaded or not, in the sorted order
+    private static volatile List<PluginDefinition> allPlugins = List.of();
 
     /** The broken plugins and actions already warned of by the catalog, built again at each editor opening. */
     private static final Set<String> CATALOG_WARNED = ConcurrentHashMap.newKeySet();
@@ -62,14 +64,14 @@ public final class PluginEngine {
         pl.resolve(FileUtil.listDirectory(pluginDir), false);
         pl.resolve(devPluginDirs, true);
 
-        var allPlugins = pl.load();
-        allPlugins.sort(Comparator
+        var all = pl.load();
+        all.sort(Comparator
                 .comparing(PluginDefinition::getName)
                 .thenComparing(PluginDefinition::getVersion, VersionUtil.VERSION_ORDER.reversed())); // most recent first
 
         List<PluginDefinition> loaded = new ArrayList<>();
         List<PluginDefinition> errors = new ArrayList<>();
-        for (PluginDefinition pluginDefinition : allPlugins) {
+        for (PluginDefinition pluginDefinition : all) {
             if (pluginDefinition.getErrorMessage() == null) {
                 loaded.add(pluginDefinition);
             } else {
@@ -79,6 +81,7 @@ public final class PluginEngine {
         }
         loadedPlugins = Collections.unmodifiableList(loaded);
         errorPlugins = Collections.unmodifiableList(errors);
+        allPlugins = Collections.unmodifiableList(new ArrayList<>(all));
         loadedFrom = List.copyOf(requested);
     }
 
@@ -86,11 +89,17 @@ public final class PluginEngine {
     static synchronized void resetForTest() {
         loadedPlugins = List.of();
         errorPlugins = List.of();
+        allPlugins = List.of();
         loadedFrom = null;
     }
 
     public static List<PluginDefinition> getLoadedPlugins() {
         return loadedPlugins;
+    }
+
+    /** Every definition of the load (loaded or not), empty before it. */
+    public static List<PluginDefinition> getAllPlugins() {
+        return allPlugins;
     }
 
     public static List<PluginDefinition> getErrorPlugins() {

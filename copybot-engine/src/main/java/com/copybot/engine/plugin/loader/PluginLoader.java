@@ -12,7 +12,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
-import java.util.stream.Collectors;
 
 public final class PluginLoader {
     List<LayerLoader> validLayers;
@@ -56,14 +55,14 @@ public final class PluginLoader {
                 if (order > 0) {
                     // new ll is a more recent revision version of this minor version
                     validLayers.remove(previousLl);
-                    pluginDefinitions.add(PluginDefinition.ofError(previousLl,
+                    pluginDefinitions.add(PluginDefinition.ofIgnored(previousLl,
                             ResourcesEngine.getString("plugin.load.newer-revision", ll.getVersion(), ll.getPath())));
                 } else if (order == 0) {
-                    pluginDefinitions.add(PluginDefinition.ofError(ll,
+                    pluginDefinitions.add(PluginDefinition.ofIgnored(ll,
                             ResourcesEngine.getString("plugin.load.duplicate", previousLl.getPath())));
                     continue;
                 } else {
-                    pluginDefinitions.add(PluginDefinition.ofError(ll,
+                    pluginDefinitions.add(PluginDefinition.ofIgnored(ll,
                             ResourcesEngine.getString("plugin.load.newer-revision", previousLl.getVersion(), previousLl.getPath())));
                     continue;
                 }
@@ -75,7 +74,7 @@ public final class PluginLoader {
     private void loadNoDepPlugins() {
         for (LayerLoader ll : validLayers) {
             if (ll.canBeLoaded()) { // no plugin dependency
-                tryLoad(ll, List.of(ModuleLayer.boot()));
+                tryLoad(ll, List.of());
             } else { // need other plugin
                 layersWithDependencies.add(ll);
             }
@@ -90,11 +89,11 @@ public final class PluginLoader {
             while (it.hasNext()) {
                 LayerLoader ll = it.next();
                 // find dependencies candidates in already loaded
-                List<ModuleLayer> candiadateLayers = getCandidates(ll);
+                List<LayerLoader> candidates = getCandidates(ll);
 
-                if (ll.canBeLoaded(candiadateLayers)) {
+                if (ll.canBeLoaded(candidates.stream().map(LayerLoader::getModuleLayer).toList())) {
                     it.remove(); // loaded or in error: either way, resolved
-                    hasResolvedPlugin |= tryLoad(ll, candiadateLayers);
+                    hasResolvedPlugin |= tryLoad(ll, candidates);
                 }
             }
         } while (hasResolvedPlugin);
@@ -107,9 +106,9 @@ public final class PluginLoader {
      * Defines the layer of the plugin; a plugin whose modules do not resolve or cannot be defined (e.g. a package
      * in two of its modules) is in error, the others load. The plugins requiring it then miss a dependency.
      */
-    private boolean tryLoad(LayerLoader ll, List<ModuleLayer> parentLayers) {
+    private boolean tryLoad(LayerLoader ll, List<LayerLoader> parents) {
         try {
-            ll.load(parentLayers);
+            ll.load(parents);
         } catch (RuntimeException e) { // ResolutionException, FindException, LayerInstantiationException...
             pluginDefinitions.add(PluginDefinition.ofError(ll, ResourcesEngine.getString("plugin.load.layer", describe(e))));
             return false;
@@ -118,29 +117,32 @@ public final class PluginLoader {
         return true;
     }
 
-    private List<ModuleLayer> getCandidates(LayerLoader ll) {
-        var candiadateLayers = loadedLayers.stream()
+    private List<LayerLoader> getCandidates(LayerLoader ll) {
+        return loadedLayers.stream()
                 .filter(c -> ll.getRequires().stream().anyMatch(r -> VersionUtil.moduleCompatible(c.getMainModuleDescriptor(), r)))
-                .map(LayerLoader::getModuleLayer)
                 .toList();
-        return candiadateLayers;
     }
 
     private void markUnresolvedPlugin() {
         List<ModuleDescriptor> loadedModules = loadedLayers.stream().map(LayerLoader::getMainModuleDescriptor).toList();
         for (LayerLoader ll : layersWithDependencies) {
+            List<String> missing = missingDependencyList(ll.getRequires(), loadedModules);
             pluginDefinitions.add(PluginDefinition.ofError(ll, ResourcesEngine.getString(
-                    "plugin.load.missing-dependencies", missingDependencies(ll.getRequires(), loadedModules))));
+                    "plugin.load.missing-dependencies", String.join(", ", missing))).withMissingRequires(missing));
         }
     }
 
     /** The requirements no loaded module satisfies, as "name:version" (just "name" when no version is required). */
-    static String missingDependencies(List<ModuleDescriptor.Requires> requires, List<ModuleDescriptor> loadedModules) {
+    static List<String> missingDependencyList(List<ModuleDescriptor.Requires> requires, List<ModuleDescriptor> loadedModules) {
         return requires.stream()
                 .filter(r -> loadedModules.stream().noneMatch(m -> VersionUtil.moduleCompatible(m, r)))
                 .map(r -> r.name() + r.compiledVersion().map(v -> ":" + v).orElse(""))
                 .distinct() // several modules of the plugin may require the same one
-                .collect(Collectors.joining(", "));
+                .toList();
+    }
+
+    static String missingDependencies(List<ModuleDescriptor.Requires> requires, List<ModuleDescriptor> loadedModules) {
+        return String.join(", ", missingDependencyList(requires, loadedModules));
     }
 
     private void instanciateResolved() {

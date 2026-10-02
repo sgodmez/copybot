@@ -1,9 +1,11 @@
 package com.copybot.engine;
 
+import com.copybot.config.CopybotConfig;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.plugin.PluginDefinition;
 import com.copybot.engine.plugin.PluginEngine;
+import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
@@ -37,6 +39,20 @@ public class CopybotEngineTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    public void thePluginReportNamesTheConfiguredDirectories() {
+        Path devDir = Path.of("does-not-exist-dev");
+        CopybotConfig config = new CopybotConfig(null, devDir, null, null);
+        try (CopybotEngine engine = new CopybotEngine(config)) {
+            PluginReport report = engine.pluginReport();
+
+            assertFalse(report.pluginPathConfigured());
+            assertEquals(Path.of("plugins").toAbsolutePath().normalize(), report.pluginPath());
+            assertEquals(List.of(devDir.toAbsolutePath().normalize()), report.devPluginPaths());
+            assertTrue(report.warnings().stream().anyMatch(w -> w.contains(devDir.toAbsolutePath().normalize().toString())));
+        }
+    }
 
     private Path dir(String name) throws IOException {
         return Files.createDirectories(tempDir.resolve(name));

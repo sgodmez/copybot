@@ -5,6 +5,8 @@ import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.plugin.PluginEngine;
+import com.copybot.engine.plugin.report.PluginReport;
+import com.copybot.engine.plugin.report.PluginReports;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.engine.resume.ResumeContext;
@@ -54,6 +56,7 @@ public final class CopybotEngine implements AutoCloseable {
     private static final Path DEFAULT_PLUGIN_PATH = Path.of("./plugins");
 
     private final CopybotConfig config;
+    private final Path configFile;
 
     /**
      * Runs the executions. Its virtual threads are <em>daemon</em> threads: {@link #close()} waits for
@@ -77,7 +80,12 @@ public final class CopybotEngine implements AutoCloseable {
 
     // visible for tests: an engine on an in-memory configuration, the plugins left as they are
     CopybotEngine(CopybotConfig config) {
+        this(config, Path.of("config.json"));
+    }
+
+    private CopybotEngine(CopybotConfig config, Path configFile) {
         this.config = config;
+        this.configFile = configFile;
     }
 
     /**
@@ -87,9 +95,22 @@ public final class CopybotEngine implements AutoCloseable {
      * @throws CopybotException config.not-found / config.not-json
      */
     public static CopybotEngine create(Optional<Path> configPath) {
-        CopybotConfig config = readConfig(configPath.orElse(DEFAULT_CONFIG_PATH));
+        Path configFile = configPath.orElse(DEFAULT_CONFIG_PATH);
+        CopybotConfig config = readConfig(configFile);
         loadPlugins(config);
-        return new CopybotEngine(config);
+        return new CopybotEngine(config, configFile.toAbsolutePath().normalize());
+    }
+
+    /** The configuration file read at startup, absolute. */
+    public Path configFile() {
+        return configFile;
+    }
+
+    /** How the plugins of this JVM were loaded (spec plugins-view §1). */
+    public PluginReport pluginReport() {
+        Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
+        List<Path> devPluginPaths = config.devPluginPaths() != null ? List.of(config.devPluginPaths()) : List.of();
+        return PluginReports.of(configFile, pluginPath, config.pluginPath() != null, devPluginPaths, PluginEngine.getAllPlugins());
     }
 
     /**
