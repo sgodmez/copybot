@@ -377,6 +377,17 @@ public class PlanController {
         model.setExecutionRefusal(prepared.executionRefusal());
         model.update(prepared.getState(), prepared.getOrderedItems());
         afterUpdate();
+        scrollToResume();
+    }
+
+    /** Rows already imported before the first one to copy, kept in view above it. */
+    private static final int RESUME_CONTEXT_ROWS = 5;
+
+    /** Shows the resume junction: the last imported files, then the first ones to copy. */
+    private void scrollToResume() {
+        if (!rows.isEmpty()) {
+            itemsTable.scrollTo(PlanViewModel.resumeScrollIndex(rows, RESUME_CONTEXT_ROWS));
+        }
     }
 
     /**
@@ -599,6 +610,7 @@ public class PlanController {
             PopinUtil.showError(e);
         }
         refresh();
+        scrollToResume(); // the junction moved
     }
 
     /** Everything / from a date / from a file of the plan. */

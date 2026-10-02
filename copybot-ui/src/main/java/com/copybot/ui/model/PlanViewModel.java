@@ -331,6 +331,22 @@ public final class PlanViewModel {
         return status == ItemStatus.PENDING || status == ItemStatus.WAITING_RESOURCES || status == ItemStatus.RUNNING;
     }
 
+    /**
+     * The row to scroll to (shown at the top) so that the resume junction is in view: the last {@code context}
+     * rows not selected (already imported, skipped or in error), then the first selected one; the top without
+     * resume, the last rows when nothing is selected. The rows are in resume order.
+     */
+    public static int resumeScrollIndex(List<WorkItemExecution> rows, int context) {
+        int junction = rows.size();
+        for (int i = 0; i < rows.size(); i++) {
+            if (Plan.Counts.isSelected(rows.get(i).getStatus())) {
+                junction = i;
+                break;
+            }
+        }
+        return Math.max(0, junction - context);
+    }
+
     /** The rows of the current filter. */
     public List<WorkItemExecution> visibleItems() {
         return items.stream().filter(i -> switch (filter) {

@@ -237,6 +237,38 @@ public class PlanViewModelTest {
                 prepared(false, skipped).warning());
     }
 
+    // ---- scroll to the resume junction ----
+
+    /** n rows: the first `skipped` already imported, the others to copy. */
+    private List<WorkItemExecution> rows(int n, int skipped) throws IOException {
+        List<WorkItemExecution> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            WorkItemExecution row = item("f" + i + ".jpg", 1);
+            if (i < skipped) {
+                row.setSkipped("already imported");
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    @Test
+    public void theTableScrollsToShowTheLastImportedRowsThenTheFirstToCopy() throws IOException {
+        assertEquals(15, PlanViewModel.resumeScrollIndex(rows(30, 20), 5), "rows 15-19 imported, then 20 to copy");
+    }
+
+    @Test
+    public void fewImportedRowsKeepTheTop() throws IOException {
+        assertEquals(0, PlanViewModel.resumeScrollIndex(rows(30, 3), 5));
+        assertEquals(0, PlanViewModel.resumeScrollIndex(rows(30, 0), 5), "no resume: from the top");
+    }
+
+    @Test
+    public void everythingImportedShowsTheLastRows() throws IOException {
+        assertEquals(25, PlanViewModel.resumeScrollIndex(rows(30, 30), 5));
+        assertEquals(0, PlanViewModel.resumeScrollIndex(List.of(), 5));
+    }
+
     @Test
     public void aPipelineWithoutInputCannotBePreparedAndSaysWhy() {
         PlanViewModel model = new PlanViewModel(false);
