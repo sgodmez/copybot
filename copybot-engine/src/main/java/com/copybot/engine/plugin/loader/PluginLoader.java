@@ -6,15 +6,12 @@ import com.copybot.utils.VersionUtil;
 import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 
-import java.lang.module.Configuration;
 import java.lang.module.ModuleDescriptor;
-import java.lang.module.ModuleFinder;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
+import java.util.ServiceConfigurationError;
 import java.util.ServiceLoader;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public final class PluginLoader {
@@ -54,20 +51,20 @@ public final class PluginLoader {
                     .findFirst();
             if (samePreviousPluginOpt.isPresent()) {
                 LayerLoader previousLl = samePreviousPluginOpt.get();
-                ModuleDescriptor.Version curentVerion = ll.getMainModuleDescriptor().version().get();
-                ModuleDescriptor.Version previousVersion = previousLl.getMainModuleDescriptor().version().get();
-                if (curentVerion.compareTo(previousVersion) > 0) {
+                // a plugin without version is older than any versioned one (VERSION_ORDER)
+                int order = VersionUtil.VERSION_ORDER.compare(ll.getVersion(), previousLl.getVersion());
+                if (order > 0) {
                     // new ll is a more recent revision version of this minor version
                     validLayers.remove(previousLl);
                     pluginDefinitions.add(PluginDefinition.ofError(previousLl,
-                            ResourcesEngine.getString("plugin.load.newer-revision", curentVerion, ll.getPath())));
-                } else if (curentVerion.equals(previousVersion)) {
+                            ResourcesEngine.getString("plugin.load.newer-revision", ll.getVersion(), ll.getPath())));
+                } else if (order == 0) {
                     pluginDefinitions.add(PluginDefinition.ofError(ll,
                             ResourcesEngine.getString("plugin.load.duplicate", previousLl.getPath())));
                     continue;
                 } else {
                     pluginDefinitions.add(PluginDefinition.ofError(ll,
-                            ResourcesEngine.getString("plugin.load.newer-revision", previousVersion, previousLl.getPath())));
+                            ResourcesEngine.getString("plugin.load.newer-revision", previousLl.getVersion(), previousLl.getPath())));
                     continue;
                 }
             }
@@ -78,8 +75,7 @@ public final class PluginLoader {
     private void loadNoDepPlugins() {
         for (LayerLoader ll : validLayers) {
             if (ll.canBeLoaded()) { // no plugin dependency
-                ll.load();
-                loadedLayers.add(ll);
+                tryLoad(ll, List.of(ModuleLayer.boot()));
             } else { // need other plugin
                 layersWithDependencies.add(ll);
             }
@@ -97,16 +93,29 @@ public final class PluginLoader {
                 List<ModuleLayer> candiadateLayers = getCandidates(ll);
 
                 if (ll.canBeLoaded(candiadateLayers)) {
-                    ll.load(candiadateLayers);
-                    loadedLayers.add(ll);
-                    hasResolvedPlugin = true;
-                    it.remove();
+                    it.remove(); // loaded or in error: either way, resolved
+                    hasResolvedPlugin |= tryLoad(ll, candiadateLayers);
                 }
             }
         } while (hasResolvedPlugin);
 
         // can't resolve theses
         markUnresolvedPlugin();
+    }
+
+    /**
+     * Defines the layer of the plugin; a plugin whose modules do not resolve or cannot be defined (e.g. a package
+     * in two of its modules) is in error, the others load. The plugins requiring it then miss a dependency.
+     */
+    private boolean tryLoad(LayerLoader ll, List<ModuleLayer> parentLayers) {
+        try {
+            ll.load(parentLayers);
+        } catch (RuntimeException e) { // ResolutionException, FindException, LayerInstantiationException...
+            pluginDefinitions.add(PluginDefinition.ofError(ll, ResourcesEngine.getString("plugin.load.layer", describe(e))));
+            return false;
+        }
+        loadedLayers.add(ll);
+        return true;
     }
 
     private List<ModuleLayer> getCandidates(LayerLoader ll) {
@@ -130,35 +139,53 @@ public final class PluginLoader {
         return requires.stream()
                 .filter(r -> loadedModules.stream().noneMatch(m -> VersionUtil.moduleCompatible(m, r)))
                 .map(r -> r.name() + r.compiledVersion().map(v -> ":" + v).orElse(""))
+                .distinct() // several modules of the plugin may require the same one
                 .collect(Collectors.joining(", "));
     }
 
     private void instanciateResolved() {
-        Map<ModuleLayer, LayerLoader> moduleLayerToLayerLoaderMap;
-        ModuleLayer allLayers;
-        if (loadedLayers.isEmpty()) {
-            // no plugins
-            moduleLayerToLayerLoaderMap = Map.of();
-            allLayers = ModuleLayer.boot();
-        } else {
-            moduleLayerToLayerLoaderMap = loadedLayers.stream().collect(Collectors.toMap(LayerLoader::getModuleLayer, Function.identity()));
-            Configuration allConfig = Configuration.resolve(ModuleFinder.ofSystem(), loadedLayers.stream().map(LayerLoader::getPluginConfiguration).toList(), ModuleFinder.of(), List.of());
-            allLayers = ModuleLayer.defineModulesWithOneLoader(allConfig, loadedLayers.stream().map(LayerLoader::getModuleLayer).toList(), ClassLoader.getSystemClassLoader()).layer();
+        instanciate(ModuleLayer.boot(), null); // the embedded plugin
+        for (LayerLoader ll : loadedLayers) {
+            instanciate(ll.getModuleLayer(), ll);
         }
+    }
 
-
-        ServiceLoader<IPlugin> serviceLoader = ServiceLoader.load(allLayers, IPlugin.class);
-        for (IPlugin service : serviceLoader) {
-            // load i18n
-            service.setResourceBundle(ResourcesEngine.buildPluginResourceBundle(service.getI18nBundleNames(), service.getClass().getModule()));
-            // register
-            if (service.getClass().equals(CBEmbeddedPlugin.class)) {
-                pluginDefinitions.add(PluginDefinition.ofEmbedded(service));
-            } else {
-                LayerLoader ll = moduleLayerToLayerLoaderMap.get(service.getClass().getModule().getLayer());
-                System.out.println("I've found a service called '" + service.getPluginCode() + "' ! " + ll.getPath());
-                pluginDefinitions.add(PluginDefinition.ofSuccess(ll, service));
+    /**
+     * Instantiates the plugin providers of this layer only (a layer also sees those of its parents, registered
+     * with their own layer). A provider that cannot be instantiated is an error of its plugin, the others load.
+     */
+    private void instanciate(ModuleLayer layer, LayerLoader ll) {
+        try {
+            var providers = ServiceLoader.load(layer, IPlugin.class).stream()
+                    .filter(p -> p.type().getModule().getLayer() == layer)
+                    .toList();
+            for (ServiceLoader.Provider<IPlugin> provider : providers) {
+                IPlugin service = provider.get();
+                // load i18n
+                service.setResourceBundle(ResourcesEngine.buildPluginResourceBundle(service.getI18nBundleNames(), service.getClass().getModule()));
+                // register
+                if (ll == null) {
+                    if (service.getClass().equals(CBEmbeddedPlugin.class)) {
+                        pluginDefinitions.add(PluginDefinition.ofEmbedded(service));
+                    }
+                } else {
+                    pluginDefinitions.add(PluginDefinition.ofSuccess(ll, service));
+                }
             }
+        } catch (ServiceConfigurationError | RuntimeException | LinkageError e) {
+            if (ll == null) {
+                throw e; // the embedded plugin is part of the engine: nothing works without it
+            }
+            pluginDefinitions.add(PluginDefinition.ofError(ll, ResourcesEngine.getString("plugin.load.instantiation", describe(e))));
         }
+    }
+
+    /** The error and its root cause, the message a plugin author needs (e.g. the exception of a constructor). */
+    private static String describe(Throwable e) {
+        Throwable root = e;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        return root == e ? String.valueOf(e) : e + " (" + root + ")";
     }
 }

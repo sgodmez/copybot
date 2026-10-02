@@ -7,7 +7,8 @@ import java.util.regex.Pattern;
 
 public final class VersionUtil {
 
-    private static final Pattern versionExtractPattern = Pattern.compile("^([0-9]+)\\.([0-9]+)?.*");
+    // major, then an optional minor; anything after ("1.", ".3", "-SNAPSHOT", "+9") is ignored
+    private static final Pattern versionExtractPattern = Pattern.compile("^([0-9]+)(?:\\.([0-9]+))?(?:[.+-].*)?$");
 
     public static boolean moduleCompatible(ModuleDescriptor module, ModuleDescriptor.Requires requirement) {
         return module.name().equals(requirement.name())
@@ -43,15 +44,14 @@ public final class VersionUtil {
             return false;
         }
 
-        if (matcherRequire.groupCount() == 1) {
+        if (matcherRequire.group(2) == null) {
             // no minor required version
             return true;
         }
 
-        if (strict) {
-            return matcherRequire.group(2).equals(matcherVersion.group(2)); // same minor
-        }
-        return Integer.parseInt(matcherVersion.group(2)) >= Integer.parseInt(matcherRequire.group(2)); // same minor or above
+        int requiredMinor = Integer.parseInt(matcherRequire.group(2));
+        int minor = matcherVersion.group(2) == null ? 0 : Integer.parseInt(matcherVersion.group(2)); // "2" is "2.0"
+        return strict ? minor == requiredMinor : minor >= requiredMinor; // same minor, or above when not strict
     }
 
     /**

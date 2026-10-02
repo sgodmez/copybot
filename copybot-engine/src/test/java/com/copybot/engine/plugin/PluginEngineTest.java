@@ -75,6 +75,18 @@ public class PluginEngineTest {
                 "the same directories (once normalized) are no reason to warn");
     }
 
+    @Test
+    public void aPluginInErrorIsWarnedOfInTheLog() throws Exception {
+        PluginEngine.resetForTest(); // the load must be this test's
+        Path dir = Files.createDirectories(tempDir.resolve("plugins"));
+        Files.createDirectories(dir.resolve("not-a-plugin"));
+
+        List<LogRecord> records = recordLogs(() -> PluginEngine.load(dir, List.of()));
+
+        assertTrue(records.stream().anyMatch(r -> r.getLevel() == Level.WARNING && r.getMessage().contains("not-a-plugin")),
+                "a plugin in error is reported in the log, not silently left out");
+    }
+
     private static List<LogRecord> recordLogs(Runnable action) {
         Logger jul = Logger.getLogger(PluginEngine.class.getCanonicalName());
         List<LogRecord> records = new CopyOnWriteArrayList<>();

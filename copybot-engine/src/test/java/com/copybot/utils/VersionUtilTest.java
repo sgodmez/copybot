@@ -25,4 +25,33 @@ public class VersionUtilTest {
 
         assertEquals(Arrays.asList("1.10", "1.9", "0.1", "dev", null), versions);
     }
+
+    @Test
+    public void aMajorOnlyRequirementAcceptsAnyMinorOfThatMajor() {
+        assertTrue(VersionUtil.isCompatible("1.2", "1", false));
+        assertTrue(VersionUtil.isCompatible("1.2", "1", true));
+        assertFalse(VersionUtil.isCompatible("2.0", "1", false));
+    }
+
+    @Test
+    public void aRequirementEndingWithADotIsMajorOnly() {
+        assertTrue(VersionUtil.isCompatible("1.2", "1.", false));
+        assertTrue(VersionUtil.isCompatible("1.2", "1.", true));
+    }
+
+    @Test
+    public void aVersionWithoutMinorIsMinorZero() {
+        assertTrue(VersionUtil.isCompatible("2", "2.0", true));
+        assertFalse(VersionUtil.isCompatible("2", "2.1", false));
+    }
+
+    @Test
+    public void minorAndQualifiersStillCompare() {
+        assertTrue(VersionUtil.isCompatible("1.3", "1.2", false), "a more recent minor is compatible");
+        assertFalse(VersionUtil.isCompatible("1.3", "1.2", true), "strict: same minor only");
+        assertFalse(VersionUtil.isCompatible("1.1", "1.2", false));
+        assertTrue(VersionUtil.isCompatible("1.2.5-SNAPSHOT", "1.2.1", true));
+        assertTrue(VersionUtil.isCompatible("dev", "dev", false), "an uncommon pattern compares as is");
+        assertFalse(VersionUtil.isCompatible("dev", "1.0", false));
+    }
 }

@@ -74,6 +74,7 @@ public final class PluginEngine {
                 loaded.add(pluginDefinition);
             } else {
                 errors.add(pluginDefinition);
+                LOG.warn("plugin.load.not-loaded", pluginDefinition.getName(), pluginDefinition.getPath(), pluginDefinition.getErrorMessage());
             }
         }
         loadedPlugins = Collections.unmodifiableList(loaded);

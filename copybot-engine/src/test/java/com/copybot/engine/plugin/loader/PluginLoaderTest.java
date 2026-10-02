@@ -1,18 +1,200 @@
 package com.copybot.engine.plugin.loader;
 
+import com.copybot.engine.plugin.PluginDefinition;
 import com.copybot.resources.ResourcesEngine;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.module.ModuleDescriptor;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/**
+ * One broken plugin folder must never prevent the others from loading: it is reported as an error plugin, with a
+ * message saying why. The plugins are real module jars, compiled against the engine ({@link TestPluginJar}).
+ */
 public class PluginLoaderTest {
+
+    // not a @TempDir: the JVM keeps the jars of a module layer open (layers cannot be unloaded), and Windows
+    // refuses to delete an open file. Under target/, mvn clean removes them.
+    Path plugins;
+
+    @BeforeEach
+    public void createPluginsDir() throws Exception {
+        plugins = Files.createDirectories(Path.of("target", "plugin-loader-tests", UUID.randomUUID().toString()));
+    }
+
+    private List<PluginDefinition> load(Path... folders) {
+        PluginLoader loader = new PluginLoader();
+        loader.resolve(List.of(folders), false);
+        return loader.load();
+    }
+
+    private static Optional<PluginDefinition> named(List<PluginDefinition> definitions, String name) {
+        return definitions.stream().filter(d -> name.equals(d.getName())).findFirst();
+    }
+
+    private static PluginDefinition loaded(List<PluginDefinition> definitions, String name) {
+        PluginDefinition definition = named(definitions, name).orElseThrow(() -> new AssertionError(name + " not reported: " + definitions));
+        assertNull(definition.getErrorMessage(), name + " should be loaded");
+        assertNotNull(definition.getPluginInstance());
+        return definition;
+    }
+
+    private static PluginDefinition error(List<PluginDefinition> definitions, String name) {
+        PluginDefinition definition = named(definitions, name).orElseThrow(() -> new AssertionError(name + " not reported: " + definitions));
+        assertNotNull(definition.getErrorMessage(), name + " should be in error");
+        assertFalse(definition.getErrorMessage().isBlank());
+        assertFalse(definition.isActive());
+        return definition;
+    }
+
+    @Test
+    public void aWellFormedPluginIsLoaded() {
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        PluginDefinition definition = loaded(load(good), "test.good");
+
+        assertEquals("1.0", definition.getVersion());
+    }
+
+    @Test
+    public void aFolderWithoutPluginIsAnErrorNamedAfterTheFolder() throws Exception {
+        Path empty = Files.createDirectories(plugins.resolve("empty"));
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        List<PluginDefinition> definitions = load(empty, good);
+
+        error(definitions, "empty");
+        loaded(definitions, "test.good");
+    }
+
+    @Test
+    public void aFolderWithTwoPluginsIsAnErrorNamedAfterTheFolder() {
+        Path two = plugins.resolve("two");
+        TestPluginJar.plugin("test.one").version("1.0").writeTo(two);
+        TestPluginJar.plugin("test.other").version("1.0").writeTo(two);
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        List<PluginDefinition> definitions = load(two, good);
+
+        error(definitions, "two");
+        loaded(definitions, "test.good");
+    }
+
+    @Test
+    public void aPluginWithoutVersionIsLoaded() {
+        Path unversioned = plugins.resolve("unversioned");
+        TestPluginJar.plugin("test.unversioned").writeTo(unversioned);
+
+        PluginDefinition definition = loaded(load(unversioned), "test.unversioned");
+
+        assertNull(definition.getVersion());
+    }
+
+    @Test
+    public void aVersionedPluginWinsOverTheSameWithoutVersionInEitherOrder() {
+        Path unversioned = plugins.resolve("unversioned");
+        TestPluginJar.plugin("test.same").writeTo(unversioned);
+        Path versioned = plugins.resolve("versioned");
+        TestPluginJar.plugin("test.same").version("1.0").writeTo(versioned);
+
+        for (List<PluginDefinition> definitions : List.of(load(unversioned, versioned), load(versioned, unversioned))) {
+            List<PluginDefinition> same = definitions.stream().filter(d -> d.getName().equals("test.same")).toList();
+            assertEquals(2, same.size(), "both are reported: " + same);
+            PluginDefinition active = same.stream().filter(PluginDefinition::isActive).findFirst().orElseThrow();
+            assertEquals("1.0", active.getVersion());
+            PluginDefinition rejected = same.stream().filter(d -> !d.isActive()).findFirst().orElseThrow();
+            assertNull(rejected.getVersion());
+            assertNotNull(rejected.getErrorMessage());
+        }
+    }
+
+    @Test
+    public void aMissingDependencyIsNamedButNotThePresentOnes() {
+        Path elsewhere = plugins.resolve("not-installed");
+        Path missingJar = TestPluginJar.library("test.missing", "test.missing").writeTo(elsewhere); // unversioned
+        Path present = plugins.resolve("present");
+        Path presentJar = TestPluginJar.plugin("test.present").version("1.0").writeTo(present);
+        Path needy = plugins.resolve("needy");
+        TestPluginJar.plugin("test.needy").version("1.0")
+                .requires("test.missing", missingJar)
+                .requires("test.present", presentJar)
+                .writeTo(needy);
+
+        List<PluginDefinition> definitions = load(present, needy);
+
+        loaded(definitions, "test.present");
+        String message = error(definitions, "test.needy").getErrorMessage();
+        assertTrue(message.contains("test.missing"), message);
+        assertFalse(message.contains("test.present"), message);
+    }
+
+    @Test
+    public void aPluginRequiringAnotherIsLoadedOnTopOfIt() {
+        Path base = plugins.resolve("base");
+        Path baseJar = TestPluginJar.plugin("test.base").version("1.2").writeTo(base);
+        Path child = plugins.resolve("child");
+        TestPluginJar.plugin("test.child").version("1.0").requires("test.base", baseJar).writeTo(child);
+
+        List<PluginDefinition> definitions = load(child, base);
+
+        loaded(definitions, "test.base");
+        loaded(definitions, "test.child");
+    }
+
+    @Test
+    public void aCorruptJarIsAnErrorOfItsFolderOnly() throws Exception {
+        Path corrupt = Files.createDirectories(plugins.resolve("corrupt"));
+        Files.writeString(corrupt.resolve("broken.jar"), "not a zip");
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        List<PluginDefinition> definitions = load(corrupt, good);
+
+        error(definitions, "corrupt");
+        loaded(definitions, "test.good");
+    }
+
+    @Test
+    public void aPluginWhoseLayerCannotBeDefinedIsAnErrorOfItsOwn() {
+        Path split = plugins.resolve("split");
+        TestPluginJar.plugin("test.split").version("1.0").writeTo(split);
+        TestPluginJar.library("test.lib.a", "test.shared").writeTo(split.resolve("lib"));
+        TestPluginJar.library("test.lib.b", "test.shared").writeTo(split.resolve("lib"));
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        List<PluginDefinition> definitions = load(split, good);
+
+        error(definitions, "test.split");
+        loaded(definitions, "test.good");
+    }
+
+    @Test
+    public void aPluginWhoseConstructorThrowsIsAnErrorOfItsOwn() {
+        Path failing = plugins.resolve("failing");
+        TestPluginJar.plugin("test.failing").version("1.0").failingConstructor().writeTo(failing);
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.good").version("1.0").writeTo(good);
+
+        List<PluginDefinition> definitions = load(failing, good);
+
+        assertTrue(error(definitions, "test.failing").getErrorMessage().contains("boom"));
+        loaded(definitions, "test.good");
+    }
 
     private static ModuleDescriptor.Requires requires(String name, String version) {
         ModuleDescriptor.Builder builder = ModuleDescriptor.newModule("requirer");
@@ -42,9 +224,18 @@ public class PluginLoaderTest {
     }
 
     @Test
+    public void aDependencyMissedBySeveralModulesOfThePluginIsNamedOnce() {
+        // the requirements are those of every module of the plugin folder: two of them may require the same module
+        List<ModuleDescriptor.Requires> requires = List.of(requires("com.example.absent", "2.0"), requires("com.example.absent", "2.0"));
+
+        assertEquals("com.example.absent:2.0", PluginLoader.missingDependencies(requires, List.of()));
+    }
+
+    @Test
     public void theLoadMessagesExistInBothEngineBundles() throws IOException {
         List<String> keys = List.of("plugin.load.no-module", "plugin.load.many-modules", "plugin.load.newer-revision",
-                "plugin.load.duplicate", "plugin.load.missing-dependencies");
+                "plugin.load.duplicate", "plugin.load.missing-dependencies", "plugin.load.unreadable",
+                "plugin.load.layer", "plugin.load.instantiation", "plugin.load.not-loaded");
         for (String file : List.of("engineBundle.properties", "engineBundle_fr.properties")) {
             Properties properties = new Properties();
             try (InputStream in = PluginLoaderTest.class.getResourceAsStream("/com/copybot/engine/i18n/" + file)) {
@@ -58,7 +249,7 @@ public class PluginLoaderTest {
             }
         }
         for (String key : keys) {
-            assertFalse(ResourcesEngine.getString(key, "a", "b").startsWith("%"), key);
+            assertFalse(ResourcesEngine.getString(key, "a", "b", "c").startsWith("%"), key);
         }
     }
 }

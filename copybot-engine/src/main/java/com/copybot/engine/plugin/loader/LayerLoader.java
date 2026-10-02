@@ -6,6 +6,7 @@ import com.copybot.utils.VersionUtil;
 import com.copybot.plugin.api.definition.IPlugin;
 
 import java.lang.module.Configuration;
+import java.lang.module.FindException;
 import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
@@ -39,7 +40,14 @@ public final class LayerLoader {
         // Search for plugins in the plugins directory
         pluginsFinder = ModuleFinder.of(pluginDirRecur.toArray(new Path[0]));
         // Find all names of all found plugin modules
-        Set<ModuleReference> plugins = pluginsFinder.findAll();
+        Set<ModuleReference> plugins;
+        try {
+            plugins = pluginsFinder.findAll();
+        } catch (FindException e) { // an unreadable jar, two modules of the same name...
+            error = ResourcesEngine.getString("plugin.load.unreadable", path,
+                    e.getCause() != null ? e.getMessage() + " (" + e.getCause() + ")" : e.getMessage());
+            return;
+        }
 
         moduleDescriptors = plugins.stream()
                 .map(ModuleReference::descriptor)
@@ -90,10 +98,6 @@ public final class LayerLoader {
     }
 
 
-    public void load() {
-        load(List.of(ModuleLayer.boot()));
-    }
-
     public void load(List<ModuleLayer> parentLayers) {
         List<String> pluginsName = moduleDescriptors
                 .stream()
@@ -126,10 +130,6 @@ public final class LayerLoader {
 
     public String getError() {
         return error;
-    }
-
-    public Configuration getPluginConfiguration() {
-        return pluginConfiguration;
     }
 
     public ModuleLayer getModuleLayer() {
