@@ -153,24 +153,22 @@ final class ConfigForm {
         };
     }
 
-    /** "" (absent: the default applies) then the values; a value outside them is kept and shown. */
+    /**
+     * The values only: an absent field shows its default selected (nothing is written until another choice).
+     * "" (absent) is offered only for an optional field without default; a value outside them is kept and shown.
+     */
     private Node choice(ConfigField field, List<String> values) {
         ComboBox<String> combo = new ComboBox<>();
         List<String> items = new ArrayList<>();
-        items.add("");
-        items.addAll(values);
-        String current = access.text(field);
-        if (!items.contains(current)) {
-            items.add(current);
+        if (field.defaultValue() == null && !field.required()) {
+            items.add("");
         }
+        items.addAll(values);
         combo.getItems().setAll(items);
         combo.setConverter(new StringConverter<>() {
             @Override
             public String toString(String value) {
-                if (value == null || value.isEmpty()) {
-                    return field.defaultValue() == null ? "" : ResourcesEngine.getString("editor.default", field.defaultValue());
-                }
-                return value;
+                return value == null ? "" : value;
             }
 
             @Override
@@ -178,19 +176,39 @@ final class ConfigForm {
                 return s; // not editable
             }
         });
-        combo.setValue(current);
-        combo.valueProperty().addListener((obs, old, value) -> apply(combo, field, value == null ? "" : value));
+        boolean[] showing = {true}; // a selection made by show() is not an edit: the default stays absent
+        show(combo, field);
+        showing[0] = false;
+        combo.valueProperty().addListener((obs, old, value) -> {
+            if (!showing[0]) {
+                apply(combo, field, value == null ? "" : value);
+            }
+        });
         combo.focusedProperty().addListener((obs, was, focused) -> {
             if (!focused && invalid.labels.containsKey(combo) && focusMovedAway(combo)) {
-                String text = access.text(field);
-                if (!combo.getItems().contains(text)) {
-                    combo.getItems().add(text);
-                }
-                combo.setValue(text);
+                showing[0] = true;
+                show(combo, field);
+                showing[0] = false;
                 markValid(combo);
             }
         });
         return combo;
+    }
+
+    /** Selects the value the document holds, or the default when it is absent (null: no selection). */
+    private void show(ComboBox<String> combo, ConfigField field) {
+        String text = access.text(field);
+        if (text.isEmpty() && field.defaultValue() != null) {
+            text = field.defaultValue();
+        }
+        if (text.isEmpty() && !combo.getItems().contains(text)) {
+            combo.setValue(null);
+            return;
+        }
+        if (!combo.getItems().contains(text)) {
+            combo.getItems().add(text);
+        }
+        combo.setValue(text);
     }
 
     /** One element per line; a list of records is shown as JSON, read-only (kept as is). */
