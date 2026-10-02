@@ -12,7 +12,7 @@
     "action": "file.write",
     "actionConfig": {
       "outPattern": "./target/maintest-out/{name}",
-      "overwrite": false
+      "onConflict": { "ifDifferent": "error" }
     }
   }
 }

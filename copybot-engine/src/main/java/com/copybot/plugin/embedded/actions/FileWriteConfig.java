@@ -11,8 +11,6 @@ import com.copybot.plugin.api.config.Required;
  * The annotations describe the fields to the pipeline editor (spec desktop-ui §4); the allowed values
  * and defaults are the ones of {@link FileWriteSettings}.
  *
- * @param overwrite    legacy: true means onConflict.ifDifferent "overwrite", false means "error"
- *                     (ifIdentical "skip" in both cases); refused together with onConflict
  * @param onConflict   what to do when the target already exists
  * @param writeMode    "tempAndRename" (default) or "direct" (with "overwrite", the original is lost as soon
  *                     as the write starts)
@@ -22,8 +20,6 @@ import com.copybot.plugin.api.config.Required;
 public record FileWriteConfig(
         @Required @PatternField
         String outPattern,
-
-        Boolean overwrite,
 
         OnConflict onConflict,
 

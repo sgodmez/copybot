@@ -51,7 +51,7 @@ public class CopybotEngineTest {
         return Files.writeString(tempDir.resolve(name), """
                 {
                   "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
-                  "outStep": { "action": "%s", "actionConfig": { "outPattern": "%s/{name}", "overwrite": false } }%s
+                  "outStep": { "action": "%s", "actionConfig": { "outPattern": "%s/{name}", "onConflict": { "ifDifferent": "error" } } }%s
                 }
                 """.formatted(json(in), outAction, json(out), extra));
     }

@@ -20,7 +20,6 @@ public class SafeWriteBundleTest {
             "write.verify.size",
             "write.verify.hash",
             "write.delete-source.failed",
-            "write.config.overwrite-with-on-conflict",
             "write.config.unknown-value",
             "write.config.no-out-pattern",
             "write.warn.delete-without-read-back",

@@ -62,7 +62,7 @@ public class EmbeddedConfigSchemaTest {
         assertEquals(jsonNames(FileWriteSettings.Policy.values()), field(schema, "onConflict.ifDifferent").enumValues());
         assertEquals(jsonNames(FileWriteSettings.WriteMode.values()), field(schema, "writeMode").enumValues());
         assertEquals(jsonNames(FileWriteSettings.Verify.values()), field(schema, "verify").enumValues());
-        assertEquals(FieldKind.BOOLEAN, field(schema, "overwrite").kind());
+        assertEquals(FieldKind.BOOLEAN, field(schema, "deleteSource").kind());
     }
 
     @Test

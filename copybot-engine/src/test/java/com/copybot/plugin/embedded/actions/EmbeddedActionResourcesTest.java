@@ -27,7 +27,7 @@ public class EmbeddedActionResourcesTest {
         FileWriteAction action = new FileWriteAction();
         String outDir = tempDir.resolve("out").toString();
         action.loadConfig(JsonParser.parseString(
-                "{\"outPattern\":\"" + (outDir + "\\\\{name}").replace("\\", "\\\\") + "\",\"overwrite\":true}"));
+                "{\"outPattern\":\"" + (outDir + "\\\\{name}").replace("\\", "\\\\") + "\",\"onConflict\":{\"ifDifferent\":\"overwrite\"}}"));
         assertEquals(Set.of(Path.of(outDir)), action.touchedPaths(null));
     }
 }

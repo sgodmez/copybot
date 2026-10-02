@@ -69,7 +69,7 @@ public class MainTest {
     @Order(2)
     public void outStepResolvesThroughThePluginEngine() {
         PipelineStepConfig outStep = new PipelineStepConfig(null, "file.write", null, null, null, null, null,
-                JsonParser.parseString("{\"outPattern\":\"./target/maintest-out/{name}\",\"overwrite\":false}"));
+                JsonParser.parseString("{\"outPattern\":\"./target/maintest-out/{name}\",\"onConflict\":{\"ifDifferent\":\"error\"}}"));
 
         PipelineStep<IOutAction> step = PluginEngine.resolve(outStep, IOutAction.class);
 

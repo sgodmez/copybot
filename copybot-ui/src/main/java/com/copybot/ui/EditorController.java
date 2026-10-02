@@ -107,7 +107,7 @@ public class EditorController {
      * otherwise), so this method returns at once. While a file is being read, another call is ignored (a
      * double click on the trigger opens one editor).
      *
-     * @param onSaved called with the file after each save (on the JavaFX thread)
+     * @param onSaved called with the file once it is saved and the window closed (on the JavaFX thread)
      */
     public static void open(Window owner, Path path, Consumer<Path> onSaved) {
         if (loading) {
@@ -671,7 +671,7 @@ public class EditorController {
 
     /**
      * Writes the file in the background, the window disabled meanwhile (the document is not touched on the
-     * JavaFX thread while it is written).
+     * JavaFX thread while it is written), then closes the window; it stays open if the write fails.
      */
     private void save(Path target) {
         setSaving(true);
@@ -681,8 +681,7 @@ public class EditorController {
                 },
                 saved -> {
                     setSaving(false);
-                    path = saved;
-                    updateTitle();
+                    stage.close(); // not a close request: nothing to discard
                     if (onSaved != null) {
                         try {
                             onSaved.accept(saved);

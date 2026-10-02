@@ -52,7 +52,7 @@ public class ResumeEndToEndTest {
         return Files.writeString(tempDir.resolve("sd.json"), """
                 {
                   "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
-                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s", "overwrite": false } }%s
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s", "onConflict": { "ifDifferent": "error" } } }%s
                 }
                 """.formatted(json(card), json(nas) + "/" + outPattern, resume));
     }
@@ -157,7 +157,7 @@ public class ResumeEndToEndTest {
         assertEquals(0, cli(pipeline));
         Files.delete(nas.resolve("IMG_01.JPG"));
 
-        // IMG_02.JPG is still there and identical: overwrite=false now skips it (spec safe-write §1), IMG_01 is copied again
+        // IMG_02.JPG is still there and identical: ifDifferent "error" still skips it (spec safe-write §1), IMG_01 is copied again
         assertEquals(0, cli(pipeline, "--all"));
 
         assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
@@ -190,7 +190,7 @@ public class ResumeEndToEndTest {
     public void defaultRunReportsItemErrorsOnStderr() throws IOException {
         Path pipeline = pipeline("state", "{name}");
         Files.createDirectories(nas);
-        Files.writeString(nas.resolve("IMG_01.JPG"), "already there"); // overwrite=false: this item fails
+        Files.writeString(nas.resolve("IMG_01.JPG"), "already there"); // ifDifferent "error": this item fails
 
         String[] result = capture(pipeline);
 
@@ -263,8 +263,8 @@ public class ResumeEndToEndTest {
     }
 
     @Test
-    public void overwriteWithOnConflictIsAConfigurationErrorAndCopiesNothing() throws IOException {
-        Path pipeline = pipelineWithOut(null, ", \"overwrite\": true, \"onConflict\": { \"ifDifferent\": \"rename\" }");
+    public void aConfigurationErrorCopiesNothing() throws IOException {
+        Path pipeline = pipelineWithOut(null, ", \"onConflict\": { \"ifDifferent\": \"merge\" }");
 
         String[] result = capture(pipeline);
 

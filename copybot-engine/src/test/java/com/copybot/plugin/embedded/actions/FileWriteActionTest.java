@@ -32,11 +32,9 @@ public class FileWriteActionTest {
     @TempDir
     Path tempDir;
 
+    /** file.write to outFile, a different existing target overwritten or refused (onConflict.ifDifferent). */
     private FileWriteAction action(Path outFile, boolean overwrite) {
-        FileWriteAction action = new FileWriteAction();
-        action.loadConfig(JsonParser.parseString(
-                "{\"outPattern\":\"" + outFile.toString().replace("\\", "\\\\") + "\",\"overwrite\":" + overwrite + "}"));
-        return action;
+        return action(outFile, ",\"onConflict\":{\"ifDifferent\":\"" + (overwrite ? "overwrite" : "error") + "\"}");
     }
 
     private WorkItem itemWithContent(String name, byte[] content) throws IOException {
@@ -48,19 +46,19 @@ public class FileWriteActionTest {
     }
 
     @Test
-    public void overwriteTrueCreatesAMissingTargetFile() throws IOException {
+    public void overwriteCreatesAMissingTargetFile() throws IOException {
         Path target = tempDir.resolve("out").resolve("created.bin");
         Files.createDirectories(target.getParent());
         WorkItem item = itemWithContent("src1.bin", "hello".getBytes());
 
         action(target, true).writeItem(item);
 
-        assertTrue(Files.exists(target), "overwrite:true must be able to create the target");
+        assertTrue(Files.exists(target), "overwrite must be able to create the target");
         assertArrayEquals("hello".getBytes(), Files.readAllBytes(target));
     }
 
     @Test
-    public void overwriteTrueReplacesAnExistingTargetFile() throws IOException {
+    public void overwriteReplacesAnExistingTargetFile() throws IOException {
         Path target = tempDir.resolve("existing.bin");
         Files.write(target, "old content that is longer".getBytes());
         WorkItem item = itemWithContent("src2.bin", "new".getBytes());
@@ -71,7 +69,7 @@ public class FileWriteActionTest {
     }
 
     @Test
-    public void overwriteFalseFailsOnAnExistingTargetFile() throws IOException {
+    public void errorFailsOnAnExistingTargetFile() throws IOException {
         Path target = tempDir.resolve("protected.bin");
         Files.write(target, "keep me".getBytes());
         WorkItem item = itemWithContent("src3.bin", "intruder".getBytes());
@@ -123,13 +121,13 @@ public class FileWriteActionTest {
     }
 
     @Test
-    public void overwriteFalseSkipsAnIdenticalTarget() throws IOException {
+    public void errorSkipsAnIdenticalTarget() throws IOException {
         Path target = nasFile("same.bin", "same");
         WorkItem item = itemWithContent("src6.bin", "same".getBytes());
 
         WriteResult result = action(target, false).write(item, WriteContext.newRun());
 
-        assertTrue(result.isSkipped(), "legacy overwrite=false: identical means skip, not error");
+        assertTrue(result.isSkipped(), "ifDifferent error: identical means skip, not error");
         assertEquals(target, result.target());
         assertTrue(result.reason().contains("same.bin"), result.reason());
     }
@@ -492,7 +490,7 @@ public class FileWriteActionTest {
         item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, Instant.parse("2026-09-28T10:00:00Z"));
         FileWriteAction action = new FileWriteAction();
         String outPattern = dir.resolve("out").toString().replace('\\', '/') + "/{captureDate.Y}/{name}";
-        action.loadConfig(JsonParser.parseString("{\"outPattern\":\"" + outPattern + "\",\"overwrite\":false}"));
+        action.loadConfig(JsonParser.parseString("{\"outPattern\":\"" + outPattern + "\"}"));
 
         Path target = action.resolveTarget(item).orElseThrow();
 

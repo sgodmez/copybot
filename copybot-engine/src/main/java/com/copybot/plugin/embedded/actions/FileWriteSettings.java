@@ -94,28 +94,20 @@ record FileWriteSettings(
     }
 
     /**
-     * @throws CopybotException write.config.no-out-pattern, write.config.overwrite-with-on-conflict,
-     *                          write.config.unknown-value
+     * @throws CopybotException write.config.no-out-pattern, write.config.unknown-value
      */
     static FileWriteSettings of(FileWriteConfig config) {
         if (config == null || config.outPattern() == null || config.outPattern().isBlank()) {
             throw CopybotException.ofResource("write.config.no-out-pattern");
         }
         FileWriteConfig.OnConflict onConflict = config.onConflict();
-        if (config.overwrite() != null && onConflict != null) {
-            throw CopybotException.ofResource("write.config.overwrite-with-on-conflict");
-        }
         Compare compare = Compare.PARTIAL_HASH;
         Policy ifIdentical = Policy.SKIP;
-        Policy ifDifferent;
+        Policy ifDifferent = Policy.RENAME;
         if (onConflict != null) {
             compare = parse("onConflict.compare", onConflict.compare(), Compare.PARTIAL_HASH, Compare.class);
             ifIdentical = parse("onConflict.ifIdentical", onConflict.ifIdentical(), Policy.SKIP, Policy.class);
             ifDifferent = parse("onConflict.ifDifferent", onConflict.ifDifferent(), Policy.RENAME, Policy.class);
-        } else if (config.overwrite() != null) {
-            ifDifferent = config.overwrite() ? Policy.OVERWRITE : Policy.ERROR; // legacy "overwrite"
-        } else {
-            ifDifferent = Policy.RENAME;
         }
         return new FileWriteSettings(config.outPattern(), compare, ifIdentical, ifDifferent,
                 parse("writeMode", config.writeMode(), WriteMode.TEMP_AND_RENAME, WriteMode.class),

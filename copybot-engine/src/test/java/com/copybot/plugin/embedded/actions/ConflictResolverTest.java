@@ -124,16 +124,6 @@ public class ConflictResolverTest {
         assertTrue(decision.skipReason().contains("photo.jpg"), decision.skipReason());
     }
 
-    @Test
-    public void legacyOverwriteFalseSkipsAnIdenticalTargetAndFailsOnADifferentOne() throws IOException {
-        existing("photo.jpg", "same");
-        ConflictResolver legacy = new ConflictResolver(FileWriteSettings.of(
-                new Gson().fromJson("{\"outPattern\":\"x\",\"overwrite\":false}", FileWriteConfig.class)));
-
-        assertTrue(legacy.resolve(item("same"), target()).isSkip());
-        assertThrows(CopybotException.class, () -> legacy.resolve(item("different"), target()));
-    }
-
     // ---- sort in place: the target resolves to the source itself (final review, critical) ----
 
     /** An item whose local file is the existing nas file itself (file.read on the destination tree). */

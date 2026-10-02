@@ -60,7 +60,7 @@ public class CopybotExitCodeTest {
         return Files.writeString(tempDir.resolve("sd.json"), """
                 {
                   "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
-                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}", "overwrite": false }%s }%s
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}", "onConflict": { "ifDifferent": "error" } }%s }%s
                 }
                 """.formatted(json(card), json(nas), extraOut, extra));
     }
@@ -114,7 +114,7 @@ public class CopybotExitCodeTest {
     @Test
     public void anItemInErrorExitsOne() throws IOException {
         Files.createDirectories(nas);
-        Files.writeString(nas.resolve("IMG_01.JPG"), "already there"); // overwrite=false: this item fails
+        Files.writeString(nas.resolve("IMG_01.JPG"), "already there"); // ifDifferent "error": this item fails
 
         String[] result = cli("-p=" + pipeline("", ""), CONFIG);
 
@@ -139,7 +139,7 @@ public class CopybotExitCodeTest {
             Path pipeline = Files.writeString(tempDir.resolve("missing-card.json"), """
                     {
                       "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
-                      "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}", "overwrite": false } }%s
+                      "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}", "onConflict": { "ifDifferent": "error" } } }%s
                     }
                     """.formatted(json(tempDir.resolve("no-card")), json(nas), extra));
 

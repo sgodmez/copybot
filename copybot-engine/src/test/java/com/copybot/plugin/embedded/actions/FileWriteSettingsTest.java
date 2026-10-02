@@ -59,28 +59,6 @@ public class FileWriteSettingsTest {
     }
 
     @Test
-    public void legacyOverwriteTrueOverwritesADifferentTargetAndSkipsAnIdenticalOne() {
-        FileWriteSettings settings = settings("{\"outPattern\":\"x\",\"overwrite\":true}");
-
-        assertEquals(Policy.OVERWRITE, settings.ifDifferent());
-        assertEquals(Policy.SKIP, settings.ifIdentical());
-    }
-
-    @Test
-    public void legacyOverwriteFalseFailsOnADifferentTargetAndSkipsAnIdenticalOne() {
-        FileWriteSettings settings = settings("{\"outPattern\":\"x\",\"overwrite\":false}");
-
-        assertEquals(Policy.ERROR, settings.ifDifferent());
-        assertEquals(Policy.SKIP, settings.ifIdentical());
-    }
-
-    @Test
-    public void overwriteAndOnConflictTogetherAreRefused() {
-        assertRefused("write.config.overwrite-with-on-conflict",
-                "{\"outPattern\":\"x\",\"overwrite\":true,\"onConflict\":{\"ifDifferent\":\"rename\"}}");
-    }
-
-    @Test
     public void anUnknownValueIsRefusedAndQuoted() {
         assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"verify\":\"readback\"}",
                 "verify", "readback", "none, size, readBack");

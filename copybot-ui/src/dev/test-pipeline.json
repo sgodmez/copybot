@@ -12,7 +12,7 @@
     "action": "file.write",
     "actionConfig": {
       "outPattern": "./copybot-ui/target/ui-test-out/{name}",
-      "overwrite": true
+      "onConflict": { "ifDifferent": "overwrite" }
     }
   }
 }

@@ -21,7 +21,7 @@ Décisions actées avec l'utilisateur : conflit à deux branches (identique / di
 }
 ```
 
-Tous les champs sauf `outPattern` sont optionnels (défauts ci-dessus). `overwrite` reste accepté pour compatibilité : `overwrite: true` ⇒ `ifDifferent: overwrite`, `overwrite: false` ⇒ `ifDifferent: error` (avec `ifIdentical: skip` dans les deux cas) ; `overwrite` et `onConflict` ensemble ⇒ erreur de configuration.
+Tous les champs sauf `outPattern` sont optionnels (défauts ci-dessus). L'ancien booléen `overwrite` est supprimé, sans compatibilité (le produit n'est pas encore sorti) : `onConflict` le remplace.
 
 ## 2. Conflit : la cible existe déjà
 
@@ -94,11 +94,11 @@ Un item `SKIPPED` **pendant l'exécution** (il avait été sélectionné par le 
 
 ## 8. Erreurs et i18n
 
-Nouveaux messages dans `engineBundle.properties` / `engineBundle_fr.properties` (FR en ISO-8859-1 avec échappements `\uXXXX`, édition octet par octet) : raisons de skip, échec de vérification, échec de suppression, conflit `error`, `overwrite` + `onConflict` incompatibles, avertissement `deleteSource` sans `readBack`.
+Nouveaux messages dans `engineBundle.properties` / `engineBundle_fr.properties` (FR en ISO-8859-1 avec échappements `\uXXXX`, édition octet par octet) : raisons de skip, échec de vérification, échec de suppression, conflit `error`, avertissement `deleteSource` sans `readBack`.
 
 ## 9. Tests
 
-- Conflits : chaque `compare` (dont la tolérance ±2 s), chaque politique, `rename` qui retrouve un identique en `(1)`, compatibilité `overwrite`.
+- Conflits : chaque `compare` (dont la tolérance ±2 s), chaque politique, `rename` qui retrouve un identique en `(1)`.
 - Écriture : `tempAndRename` ne laisse aucun temporaire ; échec simulé en cours de copie (flux qui lève) ⇒ ni temporaire ni cible ; `direct` supprime le partiel qu'il a créé ; orphelins d'un autre `runId` supprimés, ceux du run courant jamais.
 - Vérification : `readBack` détecte une cible altérée (hook de test) ; `size` détecte une taille fausse.
 - `deleteSource` : supprimée après succès ; conservée après échec ; skip identique + `fullHash` ⇒ supprimée, sinon conservée ; avertissement sans `readBack`.
