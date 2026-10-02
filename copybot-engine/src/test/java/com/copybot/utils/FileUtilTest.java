@@ -9,14 +9,13 @@ import java.util.Locale;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Human-readable sizes, rounded half up (spec desktop-ui §2, §5): a locale-independent form for the pattern
- * variables (file names never depend on the language), a localized form for the display.
+ * Human-readable sizes for the display, rounded half up (spec desktop-ui §2, §5), in the locale and language.
  */
 public class FileUtilTest {
 
-    /** The number before the unit of the locale-independent form. */
+    /** The number before the unit, with the "." separator. */
     private static String number(long size, int decimals) {
-        String text = FileUtil.toAutoUnitSize(size, decimals);
+        String text = FileUtil.toAutoUnitSize(size, decimals, Locale.ROOT);
         return text.substring(0, text.indexOf(' '));
     }
 
@@ -76,15 +75,6 @@ public class FileUtilTest {
         assertEquals(unit(FileUtil.ONE_MB), unit(FileUtil.ONE_MB - 1));
         assertEquals("1.0", number(FileUtil.ONE_GB - 1, 1)); // 1023.999 MB
         assertEquals(unit(FileUtil.ONE_GB), unit(FileUtil.ONE_GB - 1));
-    }
-
-    @Test
-    public void thePatternFormNeverDependsOnTheLanguage() {
-        String french = inLanguage(Locale.FRENCH, () -> FileUtil.toAutoUnitSize(300_000, 2));
-        String english = inLanguage(Locale.ENGLISH, () -> FileUtil.toAutoUnitSize(300_000, 2));
-
-        assertEquals(english, french, "the separator and the unit are the same in every language");
-        assertTrue(french.startsWith("292.97 "), french);
     }
 
     @Test

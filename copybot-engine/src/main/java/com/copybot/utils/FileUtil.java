@@ -29,27 +29,18 @@ public final class FileUtil {
 
     private static final BigDecimal[] UNIT_SIZES = {BigDecimal.ONE, ONE_KB_BD, ONE_MB_BD, ONE_GB_BD};
     private static final String[] UNIT_KEYS = {"size.b", "size.kb", "size.mb", "size.gb"};
-    /** The units of the locale-independent form (those of the root engine bundle). */
-    private static final String[] UNIT_SYMBOLS = {"Bytes", "KB", "MB", "GB"};
 
     /**
      * The size in the largest unit it reaches (bytes up to gigabytes), rounded half up to these decimals
-     * (bytes: none); a value that rounds to 1024 is told in the next unit ("1.0 MB", never "1024.0 KB").
-     * <p>
-     * Locale-independent ("292.97 KB" in every language, on every machine): this is the value of the
-     * {@code sizeHr} pattern variable, so file names never depend on the UI language or the machine locale,
-     * and the CLI and the UI resolve the same targets. For a display, see {@link #toAutoUnitSize(long, int, Locale)}.
+     * (bytes: none), for a display: the decimal separator of the default locale and the unit in the current
+     * language ("292,97 Ko" in French). A value that rounds to 1024 is told in the next unit ("1,0 Mo", never
+     * "1024,0 Ko"). Not a pattern variable: a file name never depends on the language.
      */
     public static String toAutoUnitSize(long size, int decimals) {
-        int unit = unitOf(size, decimals);
-        return format(size, unit, decimals, Locale.ROOT) + " " + UNIT_SYMBOLS[unit];
+        return toAutoUnitSize(size, decimals, Locale.getDefault());
     }
 
-    /**
-     * The same rounding and units as {@link #toAutoUnitSize(long, int)}, for a display only: the decimal
-     * separator of this locale and the unit in the current language ("292,97 Ko" in French). Never use it to
-     * build a file name.
-     */
+    /** {@link #toAutoUnitSize(long, int)} with the decimal separator of this locale. */
     public static String toAutoUnitSize(long size, int decimals, Locale locale) {
         int unit = unitOf(size, decimals);
         return format(size, unit, decimals, locale) + " "

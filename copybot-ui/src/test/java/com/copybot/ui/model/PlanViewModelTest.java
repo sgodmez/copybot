@@ -460,7 +460,7 @@ public class PlanViewModelTest {
     }
 
     @Test
-    public void sizesAreShownInTheLocaleButThePatternValueIsNot() throws IOException {
+    public void sizesAreShownInTheLocale() throws IOException {
         Locale previous = Locale.getDefault();
         try {
             ResourcesEngine.loadLanguage(Locale.FRENCH);
@@ -469,8 +469,6 @@ public class PlanViewModelTest {
 
             assertTrue(PlanViewModel.sizeText(big).startsWith("292,97 "), PlanViewModel.sizeText(big));
             assertTrue(model.copyLabel().contains("293,0 "), model.copyLabel());
-            assertTrue(big.getWorkItem().getMetadatas().getSizeHr().startsWith("292.97 "),
-                    "the pattern variable stays locale-independent: " + big.getWorkItem().getMetadatas().getSizeHr());
             assertEquals("?", PlanViewModel.sizeText(new WorkItemExecution(new WorkItem(tempDir.resolve("nosize.jpg")), List.of())));
         } finally {
             ResourcesEngine.loadLanguage(previous);

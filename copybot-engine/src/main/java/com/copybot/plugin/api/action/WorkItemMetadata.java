@@ -1,7 +1,5 @@
 package com.copybot.plugin.api.action;
 
-import com.copybot.utils.FileUtil;
-
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -26,15 +24,10 @@ public record WorkItemMetadata(
     public void setSize(long size) {
         raw.put("size", size);
         display.put("size", String.valueOf(size));
-        display.put("sizeHr", FileUtil.toAutoUnitSize(size, 2));
     }
 
     public Long getSize() {
         return (Long) raw.getOrDefault("size", null);
-    }
-
-    public String getSizeHr() {
-        return display.getOrDefault("sizeHr", "?");
     }
 
     public void setTime(String key, Instant time) {

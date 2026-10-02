@@ -320,10 +320,7 @@ public final class PlanViewModel {
 
     // ---- texts ----
 
-    /**
-     * A size for the display, in the current locale and language ("292,97 Ko"): never the {@code sizeHr}
-     * pattern value, which stays locale-independent for the file names.
-     */
+    /** A size for the display, in the current locale and language ("292,97 Ko"). */
     private static String displaySize(long size, int decimals) {
         return FileUtil.toAutoUnitSize(size, decimals, Locale.getDefault());
     }

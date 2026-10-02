@@ -159,7 +159,7 @@ public record ConfigSchema(List<ConfigField> fields) {
     }
 
     private static List<String> patternVariables() {
-        List<String> variables = new ArrayList<>(List.of("name", "size", "sizeHr"));
+        List<String> variables = new ArrayList<>(List.of("name", "size"));
         for (String date : List.of("creation", WorkItemMetadata.LAST_MODIFIED, WorkItemMetadata.CAPTURE_DATE)) {
             for (String part : List.of("Y", "y", "m", "D")) {
                 variables.add(date + "." + part);

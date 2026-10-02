@@ -9,7 +9,6 @@ module com.copybot.plugin.metadataextractor {
     exports com.copybot.plugin.metadataextractor.actions;
 
     opens com.copybot.plugin.metadataextractor.i18n;
-    opens com.copybot.plugin.metadataextractor.views;
 
     provides IPlugin with MetadataExtractorPlugin;
 }

@@ -144,8 +144,9 @@ public class ConfigSchemaTest {
 
     @Test
     public void thePatternVariablesAreTheOnesOfTheEmbeddedActions() {
-        assertTrue(ConfigSchema.PATTERN_VARIABLES.containsAll(List.of("name", "size", "sizeHr",
+        assertTrue(ConfigSchema.PATTERN_VARIABLES.containsAll(List.of("name", "size",
                 "creation.Y", "lastModified.m", "captureDate.D", "captureDate.y")));
-        assertEquals(15, ConfigSchema.PATTERN_VARIABLES.size());
+        assertEquals(14, ConfigSchema.PATTERN_VARIABLES.size());
+        assertFalse(ConfigSchema.PATTERN_VARIABLES.contains("sizeHr"), "a size for the display, not for a file name");
     }
 }
