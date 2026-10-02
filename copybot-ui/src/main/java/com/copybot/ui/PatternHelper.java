@@ -141,11 +141,18 @@ final class PatternHelper extends VBox {
         if (row.partial()) {
             link.setStyle("-fx-text-fill: #c87f0a;");
         }
+        // not focusable: a click must leave the focus, hence the caret, in the field (a TextField losing the
+        // focus moves its caret to 0, and one gaining it by requestFocus selects all its text)
+        link.setFocusTraversable(false);
         link.setOnAction(e -> {
-            int caret = input.getCaretPosition();
-            input.setText(PatternHelperModel.insert(input.getText() == null ? "" : input.getText(), caret, row.key()));
+            String text = input.getText() == null ? "" : input.getText();
+            boolean focused = input.getScene() != null && input.getScene().getFocusOwner() == input;
+            int caret = focused ? input.getCaretPosition() : text.length(); // never clicked in: at the end
+            input.setText(PatternHelperModel.insert(text, caret, row.key()));
+            if (!focused) {
+                input.requestFocus();
+            }
             input.positionCaret(caret + row.key().length() + 2);
-            input.requestFocus();
         });
         return link;
     }
