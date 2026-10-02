@@ -171,6 +171,45 @@ public class CopybotExitCodeTest {
     }
 
     @Test
+    public void aPipelineWithoutInputStepExitsTwoOnEveryCommand() throws IOException {
+        Path pipeline = Files.writeString(tempDir.resolve("no-in.json"), """
+                { "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}" } } }
+                """.formatted(json(nas)));
+        String message = ResourcesEngine.getString("pipeline.no-input");
+
+        for (String[] extra : new String[][]{{}, {"--dry-run"}, {"--all"}}) {
+            String[] args = new String[extra.length + 2];
+            args[0] = "-p=" + pipeline;
+            args[1] = CONFIG;
+            System.arraycopy(extra, 0, args, 2, extra.length);
+            String[] result = cli(args);
+
+            assertEquals("2", result[0], String.join(" ", extra) + ": " + result[2]);
+            assertTrue(result[2].contains(message), result[2]);
+        }
+        assertFalse(Files.exists(nas), "nothing is written");
+    }
+
+    @Test
+    public void aPipelineThatDoesNothingIsPreparedButNotExecuted() throws IOException {
+        Path pipeline = Files.writeString(tempDir.resolve("nothing.json"), """
+                { "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ] }
+                """.formatted(json(card)));
+
+        assertEquals("0", cli("-p=" + pipeline, CONFIG, "--dry-run")[0], "inspecting the analyses is allowed");
+        for (String[] extra : new String[][]{{}, {"--all"}}) {
+            String[] args = new String[extra.length + 2];
+            args[0] = "-p=" + pipeline;
+            args[1] = CONFIG;
+            System.arraycopy(extra, 0, args, 2, extra.length);
+            String[] result = cli(args);
+
+            assertEquals("2", result[0], String.join(" ", extra) + ": " + result[2]);
+            assertTrue(result[2].contains(ResourcesEngine.getString("pipeline.does-nothing")), result[2]);
+        }
+    }
+
+    @Test
     public void aMissingPipelineExitsTwoWithOrWithoutDebug() {
         String missing = "-p=" + tempDir.resolve("missing.json");
 

@@ -1,6 +1,8 @@
 package com.copybot.engine;
 
 import com.copybot.engine.pipeline.ItemStatus;
+import com.copybot.engine.pipeline.PipelineChecks;
+import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.resume.ItemKey;
@@ -73,6 +75,17 @@ public final class Plan {
 
     public PipelineState getState() {
         return executor.getState();
+    }
+
+    /** Why this plan cannot be executed (no input, or neither output nor process step), empty when it can. */
+    public Optional<String> executionRefusal() {
+        PipelineConfig config = executor.pipelineConfig();
+        return config == null ? Optional.empty() : PipelineChecks.executionRefusal(config);
+    }
+
+    /** False when the pipeline does nothing with the files: it can be inspected but not executed. */
+    public boolean canExecute() {
+        return executionRefusal().isEmpty();
     }
 
     public ResumeProposal getProposal() {

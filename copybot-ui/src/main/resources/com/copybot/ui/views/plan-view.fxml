@@ -62,6 +62,7 @@
             <Button fx:id="prepareButton" mnemonicParsing="false" onAction="#onPrepareClick" text="%plan.prepare" />
             <Button fx:id="copyButton" managed="false" mnemonicParsing="false" onAction="#onCopyClick" visible="false" />
             <CheckBox fx:id="autoExecuteBox" mnemonicParsing="false" onAction="#onAutoExecuteClick" text="%plan.auto-execute" />
+            <Label fx:id="warningLabel" managed="false" style="-fx-text-fill: #c87f0a;" visible="false" wrapText="true" />
             <Button fx:id="pauseButton" managed="false" mnemonicParsing="false" onAction="#onPauseClick" text="%plan.pause" visible="false" />
             <Button fx:id="resumeButton" managed="false" mnemonicParsing="false" onAction="#onResumeClick" text="%plan.resume" visible="false" />
             <Button fx:id="stopButton" managed="false" mnemonicParsing="false" onAction="#onStopClick" text="%plan.stop" visible="false" />

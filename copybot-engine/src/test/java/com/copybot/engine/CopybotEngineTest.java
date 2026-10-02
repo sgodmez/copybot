@@ -298,6 +298,69 @@ public class CopybotEngineTest {
         }
     }
 
+    private Path pipelineWithout(String name, String inSteps, String rest) throws IOException {
+        return Files.writeString(tempDir.resolve(name), "{" + inSteps + rest + "}");
+    }
+
+    private String inStep(Path in) {
+        return "\"inSteps\": [ { \"action\": \"file.read\", \"actionConfig\": { \"path\": \"" + json(in) + "\" } } ]";
+    }
+
+    @Test
+    public void aPipelineWithoutInputStepIsRefusedBeforeAnythingRuns() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("a.txt"), "a");
+        Path out = tempDir.resolve("out");
+        String outStep = "\"outStep\": { \"action\": \"file.write\", \"actionConfig\": { \"outPattern\": \"" + json(out) + "/{name}\" } }";
+        Path none = pipelineWithout("none.json", "", outStep);
+        Path empty = pipelineWithout("empty.json", "\"inSteps\": [],", outStep);
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            for (Path pipeline : List.of(none, empty)) {
+                CopybotException prepare = assertThrows(CopybotException.class, () -> engine.prepare(pipeline, null));
+                assertEquals(com.copybot.resources.ResourcesEngine.getString("pipeline.no-input"), prepare.getMessage());
+                assertThrows(CopybotException.class, () -> engine.run(pipeline, null));
+            }
+            assertFalse(Files.exists(out), "nothing is written");
+            // the engine is not left busy: a valid pipeline still runs
+            Path valid = pipelineWithout("valid.json", inStep(in) + ",", outStep);
+            assertEquals(PipelineStatus.SUCCESS, engine.run(valid, null).await());
+        }
+    }
+
+    @Test
+    public void aPipelineThatDoesNothingIsPreparedButNeverExecuted() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("a.txt"), "a");
+        Path inOnly = pipelineWithout("in-only.json", inStep(in), "");
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            Plan plan = engine.prepare(inOnly, null);
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus(), "inspecting the analyses is useful");
+            assertFalse(plan.canExecute());
+            assertEquals(com.copybot.resources.ResourcesEngine.getString("pipeline.does-nothing"),
+                    plan.executionRefusal().orElseThrow());
+            CopybotException refused = assertThrows(CopybotException.class, () -> engine.execute(plan, null));
+            assertEquals(com.copybot.resources.ResourcesEngine.getString("pipeline.does-nothing"), refused.getMessage());
+            assertThrows(CopybotException.class, () -> engine.run(inOnly, null));
+            // the engine is not left busy
+            assertEquals(PipelineStatus.PREPARED, engine.prepare(inOnly, null).getState().getStatus());
+        }
+    }
+
+    @Test
+    public void aPipelineWithOnlyAProcessStepCanBeExecuted() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("a.txt"), "a");
+        Path process = pipelineWithout("process.json", inStep(in) + ",",
+                "\"actionSteps\": [ { \"action\": \"nope.nope\", \"actionConfig\": {} } ]");
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            // no embedded process action exists: an unknown one fails the preparation itself, so only the
+            // execution rule is checked here (a process step without out step is allowed)
+            Plan plan = engine.prepare(process, null);
+            assertTrue(plan.canExecute());
+            assertTrue(plan.executionRefusal().isEmpty());
+        }
+    }
+
     /** Any present, non-null mode that is not a string is an unknown resume mode, never "not a JSON". */
     @Test
     public void aNonStringResumeModeIsAnUnknownMode() throws Exception {

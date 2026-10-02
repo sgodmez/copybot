@@ -39,7 +39,9 @@ public class SafeWriteBundleTest {
             "sample.analysis-failed",
             "sample.filtered",
             "sample.unsupported",
-            "sample.dryrun-failed");
+            "sample.dryrun-failed",
+            "pipeline.no-input",
+            "pipeline.does-nothing");
 
     /** Properties.load(InputStream) reads ISO-8859-1 and the backslash-u escapes, like ResourceBundle. */
     private static Properties bundle(String name) throws IOException {

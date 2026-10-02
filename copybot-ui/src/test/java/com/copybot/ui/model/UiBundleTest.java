@@ -31,6 +31,7 @@ public class UiBundleTest {
             "plan.resume.source.MANUAL", "plan.resume.change", "plan.placeholder",
             "plan.filter.ALL", "plan.filter.TO_COPY", "plan.filter.SKIPPED", "plan.filter.ERRORS",
             "plan.column.date", "plan.column.target", "plan.menu.resume-from-here", "plan.prepare", "plan.copy",
+            "plan.warning.nothing-to-copy",
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
             "plan.analysing", "plan.resolving",
             "plan.prepare-failed", "plan.finished",
@@ -54,7 +55,7 @@ public class UiBundleTest {
             "editor.invalid-value", "editor.json.title", "editor.discard", "editor.save-failed",
             "editor.invalid-fields",
             "item.status.SKIPPED.no-reason", "editor.save.tooltip", "editor.save-as.tooltip", "editor.show-json.tooltip",
-            "editor.lenient", "editor.overwrite", "home.state-file");
+            "editor.lenient", "editor.overwrite", "home.state-file", "editor.incomplete", "editor.save-anyway");
 
     @BeforeAll
     public static void registerUiBundle() {

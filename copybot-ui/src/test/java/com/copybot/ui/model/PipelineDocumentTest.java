@@ -5,6 +5,7 @@ import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
+import com.copybot.ui.model.PipelineDocument.Gap;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
 import com.google.gson.JsonObject;
@@ -753,5 +754,33 @@ public class PipelineDocumentTest {
                 "a leading dot is no extension");
         assertEquals(Path.of("foo..json"), PipelineDocument.withDefaultExtension(Path.of("foo.")),
                 "nor a trailing one");
+    }
+
+    @Test
+    public void aDocumentMissingPartsAreListed() {
+        assertEquals(List.of(Gap.NO_INPUT, Gap.DOES_NOTHING), PipelineDocument.empty().gaps());
+        assertEquals(List.of(Gap.NO_INPUT), PipelineDocument.parse("{\"inSteps\":[],\"outStep\":{\"action\":\"file.write\"}}").gaps());
+        assertEquals(List.of(Gap.DOES_NOTHING), PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}]}").gaps());
+    }
+
+    @Test
+    public void analyseStepsNeverCountAsDoingSomething() {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}],\"analyseSteps\":[{\"action\":\"exif\"}]}");
+
+        assertEquals(List.of(Gap.DOES_NOTHING), document.gaps());
+    }
+
+    @Test
+    public void anOutputOrAProcessStepIsEnoughAndANullOutputIsAbsent() {
+        assertEquals(List.of(), PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}],\"outStep\":{\"action\":\"file.write\"}}").gaps());
+        assertEquals(List.of(), PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}],\"actionSteps\":[{\"action\":\"rename\"}]}").gaps());
+        assertEquals(List.of(Gap.DOES_NOTHING), PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}],\"outStep\":null}").gaps());
+    }
+
+    @Test
+    public void theGapsHaveATranslatedMessage() {
+        for (Gap gap : Gap.values()) {
+            assertFalse(gap.message().startsWith("%"), gap.name());
+        }
     }
 }

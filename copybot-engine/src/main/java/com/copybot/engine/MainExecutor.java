@@ -556,6 +556,11 @@ public class MainExecutor implements Runnable {
         stopNotifier(); // includes the final, guaranteed notification
     }
 
+    /** The pipeline configuration, null for an executor built from pre-resolved steps. */
+    PipelineConfig pipelineConfig() {
+        return pipelineConfig;
+    }
+
     /** The out step's action, null when the pipeline has none or its steps are not resolved (yet). */
     IOutAction findOutAction() {
         if (itemSteps != null && !itemSteps.isEmpty() && itemSteps.getLast().getAction() instanceof IOutAction out) {

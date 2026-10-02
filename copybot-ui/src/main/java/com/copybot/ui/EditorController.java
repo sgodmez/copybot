@@ -67,6 +67,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * The generic pipeline editor (spec desktop-ui §3, variant A): a tree of the sections on the left, the form
@@ -797,7 +798,7 @@ public class EditorController {
 
     @FXML
     protected void onSaveClick() {
-        if (saving || !canSave()) {
+        if (saving || !canSave() || !confirmIncomplete()) {
             return;
         }
         if (path == null) {
@@ -809,10 +810,27 @@ public class EditorController {
 
     @FXML
     protected void onSaveAsClick() {
-        if (saving || !canSave()) {
+        if (saving || !canSave() || !confirmIncomplete()) {
             return;
         }
         chooseTarget().ifPresent(this::saveTo);
+    }
+
+    /**
+     * The warning of a pipeline without input step, or doing nothing with the files (not blocking, unlike the
+     * required fields): true to save anyway. Asked on every save, before any file chooser.
+     */
+    private boolean confirmIncomplete() {
+        List<PipelineDocument.Gap> gaps = document.gaps();
+        if (gaps.isEmpty()) {
+            return true;
+        }
+        ButtonType saveAnyway = new ButtonType(ResourcesEngine.getString("editor.save-anyway"), ButtonBar.ButtonData.OK_DONE);
+        String lines = gaps.stream().map(PipelineDocument.Gap::message).collect(Collectors.joining("\n"));
+        Alert alert = new Alert(Alert.AlertType.WARNING, ResourcesEngine.getString("editor.incomplete", lines),
+                saveAnyway, ButtonType.CANCEL);
+        alert.initOwner(stage);
+        return alert.showAndWait().filter(choice -> choice == saveAnyway).isPresent();
     }
 
     /**

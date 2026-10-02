@@ -6,6 +6,7 @@ import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.FieldKind;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.JsonTexts;
 import com.copybot.utils.GsonUtil;
 import com.google.gson.Gson;
@@ -389,6 +390,37 @@ public final class PipelineDocument {
         List<JsonObject> steps = new ArrayList<>();
         value.getAsJsonArray().forEach(element -> steps.add(element.getAsJsonObject()));
         return steps;
+    }
+
+    /** What a saved pipeline lacks to be useful: not blocking, the save only warns (same rules as the engine). */
+    public enum Gap {
+        /** no input step: there is nothing to list */
+        NO_INPUT("pipeline.no-input"),
+        /** neither output nor process step (analyse steps never count): nothing is done with the files */
+        DOES_NOTHING("pipeline.does-nothing");
+
+        private final String messageKey;
+
+        Gap(String messageKey) {
+            this.messageKey = messageKey;
+        }
+
+        /** The localized sentence, the one the engine gives when it refuses such a pipeline. */
+        public String message() {
+            return ResourcesEngine.getString(messageKey);
+        }
+    }
+
+    /** The parts missing from the pipeline, empty when it is complete. */
+    public List<Gap> gaps() {
+        List<Gap> gaps = new ArrayList<>();
+        if (steps(Section.IN).isEmpty()) {
+            gaps.add(Gap.NO_INPUT);
+        }
+        if (steps(Section.OUT).isEmpty() && steps(Section.PROCESS).isEmpty()) {
+            gaps.add(Gap.DOES_NOTHING);
+        }
+        return gaps;
     }
 
     /** The output holds at most one step (spec desktop-ui §3). */

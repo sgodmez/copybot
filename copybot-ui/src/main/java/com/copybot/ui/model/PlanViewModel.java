@@ -84,6 +84,13 @@ public final class PlanViewModel {
     private ResumeProposal proposal;
     private ResumePoint override;
     private Throwable failure;
+    /** Why the prepared plan cannot be executed (the pipeline does nothing with the files), null when it can. */
+    private String executionRefusal;
+    /**
+     * Why the pipeline cannot be prepared (no input step), null when it can; it belongs to the pipeline read,
+     * not to a preparation: kept by {@link #reset()} and {@link #startPreparing()}.
+     */
+    private String preparationRefusal;
     private Set<WorkItemExecution> selectedAtStart = Set.of();
 
     /** @param autoExecute "ui.autoExecute" of the pipeline: copy as soon as the plan is ready */
@@ -128,6 +135,7 @@ public final class PlanViewModel {
         warnings = List.of();
         proposal = null;
         override = null;
+        executionRefusal = null;
         failure = null;
         selectedAtStart = Set.of();
     }
@@ -253,11 +261,42 @@ public final class PlanViewModel {
     }
 
     public boolean canPrepare() {
-        return !isActive();
+        return !isActive() && preparationRefusal == null;
     }
 
     public boolean canCopy() {
-        return phase == Phase.PREPARED && counts().selected() > 0;
+        return phase == Phase.PREPARED && counts().selected() > 0 && executionRefusal == null;
+    }
+
+    /** What the pipeline read says about its preparation (no input step); set again each time it is read. */
+    public void setPreparationRefusal(Optional<String> refusal) {
+        this.preparationRefusal = refusal.orElse(null);
+    }
+
+    /** What the engine says about the prepared plan ({@code Plan.executionRefusal}); forgotten by the next preparation. */
+    public void setExecutionRefusal(Optional<String> refusal) {
+        this.executionRefusal = refusal.orElse(null);
+    }
+
+    /**
+     * The warning shown beside the buttons when Prepare or Copy stays disabled because of the pipeline or the
+     * plan: no input step, the pipeline does nothing with the files, no file to copy. Empty otherwise (a running
+     * operation is told by the status line).
+     */
+    public Optional<String> warning() {
+        if (preparationRefusal != null) {
+            return Optional.of(preparationRefusal);
+        }
+        if (phase != Phase.PREPARED) {
+            return Optional.empty();
+        }
+        if (executionRefusal != null) {
+            return Optional.of(executionRefusal);
+        }
+        if (counts().selected() == 0) {
+            return Optional.of(ResourcesEngine.getString("plan.warning.nothing-to-copy"));
+        }
+        return Optional.empty();
     }
 
     public boolean canPause() {

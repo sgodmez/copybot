@@ -93,6 +93,8 @@ public class PlanController {
     @FXML private Button prepareButton;
     @FXML private Button copyButton;
     @FXML private CheckBox autoExecuteBox;
+    /** Why Prepare or Copy stays disabled (no input step, nothing done with the files, nothing to copy). */
+    @FXML private Label warningLabel;
     @FXML private Button pauseButton;
     @FXML private Button resumeButton;
     @FXML private Button stopButton;
@@ -229,6 +231,8 @@ public class PlanController {
             return;
         }
         loading = false;
+        model.setPreparationRefusal(document.gaps().contains(PipelineDocument.Gap.NO_INPUT)
+                ? Optional.of(PipelineDocument.Gap.NO_INPUT.message()) : Optional.empty());
         model.setAutoExecute(document.autoExecute());
         autoExecuteBox.setSelected(model.isAutoExecute());
         summary = loaded;
@@ -370,6 +374,7 @@ public class PlanController {
         }
         plan = prepared;
         preparingPlan = null;
+        model.setExecutionRefusal(prepared.executionRefusal());
         model.update(prepared.getState(), prepared.getOrderedItems());
         afterUpdate();
     }
@@ -664,6 +669,10 @@ public class PlanController {
         copyButton.setText(model.copyLabel());
         copyButton.setDisable(busy || !model.canCopy());
         show(autoExecuteBox, !model.isExecutionActive());
+        // text, not a tooltip: a disabled button gets no mouse event, so its tooltip never shows
+        Optional<String> warning = model.warning();
+        warningLabel.setText(warning.map(w -> "⚠ " + w).orElse(""));
+        show(warningLabel, warning.isPresent());
         show(pauseButton, model.isExecutionActive() && !model.canResume());
         show(resumeButton, model.canResume());
         show(stopButton, model.isExecutionActive());

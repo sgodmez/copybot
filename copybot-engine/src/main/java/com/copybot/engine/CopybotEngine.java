@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.config.CopybotConfig;
+import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
@@ -140,6 +141,7 @@ public final class CopybotEngine implements AutoCloseable {
         begin();
         MainExecutor mainExecutor = endOnFailure(() -> {
             PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            PipelineChecks.requirePreparable(pipelineConfig);
             return new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
         });
         return prepareBegun(mainExecutor, started);
@@ -169,6 +171,9 @@ public final class CopybotEngine implements AutoCloseable {
             if (plan.getState().getStatus() != PipelineStatus.PREPARED) {
                 throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", plan.getState().getStatus()));
             }
+            plan.executionRefusal().ifPresent(message -> {
+                throw CopybotException.of(message);
+            });
             MainExecutor mainExecutor = plan.getExecutor();
             synchronized (lock) {
                 if (preparedPlan == mainExecutor) {
@@ -195,6 +200,7 @@ public final class CopybotEngine implements AutoCloseable {
         begin();
         return endOnFailure(() -> {
             PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            PipelineChecks.requireExecutable(pipelineConfig);
             ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE
                     ? null
                     : resumeContext(pipelinePath, pipelineConfig);

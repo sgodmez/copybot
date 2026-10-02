@@ -211,6 +211,57 @@ public class PlanViewModelTest {
         assertFalse(prepared(false, a).canCopy());
     }
 
+    @Test
+    public void aPipelineThatDoesNothingCannotBeCopiedAndSaysWhy() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        PlanViewModel model = prepared(false, a);
+        assertTrue(model.canCopy());
+        assertTrue(model.warning().isEmpty());
+
+        model.setExecutionRefusal(Optional.of("nothing is done with the files"));
+
+        assertFalse(model.canCopy());
+        assertEquals(Optional.of("nothing is done with the files"), model.warning());
+        assertEquals(1, model.counts().selected(), "the plan is still shown");
+
+        model.startPreparing(); // a new preparation forgets the previous plan's refusal
+        assertTrue(model.warning().isEmpty());
+    }
+
+    @Test
+    public void nothingToCopyIsAWarning() throws IOException {
+        WorkItemExecution skipped = item("a.jpg", 1);
+        skipped.setSkipped("already imported");
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.warning.nothing-to-copy")),
+                prepared(false, skipped).warning());
+    }
+
+    @Test
+    public void aPipelineWithoutInputCannotBePreparedAndSaysWhy() {
+        PlanViewModel model = new PlanViewModel(false);
+
+        model.setPreparationRefusal(Optional.of("nothing to list"));
+
+        assertFalse(model.canPrepare());
+        assertEquals(Optional.of("nothing to list"), model.warning());
+        model.reset(); // a reload keeps it until the pipeline is read again
+        assertFalse(model.canPrepare());
+
+        model.setPreparationRefusal(Optional.empty()); // the pipeline was fixed in the editor
+        assertTrue(model.canPrepare());
+        assertTrue(model.warning().isEmpty());
+    }
+
+    @Test
+    public void aRunningPreparationIsNoWarning() {
+        PlanViewModel model = new PlanViewModel(false);
+
+        model.startPreparing();
+
+        assertTrue(model.warning().isEmpty(), "the status line tells it");
+    }
+
     // ---- rows ----
 
     @Test
