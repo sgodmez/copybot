@@ -21,7 +21,6 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 /** The plugins of this JVM as they were loaded, read-only (spec plugins-view §2). */
 public class PluginsController {
@@ -34,7 +33,6 @@ public class PluginsController {
 
     @FXML private Label configFileLabel;
     @FXML private Label pluginPathLabel;
-    @FXML private Label devPathsLabel;
     @FXML private VBox warningsBox;
     @FXML private ListView<PluginEntry> pluginList;
     @FXML private VBox detailBox;
@@ -101,8 +99,6 @@ public class PluginsController {
         this.report = report;
         configFileLabel.setText(report.configFile().toString());
         pluginPathLabel.setText(report.pluginPath() + (report.pluginPathConfigured() ? "" : " " + ResourcesEngine.getString("plugins.default")));
-        devPathsLabel.setText(report.devPluginPaths().isEmpty() ? "—"
-                : report.devPluginPaths().stream().map(Path::toString).collect(Collectors.joining("; ")));
         warningsBox.getChildren().clear();
         for (String warning : report.warnings()) {
             warningsBox.getChildren().add(banner(warning, "#fff3e0", "#e65100"));

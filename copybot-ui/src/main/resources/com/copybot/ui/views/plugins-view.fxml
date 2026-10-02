@@ -19,8 +19,6 @@
                   <Label fx:id="configFileLabel" GridPane.columnIndex="1" GridPane.rowIndex="0" />
                   <Label text="%plugins.plugin-path" GridPane.rowIndex="1" />
                   <Label fx:id="pluginPathLabel" GridPane.columnIndex="1" GridPane.rowIndex="1" />
-                  <Label text="%plugins.dev-paths" GridPane.rowIndex="2" />
-                  <Label fx:id="devPathsLabel" GridPane.columnIndex="1" GridPane.rowIndex="2" />
                </children>
             </GridPane>
             <VBox fx:id="warningsBox" spacing="2.0" />
