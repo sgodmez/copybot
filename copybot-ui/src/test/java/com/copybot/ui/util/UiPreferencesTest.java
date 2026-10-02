@@ -11,8 +11,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
-import java.util.prefs.AbstractPreferences;
-import java.util.prefs.BackingStoreException;
 import java.util.prefs.Preferences;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -27,9 +25,11 @@ public class UiPreferencesTest {
 
     @Test
     public void theTestsNeverReachTheRealUserRoot() {
-        // surefire installs GuardedPreferencesFactory: any Preferences.userRoot()/userNodeForPackage lands there
+        // surefire installs GuardedPreferencesFactory: any Preferences.userRoot()/userNodeForPackage fails there
         assertEquals(GuardedPreferencesFactory.class.getName(), System.getProperty("java.util.prefs.PreferencesFactory"));
-        assertEquals(0, GuardedPreferencesFactory.userRootRequests(), "no test code asked for the user root");
+        AssertionError reached = assertThrows(AssertionError.class, Preferences::userRoot);
+        assertTrue(reached.getMessage().contains("real user preferences"), reached.getMessage());
+        assertThrows(AssertionError.class, Preferences::systemRoot);
     }
 
     @Test
@@ -72,58 +72,6 @@ public class UiPreferencesTest {
         for (int i = 0; i < kept; i++) {
             assertEquals(longName + (RecentPipelines.MAX - 1 - i), saved.entries().get(i).displayName(),
                     "the most recent are kept, in order");
-        }
-    }
-
-    /** A minimal in-memory node (no OS store). */
-    static final class MemoryPreferences extends AbstractPreferences {
-        private final java.util.Map<String, String> values = new java.util.HashMap<>();
-
-        MemoryPreferences() {
-            super(null, "");
-        }
-
-        @Override
-        protected void putSpi(String key, String value) {
-            values.put(key, value);
-        }
-
-        @Override
-        protected String getSpi(String key) {
-            return values.get(key);
-        }
-
-        @Override
-        protected void removeSpi(String key) {
-            values.remove(key);
-        }
-
-        @Override
-        protected void removeNodeSpi() {
-            values.clear();
-        }
-
-        @Override
-        protected String[] keysSpi() {
-            return values.keySet().toArray(String[]::new);
-        }
-
-        @Override
-        protected String[] childrenNamesSpi() {
-            return new String[0];
-        }
-
-        @Override
-        protected AbstractPreferences childSpi(String name) {
-            return new MemoryPreferences();
-        }
-
-        @Override
-        protected void syncSpi() throws BackingStoreException {
-        }
-
-        @Override
-        protected void flushSpi() throws BackingStoreException {
         }
     }
 }

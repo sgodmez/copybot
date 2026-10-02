@@ -29,7 +29,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -92,16 +94,18 @@ public final class PipelineDocument {
 
     private final JsonObject root;
     private final boolean lenient;
+    private final List<String> duplicateKeys;
     private boolean modified;
 
-    private PipelineDocument(JsonObject root, boolean lenient) {
+    private PipelineDocument(JsonObject root, boolean lenient, List<String> duplicateKeys) {
         this.root = root;
         this.lenient = lenient;
+        this.duplicateKeys = List.copyOf(duplicateKeys);
     }
 
     /** A new pipeline: no step. */
     public static PipelineDocument empty() {
-        return new PipelineDocument(new JsonObject(), false);
+        return new PipelineDocument(new JsonObject(), false, List.of());
     }
 
     /**
@@ -114,11 +118,29 @@ public final class PipelineDocument {
     }
 
     /**
+     * The file a "Save as" writes to: ".json" appended when the name typed has no extension at all
+     * ("sd-to-nas", ".pipeline", "foo."); any typed extension is kept ("foo.txt").
+     */
+    public static Path withDefaultExtension(Path path) {
+        String name = path.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        return dot > 0 && dot < name.length() - 1 ? path : path.resolveSibling(name + ".json");
+    }
+
+    /**
      * The file was read as non-strict JSON (comments, single quotes, unquoted names...), which the engine
      * accepts: saving rewrites it as strict JSON, its comments and layout are lost.
      */
     public boolean isLenient() {
         return lenient;
+    }
+
+    /**
+     * The members written more than once in an object of the file ("inSteps[0].action"), in file order:
+     * like the engine, the last value is the one read, and saving drops the others.
+     */
+    public List<String> duplicateKeys() {
+        return duplicateKeys;
     }
 
     /** @throws CopybotException pipeline.not-found, pipeline.not-json (also for a step that is not an object) */
@@ -153,7 +175,43 @@ public final class PipelineDocument {
                 throw new IllegalArgumentException("\"" + section.jsonName() + "\" is not made of step objects");
             }
         }
-        return new PipelineDocument(root, !isStrictJson(json));
+        return new PipelineDocument(root, !isStrictJson(json), duplicateKeys(json));
+    }
+
+    /** The paths of the members repeated in an object, read as leniently as the tree was parsed. */
+    private static List<String> duplicateKeys(String json) {
+        List<String> duplicates = new ArrayList<>();
+        try (JsonReader reader = new JsonReader(new StringReader(json))) {
+            reader.setStrictness(Strictness.LENIENT);
+            collectDuplicateKeys(reader, duplicates);
+        } catch (IOException | RuntimeException e) {
+            // parsed already: cannot happen, and only a warning is lost
+        }
+        return duplicates;
+    }
+
+    private static void collectDuplicateKeys(JsonReader reader, List<String> duplicates) throws IOException {
+        switch (reader.peek()) {
+            case BEGIN_OBJECT -> {
+                reader.beginObject();
+                Set<String> names = new HashSet<>();
+                while (reader.hasNext()) {
+                    if (!names.add(reader.nextName())) {
+                        duplicates.add(reader.getPath().replaceFirst("^\\$\\.", ""));
+                    }
+                    collectDuplicateKeys(reader, duplicates);
+                }
+                reader.endObject();
+            }
+            case BEGIN_ARRAY -> {
+                reader.beginArray();
+                while (reader.hasNext()) {
+                    collectDuplicateKeys(reader, duplicates);
+                }
+                reader.endArray();
+            }
+            default -> reader.skipValue();
+        }
     }
 
     /** The text is one strict (RFC 8259) JSON value: no comment, single quote, unquoted name... */
@@ -187,7 +245,8 @@ public final class PipelineDocument {
     /**
      * Writes the pipeline without ever overwriting the file in place: the content goes to a temp file of the
      * same directory, which then replaces the target (atomically when the file system can). On any failure the
-     * temp file is deleted and the target is left as it was.
+     * temp file is deleted and the target is left as it was. On a POSIX file system the replaced file keeps
+     * its permissions (a temp file is created owner-only).
      */
     public void save(Path path) throws IOException {
         save(path, temp -> { });
@@ -198,6 +257,7 @@ public final class PipelineDocument {
         Path target = path.toAbsolutePath();
         Path temp = Files.createTempFile(target.getParent(), "pipeline-", ".tmp");
         try {
+            keepPosixPermissions(target, temp);
             try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 ByteBuffer content = ByteBuffer.wrap(toJson().getBytes(StandardCharsets.UTF_8));
                 while (content.hasRemaining()) {
@@ -220,6 +280,14 @@ public final class PipelineDocument {
             throw e;
         }
         modified = false;
+    }
+
+    /** Gives the temp file the permissions of the file it replaces, when there is one on a POSIX file system. */
+    private static void keepPosixPermissions(Path target, Path temp) throws IOException {
+        if (!Files.exists(target) || !Files.getFileStore(temp).supportsFileAttributeView(PosixFileAttributeView.class)) {
+            return;
+        }
+        Files.setPosixFilePermissions(temp, Files.getPosixFilePermissions(target));
     }
 
     @FunctionalInterface
@@ -434,7 +502,7 @@ public final class PipelineDocument {
      * @throws IllegalArgumentException not a number, not a boolean, a record or a list of records
      */
     public void setConfigText(JsonObject step, ConfigField field, String text) {
-        setText(step, configPath(field), field, text);
+        setText(step, configPath(field), field, text, false);
     }
 
     /** The text of one of the {@link #ADVANCED_FIELDS} of the step. */
@@ -442,8 +510,9 @@ public final class PipelineDocument {
         return text(get(step, List.of(field.name())), field);
     }
 
+    /** Like {@link #setConfigText}; an integer stays within the int range (an Integer of PipelineStepConfig). */
     public void setAdvancedText(JsonObject step, ConfigField field, String text) {
-        setText(step, List.of(field.name()), field, text);
+        setText(step, List.of(field.name()), field, text, true);
     }
 
     /** The JSON value of a schema field of the step's actionConfig, null when absent. */
@@ -488,12 +557,12 @@ public final class PipelineDocument {
         return value.isJsonPrimitive() ? value.getAsString() : value.toString();
     }
 
-    private void setText(JsonObject base, List<String> path, ConfigField field, String text) {
+    private void setText(JsonObject base, List<String> path, ConfigField field, String text, boolean intRange) {
         String input = text == null ? "" : text;
         if (normalized(field, input).equals(normalized(field, text(get(base, path), field)))) {
             return; // the text shown, untouched: not even parsed (a value invalid in the file stays as is)
         }
-        JsonElement value = valueOf(field, input);
+        JsonElement value = valueOf(field, input, intRange);
         if (text(value, field).equals(text(get(base, path), field))) {
             return; // same value: nothing is rewritten ("8" stays 8, a list keeps its layout)
         }
@@ -541,8 +610,12 @@ public final class PipelineDocument {
         return text.strip();
     }
 
-    /** The JSON value of a text, null for a blank one. */
-    private static JsonElement valueOf(ConfigField field, String text) {
+    /**
+     * The JSON value of a text, null for a blank one. An integer is within the long range: the schema does
+     * not tell an int component from a long one (the engine refuses an int out of range when it loads the
+     * configuration); within the int range when {@code intRange}.
+     */
+    private static JsonElement valueOf(ConfigField field, String text, boolean intRange) {
         if (field.kind() == FieldKind.LIST) {
             if (field.elementSchema() == null || field.elementSchema().kind() == FieldKind.RECORD
                     || field.elementSchema().kind() == FieldKind.LIST) {
@@ -551,7 +624,7 @@ public final class PipelineDocument {
             JsonArray array = new JsonArray();
             for (String line : text.split("\\R")) {
                 if (!line.isBlank()) {
-                    array.add(valueOf(field.elementSchema(), line.strip()));
+                    array.add(valueOf(field.elementSchema(), line.strip(), intRange));
                 }
             }
             return array.isEmpty() ? null : array;
@@ -566,9 +639,10 @@ public final class PipelineDocument {
                 case "false" -> new JsonPrimitive(false);
                 default -> throw new IllegalArgumentException(value);
             };
-            case INTEGER -> { // "8" or "8.0", within the int range
+            case INTEGER -> { // "8" or "8.0"
                 try {
-                    yield new JsonPrimitive(new BigDecimal(value).intValueExact());
+                    BigDecimal number = new BigDecimal(value);
+                    yield new JsonPrimitive(intRange ? number.intValueExact() : number.longValueExact());
                 } catch (NumberFormatException | ArithmeticException e) {
                     throw new IllegalArgumentException(value, e);
                 }

@@ -244,6 +244,20 @@ public class MainExecutorControlTest {
     }
 
     @Test
+    public void aListingInterruptedByAnyoneButThePhaseIsAFailureNotACancel() {
+        // an interrupt the phase did not send (the plugin's own thread handling, a foreign interrupt...)
+        MainExecutor exec = singlePhase(new ManyIn(tempDir, 3, () -> Thread.currentThread().interrupt()),
+                new GatedOut(Set.of(), null), registry(Map.of("disk:*", 1000)));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus(), "the listing stopped short: never a success");
+        assertInstanceOf(IllegalStateException.class, exec.getState().getFailure());
+        assertEquals(1, exec.getState().getWorkItems().size(), "nothing is emitted after the interrupt");
+        assertFalse(Thread.interrupted(), "the interrupt stays in the listing thread");
+    }
+
+    @Test
     public void aCancelRacingWithTheEndOfTheExecutionNeverCorruptsTheOutcome() throws Exception {
         for (int round = 0; round < 40; round++) {
             Path dir = Files.createDirectory(tempDir.resolve("round" + round));

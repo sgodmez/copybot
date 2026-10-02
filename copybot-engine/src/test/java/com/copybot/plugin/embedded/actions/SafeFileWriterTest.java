@@ -3,6 +3,7 @@ package com.copybot.plugin.embedded.actions;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
+import com.copybot.plugin.api.action.WriteContext;
 import com.google.gson.Gson;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -221,6 +223,36 @@ public class SafeFileWriterTest {
     @Test
     public void theRunIdIsTheLastSegmentOfATemporaryName() {
         assertEquals("run1", SafeFileWriter.runIdOf(".IMG.0001.JPG.run1" + SafeFileWriter.TEMP_SUFFIX));
+        assertEquals(".IMG.0001.JPG.run1" + SafeFileWriter.TEMP_SUFFIX, SafeFileWriter.tempName("IMG.0001.JPG", "run1"));
+    }
+
+    @Test
+    public void aLongTargetNameIsWrittenThroughAShortenedTemporaryName() throws IOException {
+        String runId = WriteContext.newRun().runId();
+        Path target = nas().resolve("a".repeat(240) + ".jpg"); // fits the 255 limit, its temporary name would not
+
+        writer("").write(local("abc"), target, false, runId, p -> {
+        });
+
+        assertEquals("abc", Files.readString(target));
+        assertEquals(List.of(target.getFileName().toString()), names(nas()));
+    }
+
+    @Test
+    public void aShortenedTemporaryNameFitsKeepsTheRunIdAndStaysDistinct() {
+        String runId = WriteContext.newRun().runId();
+        String longName = "é".repeat(120) + ".jpg"; // 244 UTF-8 bytes
+        String other = "é".repeat(120) + ".png";
+
+        String temp = SafeFileWriter.tempName(longName, runId);
+
+        assertTrue(temp.getBytes(StandardCharsets.UTF_8).length <= 255, temp);
+        assertTrue(temp.startsWith(".é") && temp.endsWith(SafeFileWriter.TEMP_SUFFIX), temp);
+        assertEquals(runId, SafeFileWriter.runIdOf(temp), "still recognised by the orphan cleaning");
+        assertNotEquals(temp, SafeFileWriter.tempName(other, runId));
+        String emoji = SafeFileWriter.tempName("📷".repeat(60) + ".jpg", runId); // never split in a pair
+        assertTrue(emoji.getBytes(StandardCharsets.UTF_8).length <= 255, emoji);
+        assertEquals(emoji, new String(emoji.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8));
     }
 
     /** Test hook: rewrites the written file with other bytes of the same length before the verification. */

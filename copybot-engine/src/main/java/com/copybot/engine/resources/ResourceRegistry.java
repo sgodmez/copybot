@@ -11,6 +11,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 /**
@@ -40,7 +41,8 @@ public final class ResourceRegistry {
 
     private static final class Waiter {
         final Set<String> resources;
-        final long since;
+        /** Start of the wait, moved forward by the paused time on resume (see {@link #resume()}). */
+        long since;
         int bypassCount;
         boolean granted;
 
@@ -58,9 +60,20 @@ public final class ResourceRegistry {
 
     /** While true nothing is granted (see {@link #pause()}). Guarded by lock. */
     private boolean paused;
+    /** When the current pause began, on {@code clock}. Guarded by lock. */
+    private long pausedAt;
+
+    /** Milliseconds, for the starvation age. */
+    private final LongSupplier clock;
 
     public ResourceRegistry(ResourceSettings settings) {
+        this(settings, System::currentTimeMillis);
+    }
+
+    // visible for tests: a controllable clock for the starvation age
+    ResourceRegistry(ResourceSettings settings, LongSupplier clock) {
         this.settings = settings;
+        this.clock = clock;
     }
 
     /**
@@ -94,17 +107,28 @@ public final class ResourceRegistry {
      */
     public void pause() {
         synchronized (lock) {
-            paused = true;
+            if (!paused) {
+                paused = true;
+                pausedAt = clock.getAsLong();
+            }
         }
     }
 
-    /** Lifts a {@link #pause()}: grants whatever became grantable and wakes {@link #awaitNotPaused()} callers. */
+    /**
+     * Lifts a {@link #pause()}: grants whatever became grantable and wakes {@link #awaitNotPaused()} callers.
+     * The paused time is not waiting time for the anti-starvation (nobody could be served meanwhile):
+     * otherwise a long pause would starve every waiter at once, hence strict FIFO right after the resume.
+     */
     public void resume() {
         synchronized (lock) {
             if (!paused) {
                 return;
             }
             paused = false;
+            long now = clock.getAsLong();
+            for (Waiter waiter : waiters) {
+                waiter.since += now - Math.max(waiter.since, pausedAt); // arrived during the pause: since = now
+            }
             grantEligibleWaiters();
             lock.notifyAll();
         }
@@ -143,7 +167,7 @@ public final class ResourceRegistry {
             awaitNotPaused();
             return;
         }
-        Waiter me = new Waiter(canonical, System.currentTimeMillis());
+        Waiter me = new Waiter(canonical, clock.getAsLong());
         synchronized (lock) {
             canonical.forEach(this::countFor); // materialize so the scan sees their free capacity
             waiters.addLast(me);
@@ -215,7 +239,7 @@ public final class ResourceRegistry {
                 grantable.add(entry.getKey());
             }
         }
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         List<Waiter> skipped = new ArrayList<>();
         Set<String> reserved = new HashSet<>(); // resources held back for starved waiters
         Iterator<Waiter> it = waiters.iterator();

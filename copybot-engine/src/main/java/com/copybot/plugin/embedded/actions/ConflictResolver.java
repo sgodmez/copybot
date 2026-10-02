@@ -41,6 +41,9 @@ final class ConflictResolver {
      * A candidate that is the local source file itself (e.g. file.read on the destination tree, the out
      * pattern giving back the same path) is skipped before any comparison, whatever the policies: a file
      * compared with itself is "identical", and overwriting it or deleting the source would lose the only copy.
+     * <p>
+     * A directory at a candidate is "different", without comparison: "rename" goes around it, "skip" skips,
+     * "error" fails, and "overwrite" fails at the write (a file never replaces a directory).
      *
      * @throws CopybotException write.conflict.error when the policy is "error"
      */
@@ -54,7 +57,9 @@ final class ConflictResolver {
                 String reason = ResourcesEngine.getString("write.skip.same-file", candidate);
                 return new Decision(candidate, false, reason, true, true);
             }
-            boolean identical = FileComparison.identical(item, candidate, settings.compare());
+            // a directory is never the item, and is never read (on Windows its size is 0, like an empty file)
+            boolean identical = !Files.isDirectory(candidate, LinkOption.NOFOLLOW_LINKS)
+                    && FileComparison.identical(item, candidate, settings.compare());
             Policy policy = identical ? settings.ifIdentical() : settings.ifDifferent();
             switch (policy) {
                 case SKIP -> {

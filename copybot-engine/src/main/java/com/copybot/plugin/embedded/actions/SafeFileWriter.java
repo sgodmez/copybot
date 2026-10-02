@@ -7,6 +7,7 @@ import com.copybot.plugin.embedded.actions.FileWriteSettings.WriteMode;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -53,6 +54,9 @@ import java.util.function.IntConsumer;
 final class SafeFileWriter {
 
     static final String TEMP_SUFFIX = ".copybot-tmp";
+
+    /** A file name limit: 255 bytes (ext4...) or 255 UTF-16 units (NTFS); the UTF-8 length bounds both. */
+    static final int MAX_NAME_BYTES = 255;
 
     private static final int BUFFER_SIZE = 8192;
 
@@ -106,7 +110,7 @@ final class SafeFileWriter {
                 throw new FileAlreadyExistsException(target.toString()); // early: no copy for nothing
             }
             return settings.writeMode() == WriteMode.TEMP_AND_RENAME
-                    ? writeThroughTemp(item, target, dir.resolve("." + target.getFileName() + "." + runId + TEMP_SUFFIX),
+                    ? writeThroughTemp(item, target, dir.resolve(tempName(target.getFileName().toString(), runId)),
                     replaceExisting, percent)
                     : writeDirect(item, target, replaceExisting, percent);
         } finally {
@@ -291,6 +295,39 @@ final class SafeFileWriter {
         } catch (IOException | DirectoryIteratorException e) {
             // the listing failed: the write itself goes on
         }
+    }
+
+    /**
+     * ".name.runId.copybot-tmp". When that exceeds {@value #MAX_NAME_BYTES} bytes (a target name that fits
+     * the limit, but not with the 50 more characters of a run id), the name is shortened to a prefix
+     * followed by "~" and a hash of the whole name: still unique per target, still hidden and still
+     * recognised by the orphan cleaning.
+     */
+    static String tempName(String name, String runId) {
+        String tail = "." + runId + TEMP_SUFFIX;
+        String full = "." + name + tail;
+        if (utf8Length(full) <= MAX_NAME_BYTES) {
+            return full;
+        }
+        String hash = "~" + FileComparison.hex(FileComparison.newSha256().digest(name.getBytes(StandardCharsets.UTF_8)))
+                .substring(0, 16);
+        int budget = MAX_NAME_BYTES - utf8Length("." + hash + tail);
+        StringBuilder prefix = new StringBuilder();
+        for (int i = 0; i < name.length(); ) {
+            int codePoint = name.codePointAt(i); // never splits a surrogate pair
+            String next = new String(Character.toChars(codePoint));
+            budget -= utf8Length(next);
+            if (budget < 0) {
+                break;
+            }
+            prefix.append(next);
+            i += Character.charCount(codePoint);
+        }
+        return "." + prefix + hash + tail;
+    }
+
+    private static int utf8Length(String s) {
+        return s.getBytes(StandardCharsets.UTF_8).length;
     }
 
     /** ".name.runId.copybot-tmp" gives runId (a run id has no dot, a name may have several). */

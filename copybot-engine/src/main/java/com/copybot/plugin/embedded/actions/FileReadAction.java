@@ -32,6 +32,8 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
 
     private volatile List<PathMatcher> includes = List.of();
     private volatile List<PathMatcher> excludes = List.of();
+    /** The folders whose whole content an exclude "x/**" matches: not walked. */
+    private volatile List<PathMatcher> excludedFolders = List.of();
 
     @Override
     protected Class<FileReadConfig> getConfigClass() {
@@ -47,6 +49,7 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
         }
         includes = matchers(getConfig().include());
         excludes = matchers(getConfig().exclude());
+        excludedFolders = folderMatchers(getConfig().exclude());
     }
 
     @Override
@@ -71,7 +74,8 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
                 // the listed directory itself is never filtered (a drive root is hidden and system on Windows)
-                boolean skipped = !dir.equals(root) && !includeHidden && isHidden(dir, attrs);
+                boolean skipped = !dir.equals(root)
+                        && (!includeHidden && isHidden(dir, attrs) || excludedFolder(root.relativize(dir)));
                 return skipped ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
             }
 
@@ -89,11 +93,12 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
 
             /**
              * walkFileTree opens a directory before preVisitDirectory runs, so an unreadable hidden or system
-             * folder (System Volume Information) fails here: skipped when hidden, rethrown otherwise.
+             * folder (System Volume Information) fails here: skipped when hidden or excluded, rethrown otherwise.
              */
             @Override
             public FileVisitResult visitFileFailed(Path file, IOException exc) throws IOException {
-                if (!includeHidden && !file.equals(root) && isHidden(file, readAttributes(file))) {
+                if (!file.equals(root) && (excludedFolder(root.relativize(file))
+                        || !includeHidden && isHidden(file, readAttributes(file)))) {
                     return FileVisitResult.CONTINUE;
                 }
                 return super.visitFileFailed(file, exc);
@@ -128,9 +133,40 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
     }
 
     private boolean selected(Path relative) {
-        Path lowerCase = Path.of(relative.toString().toLowerCase(Locale.ROOT));
+        Path lowerCase = lowerCase(relative);
         boolean included = includes.isEmpty() || includes.stream().anyMatch(m -> m.matches(lowerCase));
         return included && excludes.stream().noneMatch(m -> m.matches(lowerCase));
+    }
+
+    private boolean excludedFolder(Path relative) {
+        Path lowerCase = lowerCase(relative);
+        return excludedFolders.stream().anyMatch(m -> m.matches(lowerCase));
+    }
+
+    private static Path lowerCase(Path relative) {
+        return Path.of(relative.toString().toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * For each exclude "x/**", a matcher of x: every path under a folder matching x matches "x/**" (the glob
+     * "**" matches anything), so the folder can be left unwalked without changing what is listed. An
+     * exclude naming the folder alone ("x") matches no file under it: the folder is walked.
+     */
+    private static List<PathMatcher> folderMatchers(List<String> globs) {
+        if (globs == null) {
+            return List.of();
+        }
+        List<PathMatcher> folders = new ArrayList<>();
+        for (String glob : globs) {
+            if (glob.endsWith("/**") && glob.length() > 3) {
+                try {
+                    folders.addAll(matchers(List.of(glob.substring(0, glob.length() - 3))));
+                } catch (CopybotException e) {
+                    // a valid glob whose part before "/**" is not one (e.g. "x\/**"): no shortcut, walked
+                }
+            }
+        }
+        return List.copyOf(folders);
     }
 
     /**

@@ -139,11 +139,19 @@ public class HomeController {
 
     @FXML
     protected void onNewClick() {
-        // returns at once: the editor opens later, the list is refreshed after each save
+        // returns at once: the editor opens later, the list is refreshed after each save; this screen may have
+        // been replaced meanwhile (a recent opened, Back, a language change): the one shown is refreshed, if any
         EditorController.open(CopybotMainUi.STAGE, null, saved -> {
             UiPreferences.updateRecents(recents -> recents.touch(saved, Instant.now()));
-            refresh();
+            if (shown != null && shown.isShown()) {
+                shown.refresh();
+            }
         });
+    }
+
+    /** This screen is still the one of the main window (not replaced by a plan view or a rebuild). */
+    private boolean isShown() {
+        return recentList.getScene() != null && recentList.getScene() == CopybotMainUi.STAGE.getScene();
     }
 
     /** Name, path and last run; greyed "not found" when the file is gone (not clickable); right click: remove. */

@@ -3,6 +3,7 @@ package com.copybot.ui.model;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
+import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
 import com.google.gson.JsonObject;
@@ -11,16 +12,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.copybot.ui.model.TestCatalog.CATALOG;
 import static com.copybot.ui.model.TestCatalog.EXIF_2;
 import static com.copybot.ui.model.TestCatalog.READ;
 import static com.copybot.ui.model.TestCatalog.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** The pipeline being edited: a JSON tree of which only the known fields are rewritten (spec desktop-ui §3). */
 public class PipelineDocumentTest {
@@ -487,7 +493,7 @@ public class PipelineDocumentTest {
     }
 
     @Test
-    public void anIntegerAcceptsAZeroFractionWithinTheIntRange() {
+    public void anIntegerAcceptsAZeroFractionWithinTheLongRange() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
         JsonObject out = document.steps(Section.OUT).getFirst();
         ConfigField bufferSize = field(WRITE, "bufferSize");
@@ -498,13 +504,34 @@ public class PipelineDocumentTest {
         document.setConfigText(out, bufferSize, "16.00");
         assertEquals(JsonParser.parseString("16"), out.getAsJsonObject("actionConfig").get("bufferSize"));
         assertEquals("16", document.configText(out, bufferSize));
-        document.setConfigText(out, bufferSize, String.valueOf(Integer.MAX_VALUE));
-        assertEquals(Integer.MAX_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsInt());
+        // the schema does not tell an int from a long: the engine refuses an int out of range when loading
+        document.setConfigText(out, bufferSize, "2147483648");
+        assertEquals(JsonParser.parseString("2147483648"), out.getAsJsonObject("actionConfig").get("bufferSize"));
+        document.setConfigText(out, bufferSize, String.valueOf(Long.MIN_VALUE));
+        assertEquals(Long.MIN_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsLong());
+        document.setConfigText(out, bufferSize, "1e10");
+        assertEquals("10000000000", document.configText(out, bufferSize));
+        document.setConfigText(out, bufferSize, String.valueOf(Long.MAX_VALUE));
 
-        for (String invalid : List.of("8.5", "2147483648", "-2147483649", "1e10")) {
+        for (String invalid : List.of("8.5", "9223372036854775808", "-9223372036854775809", "1e19", "eight")) {
             assertThrows(IllegalArgumentException.class, () -> document.setConfigText(out, bufferSize, invalid), invalid);
         }
-        assertEquals(Integer.MAX_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsInt());
+        assertEquals(Long.MAX_VALUE, out.getAsJsonObject("actionConfig").get("bufferSize").getAsLong());
+    }
+
+    @Test
+    public void anAdvancedIntegerStaysWithinTheIntRange() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        JsonObject in = document.steps(Section.IN).getFirst();
+        ConfigField maxConcurrency = PipelineDocument.ADVANCED_FIELDS.getFirst();
+        ConfigField priority = PipelineDocument.ADVANCED_FIELDS.get(2);
+
+        document.setAdvancedText(in, maxConcurrency, String.valueOf(Integer.MAX_VALUE));
+        assertEquals(Integer.MAX_VALUE, in.get("maxConcurrency").getAsInt());
+        // the engine reads them as Integer (PipelineStepConfig)
+        assertThrows(IllegalArgumentException.class, () -> document.setAdvancedText(in, maxConcurrency, "2147483648"));
+        assertThrows(IllegalArgumentException.class, () -> document.setAdvancedText(in, priority, "-2147483649"));
+        assertEquals(Integer.MAX_VALUE, in.get("maxConcurrency").getAsInt());
     }
 
     @Test
@@ -520,6 +547,125 @@ public class PipelineDocumentTest {
         assertTrue(PipelineDocument.load(file).isLenient());
     }
 
+    // ---- deferred review notes ----
+
+    @Test
+    public void duplicateKeysAreReportedWithTheirPath() {
+        PipelineDocument document = PipelineDocument.parse("""
+                { "a": 1, "inSteps": [ { "action": "x", "action": "y", "actionConfig": { "p": 1, "p": 2 } } ], "a": 2 }
+                """);
+
+        assertEquals(List.of("inSteps[0].action", "inSteps[0].actionConfig.p", "a"), document.duplicateKeys());
+        assertEquals("y", document.steps(Section.IN).getFirst().get("action").getAsString(), "the last one wins");
+        assertEquals(List.of(), PipelineDocument.parse(PIPELINE).duplicateKeys());
+        assertEquals(List.of(), PipelineDocument.empty().duplicateKeys());
+        assertEquals(List.of("b"), PipelineDocument.parse("{ // lenient\n 'b': 1, b: 2 }").duplicateKeys());
+    }
+
+    @Test
+    public void aSaveKeepsThePosixPermissionsOfTheReplacedFile() throws IOException {
+        assumeTrue(FileSystems.getDefault().supportedFileAttributeViews().contains("posix"), "POSIX file system");
+        Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
+        Set<PosixFilePermission> permissions = PosixFilePermissions.fromString("rw-rw-r--");
+        Files.setPosixFilePermissions(file, permissions);
+
+        PipelineDocument.load(file).save(file);
+
+        assertEquals(permissions, Files.getPosixFilePermissions(file));
+    }
+
+    @Test
+    public void aMovedStepKeepsItsUnknownMembers() {
+        PipelineDocument document = PipelineDocument.parse("""
+                {"actionSteps":[{"action":"a","future":{"x":1}},{"action":"b","filterCondition":"size > 0"}]}
+                """);
+
+        document.moveStep(Section.PROCESS, 1, -1);
+
+        assertEquals(tree("""
+                {"actionSteps":[{"action":"b","filterCondition":"size > 0"},{"action":"a","future":{"x":1}}]}
+                """), tree(document.toJson()));
+    }
+
+    @Test
+    public void aRemovedStepLeavesItsNeighboursAsTheyWere() {
+        PipelineDocument document = PipelineDocument.parse("""
+                {"inSteps":[{"action":"a","k":1},{"action":"b"},{"action":"c","k":3}]}
+                """);
+
+        document.removeStep(Section.IN, 1);
+
+        assertEquals(tree("{\"inSteps\":[{\"action\":\"a\",\"k\":1},{\"action\":\"c\",\"k\":3}]}"), tree(document.toJson()));
+    }
+
+    @Test
+    public void aMoveThatCannotHappenLeavesTheDocumentUnmodified() {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"a\"},{\"action\":\"b\"}],"
+                + "\"outStep\":{\"action\":\"file.write\"}}");
+        String before = document.toJson();
+
+        document.moveStep(Section.IN, 0, 0);
+        document.moveStep(Section.IN, 0, -1);
+        document.moveStep(Section.IN, 1, 1);
+        document.moveStep(Section.IN, 5, -1);
+        document.moveStep(Section.OUT, 0, 1);
+
+        assertFalse(document.isModified());
+        assertEquals(before, document.toJson());
+    }
+
+    enum Speed { SLOW, FAST }
+
+    record TuneConfig(Double quality, Speed speed, List<Integer> sizes) {
+    }
+
+    private static ConfigField tune(String path) {
+        return ConfigSchema.of(TuneConfig.class).field(path).orElseThrow();
+    }
+
+    @Test
+    public void decimalsAndEnumsAreWrittenFromTheirText() {
+        PipelineDocument document = PipelineDocument.parse("{\"actionSteps\":[{\"action\":\"tune\"}]}");
+        JsonObject step = document.steps(Section.PROCESS).getFirst();
+
+        document.setConfigText(step, tune("quality"), " 0.85 ");
+        document.setConfigText(step, tune("speed"), "FAST");
+
+        assertEquals(JsonParser.parseString("{\"quality\":0.85,\"speed\":\"FAST\"}"), step.get("actionConfig"));
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(step, tune("quality"), "0,85"));
+        assertEquals("0.85", document.configText(step, tune("quality")));
+    }
+
+    @Test
+    public void aListOfBlankLinesIsRemovedAndAnInvalidLineRefused() {
+        PipelineDocument document = PipelineDocument.parse(
+                "{\"actionSteps\":[{\"action\":\"tune\",\"actionConfig\":{\"sizes\":[1,2]}}]}");
+        JsonObject step = document.steps(Section.PROCESS).getFirst();
+
+        assertThrows(IllegalArgumentException.class, () -> document.setConfigText(step, tune("sizes"), "1\nbig\n3"));
+        assertEquals(JsonParser.parseString("[1,2]"), step.getAsJsonObject("actionConfig").get("sizes"), "unchanged");
+        assertFalse(document.isModified());
+
+        document.setConfigText(step, tune("sizes"), " \n\n  \n");
+
+        assertFalse(step.getAsJsonObject("actionConfig").has("sizes"));
+        assertTrue(document.isModified());
+    }
+
+    @Test
+    public void anAdvancedFieldMarksTheDocumentModifiedOnlyWhenItChanges() {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\",\"priority\":2}]}");
+        JsonObject in = document.steps(Section.IN).getFirst();
+        ConfigField priority = PipelineDocument.ADVANCED_FIELDS.get(2);
+
+        document.setAdvancedText(in, priority, " 2 ");
+        assertFalse(document.isModified());
+
+        document.setAdvancedText(in, priority, "");
+        assertTrue(document.isModified());
+        assertFalse(in.has("priority"));
+    }
+
     @Test
     public void aResumeCursorIsNotAPipeline() {
         assertTrue(PipelineDocument.isResumeCursor(Path.of("dir", "sd-to-nas.state.json")));
@@ -527,5 +673,20 @@ public class PipelineDocumentTest {
         assertFalse(PipelineDocument.isResumeCursor(Path.of("dir", "sd-to-nas.json")));
         assertFalse(PipelineDocument.isResumeCursor(Path.of("state.json")));
         assertFalse(PipelineDocument.isResumeCursor(Path.of("my.state.json.bak")));
+    }
+
+    @Test
+    public void saveAsAppendsJsonOnlyToANameWithoutExtension() {
+        assertEquals(Path.of("dir", "sd-to-nas.json"), PipelineDocument.withDefaultExtension(Path.of("dir", "sd-to-nas")));
+        assertEquals(Path.of("dir", "sd-to-nas.json"), PipelineDocument.withDefaultExtension(Path.of("dir", "sd-to-nas.json")));
+        assertEquals(Path.of("SD.JSON"), PipelineDocument.withDefaultExtension(Path.of("SD.JSON")));
+        assertEquals(Path.of("dir", "foo.txt"), PipelineDocument.withDefaultExtension(Path.of("dir", "foo.txt")),
+                "a typed extension is kept");
+        assertEquals(Path.of("v1.2", "foo.json"), PipelineDocument.withDefaultExtension(Path.of("v1.2", "foo")),
+                "only the file name counts");
+        assertEquals(Path.of(".pipeline.json"), PipelineDocument.withDefaultExtension(Path.of(".pipeline")),
+                "a leading dot is no extension");
+        assertEquals(Path.of("foo..json"), PipelineDocument.withDefaultExtension(Path.of("foo.")),
+                "nor a trailing one");
     }
 }

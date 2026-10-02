@@ -2,6 +2,7 @@ package com.copybot.plugin.embedded.actions;
 
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.resources.ResourcesEngine;
 import com.google.gson.Gson;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -175,6 +176,86 @@ public class ConflictResolverTest {
         existing("photo.jpg", "same");
 
         assertFalse(resolver(null).resolve(item("same"), target()).sameFile());
+    }
+
+    // ---- skip reasons, policies on an identical target, mixed rename chains ----
+
+    @Test
+    public void eachSkipHasItsOwnReason() throws IOException {
+        Path existing = existing("photo.jpg", "same");
+
+        assertEquals(ResourcesEngine.getString("write.skip.identical", existing),
+                resolver(null).resolve(item("same"), target()).skipReason());
+        assertEquals(ResourcesEngine.getString("write.skip.exists", existing),
+                resolver("{\"ifDifferent\":\"skip\"}").resolve(item("diff"), target()).skipReason());
+        assertEquals(ResourcesEngine.getString("write.skip.same-file", existing),
+                resolver(null).resolve(itemAt(existing), target()).skipReason());
+    }
+
+    @Test
+    public void ifIdenticalOverwriteReplacesAnIdenticalTarget() throws IOException {
+        existing("photo.jpg", "same");
+
+        ConflictResolver.Decision decision = resolver("{\"ifIdentical\":\"overwrite\"}").resolve(item("same"), target());
+
+        assertEquals(target(), decision.target());
+        assertTrue(decision.replaceExisting());
+        assertTrue(decision.identical());
+        assertFalse(decision.isSkip());
+    }
+
+    @Test
+    public void ifIdenticalRenameWritesANumberedCopy() throws IOException {
+        existing("photo.jpg", "same");
+
+        ConflictResolver.Decision decision = resolver("{\"ifIdentical\":\"rename\"}").resolve(item("same"), target());
+
+        assertEquals(target().resolveSibling("photo (1).jpg"), decision.target());
+        assertFalse(decision.replaceExisting());
+        assertFalse(decision.isSkip());
+    }
+
+    @Test
+    public void aRenameChainAppliesThePolicyOfEachCandidate() throws IOException {
+        existing("photo.jpg", "same");
+        existing("photo (1).jpg", "diff");
+
+        ConflictResolver.Decision skipped = resolver("{\"ifIdentical\":\"rename\",\"ifDifferent\":\"skip\"}")
+                .resolve(item("same"), target());
+        assertTrue(skipped.isSkip());
+        assertFalse(skipped.identical());
+        assertEquals(target().resolveSibling("photo (1).jpg"), skipped.target());
+
+        ConflictResolver.Decision overwritten = resolver("{\"ifIdentical\":\"overwrite\"}").resolve(item("diff"), target());
+        assertEquals(target().resolveSibling("photo (1).jpg"), overwritten.target(), "photo.jpg differs: renamed");
+        assertTrue(overwritten.replaceExisting(), "photo (1).jpg is identical: overwritten");
+
+        assertThrows(CopybotException.class,
+                () -> resolver("{\"ifIdentical\":\"error\"}").resolve(item("diff"), target()));
+    }
+
+    @Test
+    public void aFreeTargetReadsNothing() throws IOException {
+        WorkItem neverRead = new WorkItem(tempDir.toUri().toURL(), () -> {
+            throw new AssertionError("a free target: nothing is read");
+        });
+
+        assertEquals(target(), resolver("{\"compare\":\"fullHash\"}").resolve(neverRead, target()).target());
+    }
+
+    @Test
+    public void aDirectoryAtTheTargetIsNeverIdenticalNorRead() throws IOException {
+        Files.createDirectories(target());
+        WorkItem empty = item(""); // on Windows a directory has size 0
+
+        for (String compare : new String[]{"size", "sizeAndDate", "partialHash", "fullHash"}) {
+            ConflictResolver.Decision decision = resolver("{\"compare\":\"" + compare + "\"}").resolve(empty, target());
+
+            assertEquals(target().resolveSibling("photo (1).jpg"), decision.target(), compare);
+            assertFalse(decision.isSkip(), compare);
+        }
+        ConflictResolver.Decision skipped = resolver("{\"compare\":\"size\",\"ifDifferent\":\"skip\"}").resolve(empty, target());
+        assertEquals(ResourcesEngine.getString("write.skip.exists", target()), skipped.skipReason());
     }
 
     @Test

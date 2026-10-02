@@ -63,7 +63,7 @@ final class ConfigForm {
     /**
      * The controls whose current text does not parse, with the label of their field: the document still holds
      * the last valid value, so a save must be refused while this is not empty. A control leaves it when its
-     * text parses again, or when it loses focus (its text is then reset to the document's).
+     * text parses again, or when the focus moves to another control (its text is then reset to the document's).
      */
     static final class Invalid {
         private final Map<Control, String> labels = new LinkedHashMap<>();
@@ -181,7 +181,7 @@ final class ConfigForm {
         combo.setValue(current);
         combo.valueProperty().addListener((obs, old, value) -> apply(combo, field, value == null ? "" : value));
         combo.focusedProperty().addListener((obs, was, focused) -> {
-            if (!focused && invalid.labels.containsKey(combo)) {
+            if (!focused && invalid.labels.containsKey(combo) && focusMovedAway(combo)) {
                 String text = access.text(field);
                 if (!combo.getItems().contains(text)) {
                     combo.getItems().add(text);
@@ -253,12 +253,20 @@ final class ConfigForm {
             if (pending != null) {
                 pending.run();
             }
-            if (invalid.labels.containsKey(input)) {
+            if (invalid.labels.containsKey(input) && focusMovedAway(input)) {
                 input.setText(access.text(field)); // the value the document holds
                 markValid(input);
             }
         });
         return input;
+    }
+
+    /**
+     * The focus went to another control of the window, not just to another window (the "invalid fields"
+     * warning, another application): only then is an invalid text reset, so that it can still be corrected.
+     */
+    private static boolean focusMovedAway(Control control) {
+        return control.getScene() == null || control.getScene().getFocusOwner() != control;
     }
 
     private void apply(Control control, ConfigField field, String text) {

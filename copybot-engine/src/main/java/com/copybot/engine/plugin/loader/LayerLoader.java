@@ -1,5 +1,6 @@
 package com.copybot.engine.plugin.loader;
 
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.FileUtil;
 import com.copybot.utils.VersionUtil;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -49,15 +50,12 @@ public final class LayerLoader {
                 .toList();
 
         if (mainModules.isEmpty()) {
-            //todo skip this folder
-            error = "rien";
-            System.out.println("Attention ! ");
+            error = ResourcesEngine.getString("plugin.load.no-module", path);
             return;
         }
         if (mainModules.size() > 1) {
-            // todo error, multiple plugin in folder
-            error = "trop";
-            System.out.println("Attention ! ");
+            error = ResourcesEngine.getString("plugin.load.many-modules", path,
+                    mainModules.stream().map(ModuleDescriptor::name).sorted().collect(Collectors.joining(", ")));
             return;
         }
         // TODO vérifier la version de com.copybot.plugin.api
@@ -138,7 +136,11 @@ public final class LayerLoader {
         return moduleLayer;
     }
 
+    /** The version of the main module, null without main module (see {@link #getError()}) or without version. */
     public String getVersion() {
-        return getMainModuleDescriptor().version().map(Object::toString).orElse(null);
+        if (mainModuleDescriptor == null) {
+            return null;
+        }
+        return mainModuleDescriptor.version().map(Object::toString).orElse(null);
     }
 }

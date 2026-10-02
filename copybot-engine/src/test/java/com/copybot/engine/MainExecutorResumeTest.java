@@ -20,8 +20,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -655,5 +657,127 @@ public class MainExecutorResumeTest {
 
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
         assertEquals(ItemStatus.DONE, named(exec, "IMG_01.JPG").getStatus());
+    }
+
+    @Test
+    public void withoutStepAfterTheBarrierTheResumePointStillDecidesWhichItemsAreDone() {
+        store().writeCursor(day(2));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(3), emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(ItemStatus.SKIPPED, named(exec, "IMG_01.JPG").getStatus(), "before the cursor");
+        assertEquals(ItemStatus.SKIPPED, named(exec, "IMG_02.JPG").getStatus(), "before the cursor");
+        assertEquals(ItemStatus.PENDING, named(exec, "IMG_03.JPG").getStatus(), "an item is never done while preparing");
+
+        exec.execute(null);
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(ItemStatus.DONE, named(exec, "IMG_03.JPG").getStatus());
+        assertEquals(day(3), store().readCursor().orElseThrow());
+    }
+
+    /** Filters IMG_02.JPG out, lets the others through. */
+    static final class FilteringProcess extends FakeAction implements IProcessAction {
+        @Override
+        public List<WorkItem> doProcess(WorkItem item) {
+            return item.getNameDisplay().equals("IMG_02.JPG") ? List.of() : List.of(item);
+        }
+    }
+
+    @Test
+    public void anItemFilteredOutAfterTheBarrierEndsDoneAndAdvancesTheCursor() {
+        RecordingOut out = new RecordingOut(null);
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(3), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new FilteringProcess(), emptyConfig()),
+                        new PipelineStep<>(null, out, emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_01.JPG", "IMG_03.JPG"), out.written);
+        assertEquals(ItemStatus.DONE, named(exec, "IMG_02.JPG").getStatus(), "filtered out: nothing left to do");
+        assertEquals(day(3), store().readCursor().orElseThrow(), "a filtered item does not hold the cursor back");
+    }
+
+    @Test
+    public void eachPhaseEndsWithATerminalNotificationOfItsOutcome() {
+        List<PipelineStatus> seen = new CopyOnWriteArrayList<>();
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(2), emptyConfig())),
+                List.of(new PipelineStep<>(null, new RecordingAnalyze(), emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, state -> seen.add(state.getStatus()), registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+        assertEquals(PipelineStatus.PREPARED, seen.getLast(), "prepare() notifies its outcome before returning");
+
+        exec.execute(null);
+        assertEquals(PipelineStatus.SUCCESS, seen.getLast(), "execute() notifies its outcome before returning");
+    }
+
+    /** An analyse step whose configWarnings fails (a plugin bug). */
+    static final class ThrowingWarningAnalyze extends FakeAction implements IAnalyzeAction {
+        @Override
+        public void doAnalyze(WorkItem item) {
+        }
+
+        @Override
+        public List<String> configWarnings() {
+            throw new IllegalStateException("warnings failed");
+        }
+    }
+
+    @Test
+    public void aThrowingConfigWarningsIsAPreparationFailureWithItsCause() {
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(1), emptyConfig())),
+                List.of(new PipelineStep<>(null, new ThrowingWarningAnalyze(), emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertTrue(exec.getState().isPreparationFailed());
+        assertEquals("warnings failed", exec.getState().getFailure().getMessage());
+    }
+
+    /** Counts its configWarnings calls. */
+    static final class CountingWarningAnalyze extends FakeAction implements IAnalyzeAction {
+        final AtomicInteger calls = new AtomicInteger();
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+        }
+
+        @Override
+        public List<String> configWarnings() {
+            calls.incrementAndGet();
+            return List.of("risky analyse");
+        }
+    }
+
+    @Test
+    public void theConfigWarningsAreCollectedOnceForThePreparationAndTheExecution() {
+        CountingWarningAnalyze analyze = new CountingWarningAnalyze();
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(2), emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, emptyConfig()),
+                        new PipelineStep<>(null, new RecordingOut(null), emptyConfig())),
+                1, false, null, registry(), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(1, analyze.calls.get());
+        assertEquals(List.of("risky analyse"), exec.getState().getWarnings());
     }
 }

@@ -42,7 +42,7 @@ public class UiBundleTest {
             "editor.advanced.maxConcurrency", "editor.advanced.maxConcurrency.description",
             "editor.advanced.resources", "editor.advanced.resources.description", "editor.advanced.priority",
             "editor.advanced.priority.description", "editor.advanced.version", "editor.advanced.version.description",
-            "editor.plugin-not-found", "editor.no-schema", "editor.default", "editor.browse",
+            "editor.plugin-not-found", "editor.plugin-failed", "editor.no-schema", "editor.default", "editor.browse",
             "editor.pattern-variables", "editor.add.title", "editor.add.empty", "editor.required-missing",
             "editor.invalid-value", "editor.json.title", "editor.discard", "editor.save-failed",
             "editor.invalid-fields",

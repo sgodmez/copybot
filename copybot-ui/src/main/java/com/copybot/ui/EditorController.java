@@ -1,6 +1,7 @@
 package com.copybot.ui;
 
 import com.copybot.engine.plugin.CatalogAction;
+import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
@@ -86,10 +87,10 @@ public class EditorController {
     private PipelineDocument document;
     private Path path;
     /**
-     * The file read as non-strict JSON (comments...), until the user agreed to rewrite it as strict JSON
-     * (null then, or when the file was strict): the first save over it warns first.
+     * The file read as non-strict JSON (comments...) or with duplicate members, until the user agreed to
+     * rewrite it (null then, or when nothing of the file is lost): the first save over it warns first.
      */
-    private Path lenientFile;
+    private Path lossyFile;
     private StepCatalog catalog;
     private Consumer<Path> onSaved;
     /** A save runs in the background: the window is disabled and cannot be closed meanwhile. */
@@ -118,12 +119,18 @@ public class EditorController {
             ownerScene.setCursor(Cursor.WAIT);
         }
         loading = true;
+        Locale language = Locale.getDefault();
         // the catalog (plugin instances, bundles) is built off the JavaFX thread too
         background(() -> new Loaded(file == null ? PipelineDocument.empty() : PipelineDocument.load(file),
                         new StepCatalog(PluginEngine.catalog())),
                 loaded -> {
                     loading = false;
                     resetCursor(ownerScene);
+                    if (!Locale.getDefault().equals(language)) {
+                        // the language changed meanwhile (Preferences): the catalog's names are in the old one
+                        open(owner, path, onSaved);
+                        return;
+                    }
                     show(owner, loaded, file, onSaved);
                 },
                 e -> {
@@ -196,7 +203,7 @@ public class EditorController {
         this.stage = stage;
         this.document = document;
         this.path = path == null ? null : path.toAbsolutePath().normalize();
-        this.lenientFile = document.isLenient() ? this.path : null;
+        this.lossyFile = document.isLenient() || !document.duplicateKeys().isEmpty() ? this.path : null;
         this.onSaved = onSaved;
         this.catalog = catalog;
         stage.setOnCloseRequest(e -> {
@@ -400,15 +407,21 @@ public class EditorController {
                 new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode), autoExecute);
     }
 
-    /** The generated form of the action's schema, then "Advanced"; read-only when the plugin is missing. */
+    /**
+     * The generated form of the action's schema, then "Advanced"; read-only when the plugin is missing or
+     * when the version the step resolves to failed (its actions cannot be listed).
+     */
     private void stepForm(EditorNode node) {
         JsonObject step = step(node);
         Optional<CatalogAction> action = catalog.find(node.section(), step);
         if (action.isEmpty()) {
             String plugin = member(step, "plugin");
-            formBox.getChildren().addAll(title(member(step, "action")),
-                    new Label(ResourcesEngine.getString("editor.plugin-not-found",
-                            plugin.isEmpty() ? CatalogAction.EMBEDDED_PLUGIN : plugin)),
+            String message = catalog.failedPlugin(step)
+                    .map(failed -> ResourcesEngine.getString("editor.plugin-failed", failed.pluginVersion() == null
+                            ? failed.pluginName() : failed.pluginName() + " " + failed.pluginVersion()))
+                    .orElseGet(() -> ResourcesEngine.getString("editor.plugin-not-found",
+                            plugin.isEmpty() ? CatalogAction.EMBEDDED_PLUGIN : plugin));
+            formBox.getChildren().addAll(title(member(step, "action")), new Label(message),
                     readOnly(PipelineDocument.json(step)));
             return;
         }
@@ -482,8 +495,10 @@ public class EditorController {
                     return;
                 }
                 Optional<CatalogAction> before = catalog.find(node.section(), step);
+                Optional<FailedPlugin> failedBefore = catalog.failedPlugin(step);
                 document.setAdvancedText(step, field, text);
-                if (!catalog.find(node.section(), step).equals(before)) {
+                if (!catalog.find(node.section(), step).equals(before)
+                        || !catalog.failedPlugin(step).equals(failedBefore)) {
                     tree.refresh();
                     // another action, or none (read-only form): rebuilt once the focus change is over
                     Platform.runLater(() -> {
@@ -551,17 +566,25 @@ public class EditorController {
     }
 
     /**
-     * Saves, after a warning the first time the target is the file read as non-strict JSON: its comments
-     * and layout will be lost. The user may save anyway, save to another file or cancel.
+     * Saves, after a warning the first time the target is the file read as non-strict JSON (its comments
+     * and layout will be lost) or with duplicate members (all but the last value will be lost). The user may
+     * save anyway, save to another file or cancel.
      */
     private void saveTo(Path target) {
-        if (lenientFile == null || !lenientFile.equals(target)) {
+        if (lossyFile == null || !lossyFile.equals(target)) {
             save(target);
             return;
         }
+        List<String> losses = new ArrayList<>();
+        if (document.isLenient()) {
+            losses.add(ResourcesEngine.getString("editor.lenient"));
+        }
+        if (!document.duplicateKeys().isEmpty()) {
+            losses.add(ResourcesEngine.getString("editor.duplicate-keys", String.join("\n", document.duplicateKeys())));
+        }
         ButtonType saveAnyway = new ButtonType(ResourcesEngine.getString("editor.save"), ButtonBar.ButtonData.OK_DONE);
         ButtonType saveAs = new ButtonType(ResourcesEngine.getString("editor.save-as"), ButtonBar.ButtonData.OTHER);
-        Alert alert = new Alert(Alert.AlertType.WARNING, ResourcesEngine.getString("editor.lenient"),
+        Alert alert = new Alert(Alert.AlertType.WARNING, String.join("\n\n", losses),
                 saveAnyway, saveAs, ButtonType.CANCEL);
         alert.initOwner(stage);
         Optional<ButtonType> choice = alert.showAndWait();
@@ -569,7 +592,7 @@ public class EditorController {
             return;
         }
         if (choice.get() == saveAnyway) {
-            lenientFile = null; // agreed: no warning again for this file
+            lossyFile = null; // agreed: no warning again for this file
             save(target);
         } else {
             chooseTarget().ifPresent(this::saveTo);
@@ -577,7 +600,8 @@ public class EditorController {
     }
 
     /**
-     * The file to save to, ".json" appended when missing (then confirmed if it exists: the chooser only
+     * The file to save to, ".json" appended to a name without extension
+     * ({@link PipelineDocument#withDefaultExtension}; then confirmed if it exists: the chooser only
      * confirmed the name typed). A resume cursor (".state.json") is refused.
      */
     private Optional<Path> chooseTarget() {
@@ -592,12 +616,9 @@ public class EditorController {
             return Optional.empty();
         }
         Path chosen = file.toPath();
-        boolean appended = false;
-        if (!chosen.getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".json")) {
-            chosen = chosen.resolveSibling(chosen.getFileName() + ".json");
-            appended = true;
-        }
-        Path target = chosen.toAbsolutePath().normalize();
+        Path withExtension = PipelineDocument.withDefaultExtension(chosen);
+        boolean appended = !withExtension.equals(chosen);
+        Path target = withExtension.toAbsolutePath().normalize();
         if (PipelineDocument.isResumeCursor(target)) {
             warn(ResourcesEngine.getString("home.state-file", target.getFileName().toString()));
             return Optional.empty();

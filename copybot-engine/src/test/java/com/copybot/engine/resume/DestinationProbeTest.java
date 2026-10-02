@@ -40,6 +40,12 @@ public class DestinationProbeTest {
     }
 
     @Test
+    public void onlyTheFirstDirectoryExists() {
+        DestinationProbe.Result r = DestinationProbe.probe(CARD, Set.of(D1)::contains);
+        assertEquals(ResumePoint.after(CARD.get(1).key()), r.point());
+    }
+
+    @Test
     public void everythingImported() {
         DestinationProbe.Result r = DestinationProbe.probe(CARD, dir -> true);
         assertEquals(ResumePoint.after(CARD.get(4).key()), r.point());
@@ -54,11 +60,12 @@ public class DestinationProbeTest {
                     Path.of("nas", "d" + (i / 10))));
         }
         AtomicInteger checks = new AtomicInteger();
-        DestinationProbe.probe(big, dir -> {
+        DestinationProbe.Result r = DestinationProbe.probe(big, dir -> {
             checks.incrementAndGet();
             return Integer.parseInt(dir.getFileName().toString().substring(1)) < 42;
         });
         assertTrue(checks.get() <= 12, "expected ~log2(1000) checks, got " + checks.get());
+        assertEquals(ResumePoint.after(big.get(419).key()), r.point(), "the last item of the last existing directory d41");
     }
 
     @Test

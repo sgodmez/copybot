@@ -3,6 +3,7 @@ package com.copybot;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.Execution;
 import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
@@ -118,7 +119,7 @@ public class CopybotExitCodeTest {
         String[] result = cli("-p=" + pipeline("", ""), CONFIG);
 
         assertEquals("1", result[0]);
-        assertTrue(result[2].contains("ERROR IMG_01.JPG"), result[2]);
+        assertTrue(result[2].contains(ResourcesEngine.getString("cli.item.error", "IMG_01.JPG", "").strip()), result[2]);
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")), "the other items are still copied");
     }
 
@@ -215,6 +216,24 @@ public class CopybotExitCodeTest {
 
         assertEquals("2", result[0], result[2]);
         assertFalse(Files.exists(nas), "nothing is copied");
+    }
+
+    @Test
+    public void aFileReadWithoutPathExitsTwoWithItsMessage() throws IOException {
+        for (String resume : new String[]{"", STATE}) {
+            Path pipeline = Files.writeString(tempDir.resolve("sd.json"), """
+                    {
+                      "inSteps": [ { "action": "file.read", "actionConfig": {} } ],
+                      "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}" } }%s
+                    }
+                    """.formatted(json(nas), resume));
+
+            String[] result = cli("-p=" + pipeline, CONFIG);
+
+            assertEquals("2", result[0], resume + ": " + result[2]);
+            assertTrue(result[2].contains(ResourcesEngine.getString("read.config.no-path")), result[2]);
+            assertFalse(Files.exists(nas), "nothing is copied");
+        }
     }
 
     @Test

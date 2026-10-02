@@ -33,4 +33,11 @@ public class ResumePointTest {
         assertTrue(p.selects(K2));
         assertTrue(p.selects(K3));
     }
+
+    @Test
+    public void afterAndFromRequireAKey() {
+        assertThrows(NullPointerException.class, () -> ResumePoint.after(null));
+        assertThrows(NullPointerException.class, () -> ResumePoint.from(null));
+        assertThrows(NullPointerException.class, () -> new ResumePoint(null, K1));
+    }
 }

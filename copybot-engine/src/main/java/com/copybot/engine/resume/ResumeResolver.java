@@ -166,6 +166,7 @@ public final class ResumeResolver {
         return new ResumeProposal(ResumePoint.all(), ResumeSource.NONE, warnings);
     }
 
+    /** Only for an item the point does not select: never for ALL, which selects everything (hence a key). */
     private static String skipReason(ResumePoint point, ResumeSource source) {
         String date = DISPLAY_DATE.format(point.key().date());
         if (point.key().name().isEmpty()) {

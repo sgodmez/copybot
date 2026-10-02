@@ -27,6 +27,12 @@ public class ItemKeyTest {
     }
 
     @Test
+    public void aKeyWithoutDateIsRejectedWithAClearMessage() {
+        NullPointerException e = assertThrows(NullPointerException.class, () -> new ItemKey(null, "X"));
+        assertEquals("date", e.getMessage());
+    }
+
+    @Test
     public void truncatesToTheSecond() {
         ItemKey precise = new ItemKey(Instant.parse("2026-09-28T10:00:00.750Z"), "X");
         ItemKey rounded = new ItemKey(Instant.parse("2026-09-28T10:00:00Z"), "X");

@@ -79,7 +79,7 @@ public record ConfigSchema(List<ConfigField> fields) {
         List<ConfigField> fields = new ArrayList<>();
         for (RecordComponent component : recordClass.getRecordComponents()) {
             String path = parentPath.isEmpty() ? component.getName() : parentPath + "." + component.getName();
-            field(component.getName(), path, component.getType(), component.getGenericType(), component, ancestors)
+            fieldOf(component.getName(), path, component.getType(), component.getGenericType(), component, ancestors)
                     .ifPresent(fields::add);
         }
         ancestors.remove(recordClass);
@@ -87,8 +87,8 @@ public record ConfigSchema(List<ConfigField> fields) {
     }
 
     /** @param component the annotated record component, null for a list element */
-    private static Optional<ConfigField> field(String name, String path, Class<?> type, Type genericType,
-                                               RecordComponent component, Set<Class<?>> ancestors) {
+    private static Optional<ConfigField> fieldOf(String name, String path, Class<?> type, Type genericType,
+                                                 RecordComponent component, Set<Class<?>> ancestors) {
         Set<FieldHint> hints = EnumSet.noneOf(FieldHint.class);
         List<ConfigField> children = List.of();
         List<String> enumValues = List.of();
@@ -139,7 +139,7 @@ public record ConfigSchema(List<ConfigField> fields) {
             if (elementClass == null) {
                 return Optional.empty(); // a wildcard or type variable element: left out
             }
-            Optional<ConfigField> elementField = field(name, path, elementClass, elementType, null, ancestors);
+            Optional<ConfigField> elementField = fieldOf(name, path, elementClass, elementType, null, ancestors);
             if (elementField.isEmpty()) {
                 return Optional.empty();
             }

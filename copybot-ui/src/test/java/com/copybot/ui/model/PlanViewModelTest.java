@@ -459,6 +459,68 @@ public class PlanViewModelTest {
         assertEquals(List.of(pending, running), model.visibleItems(), "a copied file is no longer to copy");
     }
 
+    // ---- deferred review notes ----
+
+    @Test
+    public void withoutSizesTheProgressGoesByFiles() throws IOException {
+        WorkItemExecution a = item("a.jpg", 0);
+        WorkItemExecution b = item("b.jpg", 0);
+        WorkItemExecution c = item("c.jpg", 0);
+        WorkItemExecution d = item("d.jpg", 0);
+        PlanViewModel model = prepared(false, a, b, c, d);
+        model.startExecuting();
+
+        a.setDone();
+        model.update(state(PipelineStatus.RUNNING, a, b, c, d), List.of(a, b, c, d));
+
+        assertEquals(new Progress(1, 4, 0, 0), model.progress());
+        assertEquals(0.25, model.progress().fraction(), 1e-9);
+        assertEquals(0, new Progress(0, 0, 0, 0).fraction(), "nothing selected: no division by zero");
+    }
+
+    @Test
+    public void aForkedItemIsARowButNotInTheProgressTotals() throws IOException {
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 100);
+        PlanViewModel model = prepared(false, a, b);
+        model.setFilter(Filter.TO_COPY);
+        model.startExecuting();
+
+        a.setDone();
+        WorkItemExecution forkedPending = item("a-small.jpg", 10);
+        WorkItemExecution forkedDone = item("a-thumb.jpg", 5);
+        forkedDone.setDone();
+        model.update(state(PipelineStatus.RUNNING, a, b, forkedPending, forkedDone), List.of(a, b));
+
+        assertEquals(List.of(a, b, forkedPending, forkedDone), model.items());
+        assertEquals(new Progress(1, 2, 100, 200), model.progress(), "the totals are those of the start");
+        assertEquals(List.of(b, forkedPending), model.visibleItems(), "a pending forked item is left to copy");
+        model.setFilter(Filter.ALL);
+        assertEquals(4, model.visibleItems().size());
+    }
+
+    @Test
+    public void theResumeLineFromANameAndFromTheDestination() throws IOException {
+        PlanViewModel model = new PlanViewModel(false);
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, item("DSC_4822.JPG", 1));
+        ItemKey key = new ItemKey(SHOT, "DSC_4821.JPG");
+        state.setResumeProposal(proposal(ResumePoint.from(key), ResumeSource.DESTINATION));
+        model.update(state, List.of());
+
+        String from = model.resumeText().orElseThrow();
+        String destination = ResourcesEngine.getString("plan.resume.source.DESTINATION");
+        String date = DateTimeFormatter.ofPattern("dd/MM HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
+        assertTranslated(destination);
+        assertEquals(ResourcesEngine.getString("plan.resume.from", "DSC_4821.JPG", date, destination), from);
+
+        model.setOverride(ResumePoint.after(key));
+        assertNotEquals(from, model.resumeText().orElseThrow(), "from and after are told apart");
+        for (ResumeSource source : ResumeSource.values()) {
+            assertTranslated(ResourcesEngine.getString("plan.resume.source." + source.name()));
+        }
+    }
+
     @Test
     public void sizesAreShownInTheLocale() throws IOException {
         Locale previous = Locale.getDefault();

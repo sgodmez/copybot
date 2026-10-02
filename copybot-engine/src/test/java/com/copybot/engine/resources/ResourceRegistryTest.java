@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -405,6 +406,52 @@ public class ResourceRegistryTest {
         reg.resume();
         assertTrue(passed.await(5, TimeUnit.SECONDS), "resume must wake awaitNotPaused");
         blocked.join(5000);
+    }
+
+    @Test
+    @Timeout(30)
+    public void oneResumeGrantsEveryWaiterThatBecameGrantable() throws Exception {
+        ResourceRegistry reg = registry(Map.of("a", 1, "b", 1, "c", 1));
+        reg.pause();
+        Acquirer onA = new Acquirer(reg, Set.of("a"));
+        Acquirer onB = new Acquirer(reg, Set.of("b"));
+        Acquirer onC = new Acquirer(reg, Set.of("c"));
+        awaitTrue(() -> waiting(reg, "a") + waiting(reg, "b") + waiting(reg, "c") == 3);
+
+        reg.resume();
+
+        assertTrue(onA.acquired.await(5, TimeUnit.SECONDS));
+        assertTrue(onB.acquired.await(5, TimeUnit.SECONDS));
+        assertTrue(onC.acquired.await(5, TimeUnit.SECONDS));
+        onA.release();
+        onB.release();
+        onC.release();
+    }
+
+    @Test
+    @Timeout(30)
+    public void thePauseDoesNotCountAsWaitingTimeForTheAntiStarvation() throws Exception {
+        AtomicLong now = new AtomicLong(1_000_000);
+        ResourceRegistry reg = new ResourceRegistry(
+                ResourceSettings.from(new CopybotConfig(null, null, Map.of("a", 1, "b", 1), null)), now::get);
+        Acquirer holderOfB = new Acquirer(reg, Set.of("b"));
+        assertTrue(holderOfB.acquired.await(5, TimeUnit.SECONDS));
+        Acquirer big = new Acquirer(reg, Set.of("a", "b")); // cannot fit while b is held
+        awaitTrue(() -> waiting(reg, "a") == 1);
+
+        reg.pause();
+        now.addAndGet(2 * ResourceRegistry.MAX_WAIT_MILLIS); // a long pause
+        reg.resume();
+
+        // the big waiter has not waited long while the registry was granting: it is not starved, so a
+        // waiter on the free "a" may still bypass it (otherwise strict FIFO on "a" right after the resume)
+        Acquirer small = new Acquirer(reg, Set.of("a"));
+        assertTrue(small.acquired.await(5, TimeUnit.SECONDS), "the paused time must not starve the big waiter");
+
+        small.release();
+        holderOfB.release();
+        assertTrue(big.acquired.await(5, TimeUnit.SECONDS));
+        big.release();
     }
 
     @Test

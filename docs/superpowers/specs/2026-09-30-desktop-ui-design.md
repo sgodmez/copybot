@@ -49,7 +49,7 @@ Fenêtre séparée ouverte par « Éditer… » (vue du plan) ou « Nouveau… �
   - Pipeline : `startProcessingWhileListing`, `resume.mode`, `ui.autoExecute` ;
   - étape : formulaire **généré** depuis le schéma de config de l'action (§4), puis une section repliée « Avancé » : `maxConcurrency`, `resources`, `priority`, `version`.
 - « Enregistrer », « Enregistrer sous… », « Voir le JSON » (lecture seule). Validation des champs requis avant enregistrement. À l'enregistrement, la vue du plan recharge le pipeline (le plan préparé est invalidé).
-- **Fidélité** : l'éditeur travaille sur l'arbre JSON (`JsonObject`) et ne réécrit que les champs qu'il connaît ; les champs inconnus du schéma sont conservés tels quels. Une étape dont le plugin n'est pas chargé est affichée en lecture seule (« plugin introuvable ») et conservée.
+- **Fidélité** : l'éditeur travaille sur l'arbre JSON (`JsonObject`) et ne réécrit que les champs qu'il connaît ; les champs inconnus du schéma sont conservés tels quels. Une étape dont le plugin n'est pas chargé est affichée en lecture seule (« plugin introuvable ») et conservée ; de même (« plugin en erreur ») pour une étape résolue, comme par le moteur, vers une version chargée dont les actions ne peuvent pas être listées.
 
 ## 4. Schéma de configuration par introspection (moteur)
 

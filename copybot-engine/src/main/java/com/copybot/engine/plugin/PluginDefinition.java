@@ -21,12 +21,21 @@ public final class PluginDefinition {
         return ofError(ll, null);
     }
 
+    /**
+     * A plugin that is not loaded, with this message (the loader error when null). Without main module (the
+     * loader found none or several), it is named after its directory.
+     */
     public static PluginDefinition ofError(LayerLoader ll, String errorMessage) {
-        var name = ll.getMainModuleDescriptor().name();
-        var version = ll.getVersion();
         var path = ll.getPath();
+        var name = ll.getMainModuleDescriptor() != null ? ll.getMainModuleDescriptor().name() : directoryName(path);
+        var version = ll.getVersion();
         var errorMessageResolved = errorMessage != null ? errorMessage : ll.getError();
-        return new PluginDefinition(name, version, path, false, errorMessage, null);
+        return new PluginDefinition(name, version, path, false, errorMessageResolved, null);
+    }
+
+    private static String directoryName(Path path) {
+        Path fileName = path.getFileName();
+        return fileName != null ? fileName.toString() : path.toString();
     }
 
     public static PluginDefinition ofSuccess(LayerLoader ll, IPlugin pluginInstance) {
@@ -38,6 +47,11 @@ public final class PluginDefinition {
 
     public static PluginDefinition ofEmbedded(IPlugin pluginInstance) {
         return new PluginDefinition(CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME, null, null, true, null, pluginInstance);
+    }
+
+    // visible for tests: a loaded plugin without module layer
+    static PluginDefinition ofLoaded(String name, String version, IPlugin pluginInstance) {
+        return new PluginDefinition(name, version, null, true, null, pluginInstance);
     }
 
     private PluginDefinition(String name, String version, Path path, boolean active, String errorMessage, IPlugin pluginInstance) {

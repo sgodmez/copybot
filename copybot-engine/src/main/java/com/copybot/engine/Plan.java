@@ -87,7 +87,7 @@ public final class Plan {
     }
 
     /**
-     * The directory the out step would write this item to ({@link IOutAction#resolveTarget}), without
+     * The (absolute) directory the out step would write this item to ({@link IOutAction#resolveTarget}), without
      * writing anything; empty without out step, when the action cannot tell or fails to resolve it.
      */
     public Optional<Path> targetOf(WorkItemExecution item) {
@@ -96,7 +96,8 @@ public final class Plan {
             return Optional.empty();
         }
         try {
-            return out.resolveTarget(item.getWorkItem()).map(Path::getParent);
+            // absolute, like the resume probe: a pattern without directory part writes to the current one
+            return out.resolveTarget(item.getWorkItem()).map(target -> target.toAbsolutePath().normalize().getParent());
         } catch (RuntimeException e) {
             // e.g. a pattern variable this item has no value for, in a plugin
             LOG.debug(e, "plan.target.failed", item.getWorkItem().getNameDisplay(), String.valueOf(e));
@@ -109,7 +110,12 @@ public final class Plan {
         executor.applyOverride(override);
     }
 
-    /** Resume from this listed file (its name when it was listed), included. */
+    /**
+     * Resume from this listed file (its name when it was listed), included.
+     *
+     * @throws CopybotException resume.from-file.not-found, or resume.from-file.no-date for a listed file
+     *                          without any date (it has no place in the resume order)
+     */
     public ResumePoint fromFile(String fileName) {
         return getOrderedItems().stream()
                 .map(WorkItemExecution::getResumeKey)
@@ -117,7 +123,11 @@ public final class Plan {
                 .filter(key -> fileName.equals(key.name()))
                 .findFirst()
                 .map(ResumePoint::from)
-                .orElseThrow(() -> CopybotException.ofResource("resume.from-file.not-found", fileName));
+                .orElseThrow(() -> getOrderedItems().stream()
+                        .anyMatch(item -> item.getResumeKey().isEmpty()
+                                && fileName.equals(item.getWorkItem().getNameDisplay()))
+                        ? CopybotException.ofResource("resume.from-file.no-date", fileName)
+                        : CopybotException.ofResource("resume.from-file.not-found", fileName));
     }
 
     /** Resume from the start of this day (system time zone), included. */

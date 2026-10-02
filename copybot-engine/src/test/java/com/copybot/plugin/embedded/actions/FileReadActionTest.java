@@ -13,6 +13,7 @@ import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.DosFileAttributeView;
 import java.util.ArrayList;
 import java.util.List;
@@ -106,6 +107,48 @@ public class FileReadActionTest {
         assertFalse(list("").contains("hidden.jpg"));
         assertFalse(list("").contains("system.jpg"));
         assertTrue(list(",\"includeHidden\":true").containsAll(List.of("hidden.jpg", "system.jpg")));
+    }
+
+    @Test
+    public void aWindowsHiddenFolderHidesItsWholeSubtree() throws IOException {
+        assumeTrue(Files.getFileStore(card).supportsFileAttributeView(DosFileAttributeView.class), "a DOS file system");
+        Files.setAttribute(card.resolve("sub/deep"), "dos:hidden", true);
+
+        assertFalse(list("").contains("sub/deep/d.nef"));
+        assertTrue(list("").contains("sub/c.JPG"));
+        assertTrue(list(",\"includeHidden\":true").contains("sub/deep/d.nef"));
+    }
+
+    // ---- a folder whose whole content is excluded is not walked ----
+
+    @Test
+    public void aFolderExcludedWithSlashStarStarIsNotWalkedNorFailsWhenUnreadable() throws IOException {
+        SimpleFileVisitor<Path> visitor = action(",\"exclude\":[\"SUB/deep/**\",\"**/cache/**\"]").visitor(card, false, item -> { });
+        Path deep = card.resolve("sub/deep");
+        Path cache = Files.createDirectories(card.resolve("sub/Cache"));
+        IOException denied = new AccessDeniedException("denied");
+
+        assertEquals(FileVisitResult.SKIP_SUBTREE, visitor.preVisitDirectory(deep, Files.readAttributes(deep, BasicFileAttributes.class)));
+        assertEquals(FileVisitResult.SKIP_SUBTREE, visitor.preVisitDirectory(cache, Files.readAttributes(cache, BasicFileAttributes.class)));
+        assertEquals(FileVisitResult.CONTINUE, visitor.visitFileFailed(deep, denied));
+        Path sub = card.resolve("sub");
+        assertEquals(FileVisitResult.CONTINUE, visitor.preVisitDirectory(sub, Files.readAttributes(sub, BasicFileAttributes.class)));
+        assertSame(denied, assertThrows(IOException.class, () -> visitor.visitFileFailed(sub, denied)));
+    }
+
+    @Test
+    public void excludingAFolderNameAloneStillListsItsContent() {
+        // "sub" matches the folder, not the files under it: the folder is walked as before
+        assertEquals(List.of("a.jpg", "b.NEF", "notes.tmp", "sub/c.JPG", "sub/deep/d.nef", "sub/e.tmp"),
+                list(",\"exclude\":[\"sub\",\"sub/deep/*.tmp\"]"));
+        assertEquals(List.of("a.jpg", "b.NEF", "notes.tmp", "sub/c.JPG", "sub/e.tmp"), list(",\"exclude\":[\"**/deep/**\"]"));
+    }
+
+    @Test
+    public void aValidExcludeWhosePartBeforeSlashStarStarIsNotAGlobIsAccepted() {
+        // "sub\/**" (an escaped separator) is a valid glob, its part before "/**" ("sub\") is not: the folder
+        // shortcut is not taken for it, the glob is not refused
+        assertDoesNotThrow(() -> list(",\"exclude\":[\"sub\\\\/**\"]"));
     }
 
     @Test

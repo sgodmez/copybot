@@ -80,6 +80,15 @@ public class MainExecutor implements Runnable {
     /** Exclusive end of the steps run by the items the listings emit: the barrier while preparing, all steps otherwise. */
     private volatile int phaseEnd;
 
+    /**
+     * False while preparing: an item then ends PENDING even when no step follows the barrier, so that the
+     * resume point decides whether it is selected (an item ended DONE would escape the resume point).
+     */
+    private volatile boolean finalPhase;
+
+    /** Set once the configuration warnings are published: prepare() collects them, execute() keeps them. */
+    private boolean warningsCollected;
+
     private ResumeResolver resolver;
     private ResumeProposal proposal;
     private List<WorkItemExecution> orderedItems = List.of();
@@ -314,6 +323,7 @@ public class MainExecutor implements Runnable {
             resolveStepsIfNeeded();
             preparing = false;
             phaseEnd = itemSteps.size();
+            finalPhase = true;
             runListings();
             commitPhase();
             state.setStatus(resolveFinalStatus());
@@ -347,6 +357,7 @@ public class MainExecutor implements Runnable {
             checkCancelled();
             resolveStepsIfNeeded();
             phaseEnd = barrierIndex;
+            finalPhase = false;
             runListings();
             commitPhase();
             if (listingFailed.get()) {
@@ -393,6 +404,7 @@ public class MainExecutor implements Runnable {
         startPhase();
         try {
             checkCancelled();
+            finalPhase = true;
             for (WorkItemExecution exec : orderedItems) {
                 if (exec.getStatus() == ItemStatus.PENDING) {
                     submitItem(exec, barrierIndex, itemSteps.size());
@@ -431,18 +443,16 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    private boolean warningsCollected;
-
     /** Publishes the configuration warnings of every step, listings included, once (spec safe-write §6). */
     private void collectConfigWarnings() {
         if (warningsCollected) {
             return;
         }
-        warningsCollected = true;
         List<String> warnings = new ArrayList<>();
         inSteps.forEach(step -> addWarnings(warnings, step.getAction()));
         itemSteps.forEach(step -> addWarnings(warnings, step.getAction()));
         state.setWarnings(warnings);
+        warningsCollected = true;
     }
 
     private static void addWarnings(List<String> warnings, IAction action) {
@@ -706,7 +716,7 @@ public class MainExecutor implements Runnable {
             }
             if (outcome.skipReason() != null) {
                 exec.setSkipped(outcome.skipReason());
-            } else if (!outcome.continueItem() || toStep == itemSteps.size()) {
+            } else if (!outcome.continueItem() || (toStep == itemSteps.size() && finalPhase)) {
                 exec.setDone();
             } else {
                 exec.setReady();

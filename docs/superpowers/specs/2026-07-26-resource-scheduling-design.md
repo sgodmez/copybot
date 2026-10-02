@@ -36,7 +36,7 @@ Composant unique du moteur (~80 lignes, un seul verrou) :
 
 - `acquireAll(Set<String> names)` — bloque jusqu'à ce que **toutes** les ressources soient libres simultanément. Tout-ou-rien : on ne tient jamais un permis en attendant les autres → pas de deadlock, pas de slot gaspillé. Interruptible (annulation).
 - `releaseAll(Set<String> names)` — au release, parcours des attentes dans l'ordre, on sert le **premier qui rentre** (first-fit) pour éviter le head-of-line blocking des grosses tâches multi-ressources.
-- **Anti-famine** : un demandeur doublé plus de K fois (défaut : 5) ou attendant plus de X secondes (défaut : 60) passe en mode strict — plus de dépassement possible jusqu'à ce qu'il soit servi. Constantes internes du registre en v1 (pas de config).
+- **Anti-famine** : un demandeur doublé plus de K fois (défaut : 5) ou attendant plus de X secondes (défaut : 60 ; le temps passé en pause ne compte pas) passe en mode strict — plus de dépassement possible jusqu'à ce qu'il soit servi. Constantes internes du registre en v1 (pas de config).
 - Ressource inconnue à l'acquire → auto-enregistrée avec la capacité par défaut de sa famille (§5).
 - `snapshot()` — capacité / utilisé / attentes par ressource, pour l'UI.
 

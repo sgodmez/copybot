@@ -9,10 +9,12 @@ import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeStateStore;
+import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
+import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -107,6 +109,24 @@ public class PlanTest {
     }
 
     @Test
+    public void aTargetWithoutDirectoryPartIsTheCurrentDirectory() {
+        final class NameOnlyOut extends FakeAction implements IOutAction {
+            @Override
+            public void writeItem(WorkItem item) {
+            }
+
+            @Override
+            public Optional<Path> resolveTarget(WorkItem item) {
+                return Optional.of(Path.of(item.getNameDisplay())); // e.g. an output pattern "{name}"
+            }
+        }
+        Plan plan = prepared(new NameOnlyOut(), null);
+
+        assertEquals(Optional.of(Path.of("").toAbsolutePath()), plan.targetOf(named(plan, "IMG_02.JPG")),
+                "where the item is written, like the resume probe sees it");
+    }
+
+    @Test
     public void anUnresolvableTargetIsEmpty() {
         Plan plan = prepared(new TargetOut("IMG_01.JPG"), null);
 
@@ -154,5 +174,36 @@ public class PlanTest {
             wi.getMetadatas().setSize(size);
         }
         return new WorkItemExecution(wi, List.of());
+    }
+
+    /** Emits IMG_01.JPG, dated, and NODATE.BIN, without any date. */
+    final class PartlyDatedIn extends FakeAction implements IInAction {
+        @Override
+        public void listFiles(Consumer<WorkItem> consumer) {
+            try {
+                WorkItem dated = new WorkItem(Files.createFile(tempDir.resolve("IMG_01.JPG")));
+                dated.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2026-09-01T10:00:00Z"));
+                consumer.accept(dated);
+                consumer.accept(new WorkItem(Files.createFile(tempDir.resolve("NODATE.BIN"))));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+    }
+
+    @Test
+    public void aListedFileWithoutDateCannotBeAResumePointAndSaysWhy() {
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new PartlyDatedIn(), emptyConfig())), List.of(),
+                0, false, null, registry(Map.of("disk:*", 1000)),
+                new ResumeContext(ResumeMode.STATE, new ResumeStateStore(tempDir.resolve("p.state.json"))));
+        executor.prepare();
+        Plan plan = new Plan(executor);
+
+        assertEquals(ResumePoint.from(day(1)), plan.fromFile("IMG_01.JPG"));
+        CopybotException noDate = assertThrows(CopybotException.class, () -> plan.fromFile("NODATE.BIN"));
+        assertEquals(ResourcesEngine.getString("resume.from-file.no-date", "NODATE.BIN"), noDate.getMessage());
+        CopybotException unknown = assertThrows(CopybotException.class, () -> plan.fromFile("NOPE.JPG"));
+        assertEquals(ResourcesEngine.getString("resume.from-file.not-found", "NOPE.JPG"), unknown.getMessage());
     }
 }

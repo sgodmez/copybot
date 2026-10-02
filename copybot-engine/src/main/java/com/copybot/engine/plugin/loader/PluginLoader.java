@@ -59,12 +59,15 @@ public final class PluginLoader {
                 if (curentVerion.compareTo(previousVersion) > 0) {
                     // new ll is a more recent revision version of this minor version
                     validLayers.remove(previousLl);
-                    pluginDefinitions.add(PluginDefinition.ofError(previousLl, "révision plus récente trouvée")); // todo msg
+                    pluginDefinitions.add(PluginDefinition.ofError(previousLl,
+                            ResourcesEngine.getString("plugin.load.newer-revision", curentVerion, ll.getPath())));
                 } else if (curentVerion.equals(previousVersion)) {
-                    pluginDefinitions.add(PluginDefinition.ofError(ll, "déjà chargé")); // todo msg
+                    pluginDefinitions.add(PluginDefinition.ofError(ll,
+                            ResourcesEngine.getString("plugin.load.duplicate", previousLl.getPath())));
                     continue;
                 } else {
-                    pluginDefinitions.add(PluginDefinition.ofError(ll, "révision plus récente trouvée")); // todo msg
+                    pluginDefinitions.add(PluginDefinition.ofError(ll,
+                            ResourcesEngine.getString("plugin.load.newer-revision", previousVersion, previousLl.getPath())));
                     continue;
                 }
             }
@@ -115,15 +118,19 @@ public final class PluginLoader {
     }
 
     private void markUnresolvedPlugin() {
+        List<ModuleDescriptor> loadedModules = loadedLayers.stream().map(LayerLoader::getMainModuleDescriptor).toList();
         for (LayerLoader ll : layersWithDependencies) {
-            String missingDependencies = ll.getRequires().stream()
-                    .filter(r -> r.compiledVersion().isPresent())
-                    .filter(r -> loadedLayers.stream().anyMatch(m -> VersionUtil.moduleCompatible(m.getMainModuleDescriptor(), r)))
-                    .map(r -> r.name() + ":" + r.compiledVersion().get().toString())
-                    .collect(Collectors.joining(", "));
-
-            pluginDefinitions.add(PluginDefinition.ofError(ll, "Missing dependencies : '" + missingDependencies + "'")); // todo msg
+            pluginDefinitions.add(PluginDefinition.ofError(ll, ResourcesEngine.getString(
+                    "plugin.load.missing-dependencies", missingDependencies(ll.getRequires(), loadedModules))));
         }
+    }
+
+    /** The requirements no loaded module satisfies, as "name:version" (just "name" when no version is required). */
+    static String missingDependencies(List<ModuleDescriptor.Requires> requires, List<ModuleDescriptor> loadedModules) {
+        return requires.stream()
+                .filter(r -> loadedModules.stream().noneMatch(m -> VersionUtil.moduleCompatible(m, r)))
+                .map(r -> r.name() + r.compiledVersion().map(v -> ":" + v).orElse(""))
+                .collect(Collectors.joining(", "));
     }
 
     private void instanciateResolved() {

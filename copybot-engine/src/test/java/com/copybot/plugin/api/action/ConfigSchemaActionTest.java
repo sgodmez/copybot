@@ -3,6 +3,8 @@ package com.copybot.plugin.api.action;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.Required;
 import com.copybot.plugin.api.definition.IPlugin;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonSyntaxException;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -71,6 +73,32 @@ public class ConfigSchemaActionTest {
 
         assertTrue(action.configSchema().isPresent(), "the catalog asks a fresh instance");
         assertNull(action.getConfig());
+    }
+
+    public record SizeConfig(int size, long total) {
+    }
+
+    static final class SizeAction extends AbstractActionWithConfig<SizeConfig> implements IAnalyzeAction {
+        @Override
+        protected Class<SizeConfig> getConfigClass() {
+            return SizeConfig.class;
+        }
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+        }
+    }
+
+    @Test
+    public void anIntBeyondItsRangeIsAConfigErrorNotAWrappedValue() {
+        SizeAction action = new SizeAction();
+
+        // the editor accepts any long for an integer field: the int ones are checked here
+        action.loadConfig(JsonParser.parseString("{\"size\":2147483647,\"total\":3000000000}"));
+        assertEquals(new SizeConfig(Integer.MAX_VALUE, 3_000_000_000L), action.getConfig());
+        JsonSyntaxException e = assertThrows(JsonSyntaxException.class,
+                () -> action.loadConfig(JsonParser.parseString("{\"size\":3000000000}")));
+        assertEquals("Expected an int but was 3000000000 at path $.size", e.getMessage());
     }
 
     @Test

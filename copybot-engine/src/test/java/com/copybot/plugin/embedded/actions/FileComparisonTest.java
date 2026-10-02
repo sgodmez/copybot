@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -82,6 +83,17 @@ public class FileComparisonTest {
         assertTrue(FileComparison.identical(item, target("a.bin", bytes(100, 2), SHOT.plusSeconds(2)), Compare.SIZE_AND_DATE));
         assertTrue(FileComparison.identical(item, target("b.bin", bytes(100, 2), SHOT.minusSeconds(2)), Compare.SIZE_AND_DATE));
         assertFalse(FileComparison.identical(item, target("c.bin", bytes(100, 2), SHOT.plusSeconds(3)), Compare.SIZE_AND_DATE));
+        assertFalse(FileComparison.identical(item, target("d.bin", bytes(100, 2), SHOT.plusMillis(2001)), Compare.SIZE_AND_DATE));
+        assertFalse(FileComparison.identical(item, target("e.bin", bytes(100, 2), SHOT.minusMillis(2001)), Compare.SIZE_AND_DATE));
+    }
+
+    @Test
+    public void sizeAndDateNeverRecognisesASourceWithoutDate() throws IOException {
+        byte[] content = bytes(100, 1);
+        WorkItem fromUrl = new WorkItem(tempDir.toUri().toURL(), () -> new ByteArrayInputStream(content));
+        fromUrl.getMetadatas().setSize(content.length);
+
+        assertFalse(FileComparison.identical(fromUrl, target("t.bin", content, SHOT), Compare.SIZE_AND_DATE));
     }
 
     @Test
@@ -104,6 +116,26 @@ public class FileComparisonTest {
 
         assertFalse(FileComparison.identical(item, target("m.bin", alteredAt(content, 64 * 1024), SHOT), Compare.PARTIAL_HASH));
         assertTrue(FileComparison.identical(item, target("same.bin", content, SHOT), Compare.PARTIAL_HASH));
+    }
+
+    @Test
+    public void partialHashSkipsOnlyTheMiddleAbove128KiB() throws IOException {
+        int chunk = FileComparison.PARTIAL_CHUNK;
+        byte[] content = bytes(2 * chunk + 1, 9); // one byte skipped, at index chunk
+        WorkItem item = source("s.bin", content);
+
+        assertTrue(FileComparison.identical(item, target("m.bin", alteredAt(content, chunk), SHOT), Compare.PARTIAL_HASH));
+        assertFalse(FileComparison.identical(item, target("a.bin", alteredAt(content, chunk - 1), SHOT), Compare.PARTIAL_HASH));
+        assertFalse(FileComparison.identical(item, target("b.bin", alteredAt(content, chunk + 1), SHOT), Compare.PARTIAL_HASH));
+    }
+
+    @Test
+    public void aStaleSourceSizeFailsInsteadOfMatching() throws IOException {
+        WorkItem item = source("s.bin", bytes(200 * 1024, 4));
+        item.getMetadatas().setSize(300 * 1024); // the source shrank since it was read
+        Path target = target("t.bin", bytes(300 * 1024, 4), SHOT);
+
+        assertThrows(EOFException.class, () -> FileComparison.identical(item, target, Compare.PARTIAL_HASH));
     }
 
     @Test

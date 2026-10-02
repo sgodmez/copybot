@@ -47,7 +47,7 @@ Un item `SKIPPED` **pendant l'exécution** (il avait été sélectionné par le 
 
 ## 3. Mode d'écriture
 
-- `tempAndRename` (défaut) : écriture dans `.<nom>.<runId>.copybot-tmp` (fichier caché, même répertoire), puis déplacement vers la cible (atomique si le système le permet, sinon remplacement). En cas d'échec, le temporaire est supprimé.
+- `tempAndRename` (défaut) : écriture dans `.<nom>.<runId>.copybot-tmp` (fichier caché, même répertoire ; au-delà de 255 octets, `<nom>` est raccourci en un préfixe suivi de `~` et d'une empreinte du nom complet), puis déplacement vers la cible (atomique si le système le permet, sinon remplacement). En cas d'échec, le temporaire est supprimé.
 - `direct` : écriture sous le nom final. En cas d'échec, le fichier partiel est supprimé **s'il a été créé par cette écriture** (en `overwrite` direct, l'original est perdu dès le début de l'écriture — documenté dans le libellé de l'option).
 - Temporaires orphelins (crash précédent) : la première fois qu'une exécution écrit dans un répertoire cible, les fichiers `.*.copybot-tmp` dont le `runId` n'est pas celui de l'exécution courante sont supprimés. Le `runId` est un identifiant unique par exécution, fourni par le moteur à l'action.
 - Le déplacement existant (source temporaire ou « supprimer après », même système de fichiers) reste possible et reste le chemin le plus rapide.
@@ -64,7 +64,7 @@ Un item `SKIPPED` **pendant l'exécution** (il avait été sélectionné par le 
 ## 5. Suppression de la source
 
 - `deleteSource: true` : après écriture **et** vérification réussies, la source est supprimée. Si l'item est `SKIPPED` pour cause de fichier identique, la source n'est supprimée que si `compare` vaut `fullHash`.
-- Avec `verify` différent de `readBack` : **avertissement** (pas de blocage), visible dans le plan (CLI : ligne `Warning:` du dry-run et sur stderr au démarrage ; UI : bandeau).
+- Avec `verify` différent de `readBack` : **avertissement** (pas de blocage), visible dans le plan (CLI : ligne `Warning:` — `Avertissement :` en français — du dry-run et sur stderr au démarrage ; UI : bandeau).
 - Échec de suppression ⇒ item `ERROR` (la copie est faite ; au passage suivant le fichier sera identique ⇒ skip ⇒ nouvelle tentative de suppression si `fullHash`).
 
 ## 6. API plugin

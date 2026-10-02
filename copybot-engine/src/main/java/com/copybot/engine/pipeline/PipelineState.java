@@ -73,6 +73,7 @@ public class PipelineState {
     public List<ResourceSnapshot> getResourceSnapshot() {
         return registry == null ? List.of() : registry.snapshot();
     }
+
     public ResumeProposal getResumeProposal() {
         return resumeProposal;
     }

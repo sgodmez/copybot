@@ -5,6 +5,7 @@ import com.copybot.plugin.embedded.actions.FileWriteSettings.Compare;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.Policy;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.Verify;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.WriteMode;
+import com.copybot.resources.ResourcesEngine;
 import com.google.gson.Gson;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
@@ -75,27 +76,35 @@ public class FileWriteSettingsTest {
 
     @Test
     public void overwriteAndOnConflictTogetherAreRefused() {
-        assertThrows(CopybotException.class,
-                () -> settings("{\"outPattern\":\"x\",\"overwrite\":true,\"onConflict\":{\"ifDifferent\":\"rename\"}}"));
+        assertRefused("write.config.overwrite-with-on-conflict",
+                "{\"outPattern\":\"x\",\"overwrite\":true,\"onConflict\":{\"ifDifferent\":\"rename\"}}");
     }
 
     @Test
     public void anUnknownValueIsRefusedAndQuoted() {
-        CopybotException e = assertThrows(CopybotException.class,
-                () -> settings("{\"outPattern\":\"x\",\"verify\":\"readback\"}"));
-        assertTrue(e.getMessage().contains("readback"), e.getMessage());
-
-        assertThrows(CopybotException.class, () -> settings("{\"outPattern\":\"x\",\"writeMode\":\"atomic\"}"));
-        assertThrows(CopybotException.class, () -> settings("{\"outPattern\":\"x\",\"onConflict\":{\"compare\":\"md5\"}}"));
-        assertThrows(CopybotException.class, () -> settings("{\"outPattern\":\"x\",\"onConflict\":{\"ifIdentical\":\"keep\"}}"));
-        assertThrows(CopybotException.class, () -> settings("{\"outPattern\":\"x\",\"onConflict\":{\"ifDifferent\":\"merge\"}}"));
+        assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"verify\":\"readback\"}",
+                "verify", "readback", "none, size, readBack");
+        assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"writeMode\":\"atomic\"}",
+                "writeMode", "atomic", "tempAndRename, direct");
+        assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"onConflict\":{\"compare\":\"md5\"}}",
+                "onConflict.compare", "md5", "size, sizeAndDate, partialHash, fullHash");
+        assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"onConflict\":{\"ifIdentical\":\"keep\"}}",
+                "onConflict.ifIdentical", "keep", "skip, rename, overwrite, error");
+        assertRefused("write.config.unknown-value", "{\"outPattern\":\"x\",\"onConflict\":{\"ifDifferent\":\"merge\"}}",
+                "onConflict.ifDifferent", "merge", "skip, rename, overwrite, error");
     }
 
     @Test
     public void theOutPatternIsRequired() {
-        assertThrows(CopybotException.class, () -> settings("{}"));
-        assertThrows(CopybotException.class, () -> settings("{\"outPattern\":\" \"}"));
-        assertThrows(CopybotException.class, () -> FileWriteSettings.of(null));
+        assertRefused("write.config.no-out-pattern", "{}");
+        assertRefused("write.config.no-out-pattern", "{\"outPattern\":\" \"}");
+        CopybotException e = assertThrows(CopybotException.class, () -> FileWriteSettings.of(null));
+        assertEquals(ResourcesEngine.getString("write.config.no-out-pattern"), e.getMessage());
+    }
+
+    private static void assertRefused(String key, String actionConfig, Object... args) {
+        CopybotException e = assertThrows(CopybotException.class, () -> settings(actionConfig));
+        assertEquals(ResourcesEngine.getString(key, args), e.getMessage());
     }
 
     @Test

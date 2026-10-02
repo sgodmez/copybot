@@ -58,11 +58,21 @@ public final class ResumeStateStore {
                 return Optional.empty();
             }
             JsonObject c = cursor.getAsJsonObject();
-            return Optional.of(new ItemKey(Instant.parse(c.get("date").getAsString()), c.get("name").getAsString()));
-        } catch (IOException | JsonParseException | IllegalStateException | NullPointerException
-                 | UnsupportedOperationException | DateTimeParseException e) {
+            return Optional.of(new ItemKey(Instant.parse(requiredString(c, "date")), requiredString(c, "name")));
+        } catch (IOException | JsonParseException | IllegalStateException | UnsupportedOperationException
+                 | DateTimeParseException e) {
+            // IllegalStateException / UnsupportedOperationException: a JSON element of the wrong kind
             throw CopybotException.ofResource(e, "resume.state.invalid", stateFile.toAbsolutePath());
         }
+    }
+
+    /** @throws JsonParseException when the member is absent or null */
+    private static String requiredString(JsonObject object, String member) {
+        JsonElement value = object.get(member);
+        if (value == null || value.isJsonNull()) {
+            throw new JsonParseException("missing \"" + member + "\"");
+        }
+        return value.getAsString();
     }
 
     /** Writes a temporary file in the same directory then moves it over the state file. */

@@ -83,7 +83,7 @@ Application : chaque item préparé sans erreur est soit sélectionné (reste `P
 
 Surcharge manuelle :
 
-- CLI, options mutuellement exclusives : `--from-file <nom>` (⇒ `from(clé de ce fichier)`, erreur si aucun item listé ne porte ce nom), `--from-date <AAAA-MM-JJ>` (⇒ `from(début de ce jour, fuseau système, nom vide)`), `--all`.
+- CLI, options mutuellement exclusives : `--from-file <nom>` (⇒ `from(clé de ce fichier)`, erreur si aucun item listé ne porte ce nom, ou si cet item n'a aucune date), `--from-date <AAAA-MM-JJ>` (⇒ `from(début de ce jour, fuseau système, nom vide)`), `--all`.
 - API : le plan expose les items ordonnés ; l'appelant (future UI) peut construire un `from(key)` à partir de n'importe quel item.
 
 ## 6. Préparation / exécution et barrière
@@ -102,7 +102,7 @@ inSteps → analyseSteps ──[ barrière : résolution de la reprise ]──�
   - `Plan prepare(Path pipeline, Consumer<PipelineState> watcher)` — bloquant ;
   - `void execute(Plan plan, ResumePoint override)` — asynchrone, joint par `waitForCompletion()` ;
   - `run(Path, watcher)` conservé = préparation + exécution avec la reprise proposée.
-- CLI : `--dry-run` (déjà déclaré, jusqu'ici ignoré) = préparation seule ; affiche le point de reprise, sa source, les avertissements, puis une ligne par item (`COPY` / `SKIP <raison>` / `ERROR <message>`). Aucun fichier d'état écrit.
+- CLI : `--dry-run` (déjà déclaré, jusqu'ici ignoré) = préparation seule ; affiche le point de reprise, sa source, les avertissements, puis une ligne par item (`COPY` / `SKIP <raison>` / `ERROR <message>` ; textes dans la langue courante, `COPIE` / `IGNORE` / `ERREUR` en français). Aucun fichier d'état écrit.
 
 `SKIPPED` ne compte pas comme un échec : statut final `SUCCESS` si aucun item n'est en `ERROR` et aucun listing n'a échoué.
 

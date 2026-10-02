@@ -1,6 +1,7 @@
 package com.copybot.utils;
 
 import java.lang.module.ModuleDescriptor;
+import java.util.Comparator;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -51,5 +52,29 @@ public final class VersionUtil {
             return matcherRequire.group(2).equals(matcherVersion.group(2)); // same minor
         }
         return Integer.parseInt(matcherVersion.group(2)) >= Integer.parseInt(matcherRequire.group(2)); // same minor or above
+    }
+
+    /**
+     * Version order, oldest first: numeric ({@link ModuleDescriptor.Version}, so "1.10" is after "1.9"), the
+     * versions it cannot parse before every parsable one (between themselves in string order), null first.
+     */
+    public static final Comparator<String> VERSION_ORDER = Comparator.nullsFirst((a, b) -> {
+        Optional<ModuleDescriptor.Version> va = parse(a);
+        Optional<ModuleDescriptor.Version> vb = parse(b);
+        if (va.isPresent() && vb.isPresent()) {
+            return va.get().compareTo(vb.get());
+        }
+        if (va.isPresent() != vb.isPresent()) {
+            return va.isPresent() ? 1 : -1;
+        }
+        return a.compareTo(b);
+    });
+
+    private static Optional<ModuleDescriptor.Version> parse(String version) {
+        try {
+            return Optional.of(ModuleDescriptor.Version.parse(version));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
     }
 }

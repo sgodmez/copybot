@@ -1,10 +1,20 @@
 package com.copybot.plugin.api.config;
 
+import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
+import com.copybot.plugin.embedded.actions.FileReadAction;
 import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.IOException;
 import java.math.BigDecimal;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -42,6 +52,18 @@ public class ConfigSchemaTest {
     }
 
     record Loop(String name, Loop next) {
+    }
+
+    record Ping(String name, Pong pong) {
+    }
+
+    record Pong(String label, Ping ping) {
+    }
+
+    record Tree(String name, List<Tree> children) {
+    }
+
+    record Unknowns(String kept, List<?> wildcard, List<? extends Number> bounded, List<Map<String, String>> maps) {
     }
 
     private static ConfigField field(ConfigSchema schema, String path) {
@@ -128,6 +150,37 @@ public class ConfigSchemaTest {
     }
 
     @Test
+    public void anIndirectCycleIsLeftOutWhereItLoopsBack() {
+        ConfigSchema schema = ConfigSchema.of(Ping.class);
+
+        assertEquals(List.of("name", "pong", "pong.label"), schema.allFields().stream().map(ConfigField::path).toList());
+    }
+
+    @Test
+    public void aListOfTheRecordBeingIntrospectedIsACycle() {
+        assertEquals(List.of("name"), ConfigSchema.of(Tree.class).fields().stream().map(ConfigField::name).toList());
+    }
+
+    @Test
+    public void wildcardAndMapElementsAreLeftOut() {
+        assertEquals(List.of("kept"), ConfigSchema.of(Unknowns.class).fields().stream().map(ConfigField::name).toList());
+    }
+
+    @Test
+    public void aSchemaCannotBeChangedOnceBuilt() {
+        List<ConfigField> fields = new ArrayList<>(ConfigSchema.of(Sample.class).fields());
+        ConfigSchema schema = new ConfigSchema(fields);
+        fields.clear();
+
+        assertEquals(17, schema.fields().size(), "the schema keeps its own copy");
+        assertThrows(UnsupportedOperationException.class, () -> schema.fields().clear());
+        assertThrows(UnsupportedOperationException.class, () -> schema.allFields().clear());
+        assertThrows(UnsupportedOperationException.class, () -> field(schema, "nested").children().clear());
+        assertThrows(UnsupportedOperationException.class, () -> field(schema, "mode").enumValues().clear());
+        assertThrows(UnsupportedOperationException.class, () -> field(schema, "source").hints().clear());
+    }
+
+    @Test
     public void i18nKeysFollowThePathAndTakeThePluginPrefix() {
         ConfigSchema schema = ConfigSchema.of(Sample.class);
         assertEquals("config.nested.inner.name", field(schema, "nested.inner").labelKey());
@@ -143,10 +196,24 @@ public class ConfigSchemaTest {
     }
 
     @Test
-    public void thePatternVariablesAreTheOnesOfTheEmbeddedActions() {
-        assertTrue(ConfigSchema.PATTERN_VARIABLES.containsAll(List.of("name", "size",
-                "creation.Y", "lastModified.m", "captureDate.D", "captureDate.y")));
-        assertEquals(14, ConfigSchema.PATTERN_VARIABLES.size());
-        assertFalse(ConfigSchema.PATTERN_VARIABLES.contains("sizeHr"), "a size for the display, not for a file name");
+    public void everyPatternVariableHasAValueForAReadFile(@TempDir Path tempDir) throws IOException {
+        Files.writeString(tempDir.resolve("a.jpg"), "a");
+        JsonObject config = new JsonObject();
+        config.addProperty("path", tempDir.toString());
+        FileReadAction read = new FileReadAction();
+        read.loadConfig(config);
+        List<WorkItem> items = new ArrayList<>();
+        read.listFiles(items::add);
+        Map<String, String> values = new HashMap<>(items.getFirst().getMetadatas().display());
+        // the capture date is set by a plugin (metadata extractor), like any date
+        WorkItemMetadata captured = new WorkItemMetadata();
+        captured.setTime(WorkItemMetadata.CAPTURE_DATE, Instant.now());
+        values.putAll(captured.display());
+
+        for (String variable : ConfigSchema.PATTERN_VARIABLES) {
+            assertTrue(values.containsKey(variable), "{" + variable + "} has no value: " + values.keySet());
+        }
+        assertTrue(ConfigSchema.PATTERN_VARIABLES.containsAll(List.of("name", "size", "creation.Y",
+                "lastModified.m", "captureDate.D")));
     }
 }

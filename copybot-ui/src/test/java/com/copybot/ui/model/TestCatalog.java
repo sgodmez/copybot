@@ -2,6 +2,7 @@ package com.copybot.ui.model;
 
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
+import com.copybot.engine.plugin.PluginCatalog;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.DirectoryPath;
 import com.copybot.plugin.api.config.PatternField;
@@ -34,7 +35,12 @@ final class TestCatalog {
     static final CatalogAction EXIF_1 = action("com.acme.exif", "1.4.0", "exif.read", StepType.ANALYZE, ExifConfig.class);
 
     /** In PluginEngine order: plugin name, most recent version first. */
-    static final StepCatalog CATALOG = new StepCatalog(List.of(EXIF_2, EXIF_1, READ, WRITE));
+    static final StepCatalog CATALOG = catalog(EXIF_2, EXIF_1, READ, WRITE);
+
+    /** A catalog of these actions, in PluginEngine order, without failed plugin. */
+    static StepCatalog catalog(CatalogAction... actions) {
+        return new StepCatalog(new PluginCatalog(List.of(actions), List.of()));
+    }
 
     static CatalogAction action(String plugin, String version, String code, StepType type, Class<? extends Record> config) {
         String prefix = "plugin." + plugin + "." + code;

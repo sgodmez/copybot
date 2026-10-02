@@ -62,6 +62,38 @@ public class ResumeStateStoreTest {
     }
 
     @Test
+    public void aNullCursorMeansNoCursor() throws Exception {
+        Path file = tempDir.resolve("p.state.json");
+        Files.writeString(file, "{\"cursor\":null}");
+        assertTrue(new ResumeStateStore(file).readCursor().isEmpty());
+    }
+
+    @Test
+    public void aCursorWithoutDateOrNameIsAnExplicitError() throws Exception {
+        Path file = tempDir.resolve("p.state.json");
+        for (String json : new String[]{
+                "{\"cursor\":{\"name\":\"A\"}}",
+                "{\"cursor\":{\"date\":\"2026-09-28T15:42:10Z\"}}",
+                "{\"cursor\":{\"date\":null,\"name\":\"A\"}}",
+                "{\"cursor\":{\"date\":\"2026-09-28T15:42:10Z\",\"name\":null}}"}) {
+            Files.writeString(file, json);
+            assertThrows(CopybotException.class, () -> new ResumeStateStore(file).readCursor(), json);
+        }
+    }
+
+    @Test
+    public void aWriteFailureIsAnExplicitErrorAndLeavesNoTemporaryFile() throws Exception {
+        Path stateFile = tempDir.resolve("p.state.json");
+        // a non-empty directory where the state file goes: the move over it fails
+        Files.createDirectories(stateFile.resolve("child"));
+        ResumeStateStore store = new ResumeStateStore(stateFile);
+
+        assertThrows(CopybotException.class,
+                () -> store.writeCursor(new ItemKey(Instant.parse("2026-09-28T15:42:10Z"), "A")));
+        assertFalse(Files.exists(tempDir.resolve("p.state.json.tmp")), "the temporary file is removed");
+    }
+
+    @Test
     public void invalidFileIsAnExplicitErrorNotAFreshStart() throws Exception {
         Path file = tempDir.resolve("p.state.json");
         Files.writeString(file, "{ this is not json");

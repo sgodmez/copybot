@@ -24,6 +24,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 public final class PluginEngine {
 
@@ -32,6 +34,9 @@ public final class PluginEngine {
     // replaced as a whole, once, by load(): readers never see a partially filled list
     private static volatile List<PluginDefinition> loadedPlugins = List.of();
     private static volatile List<PluginDefinition> errorPlugins = List.of();
+
+    /** The broken plugins and actions already warned of by the catalog, built again at each editor opening. */
+    private static final Set<String> CATALOG_WARNED = ConcurrentHashMap.newKeySet();
 
     /** Directories of the first (and only) load, null before it. Guarded by the class lock. */
     private static List<Path> loadedFrom;
@@ -60,7 +65,7 @@ public final class PluginEngine {
         var allPlugins = pl.load();
         allPlugins.sort(Comparator
                 .comparing(PluginDefinition::getName)
-                .thenComparing(PluginDefinition::getVersion, Comparator.reverseOrder()));
+                .thenComparing(PluginDefinition::getVersion, VersionUtil.VERSION_ORDER.reversed())); // most recent first
 
         List<PluginDefinition> loaded = new ArrayList<>();
         List<PluginDefinition> errors = new ArrayList<>();
@@ -94,16 +99,18 @@ public final class PluginEngine {
     /**
      * Every action of the loaded plugins (desktop-ui spec, part 4), in plugin order (name, then most recent
      * version first) then step type (IN, ANALYZE, PROCESS, OUT), texts in the current language. Empty
-     * before {@link #load}. A plugin whose actions cannot be listed (e.g. a missing class) is left out, with
-     * a warning in the log: it never hides the others.
+     * before {@link #load}. A plugin whose actions cannot be listed (e.g. a missing class) has none, with a
+     * warning in the log (once per JVM), and is one of the {@link PluginCatalog#failedPlugins()}: it never
+     * hides the others.
      */
-    public static List<CatalogAction> catalog() {
+    public static PluginCatalog catalog() {
         return catalogOf(loadedPlugins);
     }
 
     // visible for tests: the catalog of these plugins
-    static List<CatalogAction> catalogOf(List<PluginDefinition> plugins) {
+    static PluginCatalog catalogOf(List<PluginDefinition> plugins) {
         List<CatalogAction> actions = new ArrayList<>();
+        List<PluginCatalog.FailedPlugin> failed = new ArrayList<>();
         for (PluginDefinition plugin : plugins) {
             List<CatalogAction> pluginActions = new ArrayList<>();
             try {
@@ -113,12 +120,15 @@ public final class PluginEngine {
                 addActions(pluginActions, plugin, StepType.PROCESS, instance.getProcessActions());
                 addActions(pluginActions, plugin, StepType.OUT, instance.getOutActions());
             } catch (LinkageError | RuntimeException e) {
-                LOG.warn(e, "plugin.catalog.failed", plugin.getName(), plugin.getVersion(), String.valueOf(e));
+                if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion())) {
+                    LOG.warn(e, "plugin.catalog.failed", plugin.getName(), plugin.getVersion(), String.valueOf(e));
+                }
+                failed.add(new PluginCatalog.FailedPlugin(plugin.getName(), plugin.getVersion()));
                 continue;
             }
             actions.addAll(pluginActions);
         }
-        return List.copyOf(actions);
+        return new PluginCatalog(actions, failed);
     }
 
     private static void addActions(List<CatalogAction> actions, PluginDefinition plugin, StepType type,
@@ -151,7 +161,9 @@ public final class PluginEngine {
         try {
             return definition.getInstance().configSchema();
         } catch (LinkageError | RuntimeException e) {
-            LOG.warn(e, "plugin.catalog.no-schema", plugin.getName(), definition.actionCode(), String.valueOf(e));
+            if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion() + ":" + definition.actionCode())) {
+                LOG.warn(e, "plugin.catalog.no-schema", plugin.getName(), definition.actionCode(), String.valueOf(e));
+            }
             return Optional.empty();
         }
     }
@@ -162,7 +174,7 @@ public final class PluginEngine {
             return Optional.empty();
         }
         String value = bundle.getString(key);
-        return value.startsWith("%") ? Optional.empty() : Optional.of(value); // "%key": no such key
+        return value.equals("%" + key) ? Optional.empty() : Optional.of(value); // "%key": no such key
     }
 
     public static <A extends IAction> PipelineStep<A> resolve(PipelineStepConfig stepConfig, Class<A> actionClass) {
@@ -179,7 +191,6 @@ public final class PluginEngine {
         actionInstance.loadConfig(stepConfig.actionConfig());
         return new PipelineStep(pluginDef.getPluginInstance(), actionInstance, stepConfig);
     }
-
 
     private static boolean pluginMatch(PluginDefinition plugin, PipelineStepConfig stepConfig) {
         String stepPluginName = stepConfig.plugin() == null || stepConfig.plugin().isBlank() ? CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME : stepConfig.plugin();

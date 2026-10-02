@@ -403,6 +403,22 @@ public class FileWriteActionTest {
     }
 
     @Test
+    public void overwriteNeverReplacesADirectoryAtTheTarget() throws IOException {
+        for (String writeMode : new String[]{"tempAndRename", "direct"}) {
+            Path target = Files.createDirectories(tempDir.resolve(writeMode).resolve("photo.jpg"));
+            WorkItem item = itemWithContent("src-" + writeMode + ".jpg", "new".getBytes());
+            FileWriteAction action = action(target,
+                    ",\"onConflict\":{\"ifDifferent\":\"overwrite\"},\"writeMode\":\"" + writeMode + "\"");
+
+            assertThrows(CopybotException.class, () -> action.writeItem(item), writeMode);
+            assertTrue(Files.isDirectory(target), writeMode);
+            try (var left = Files.list(target.getParent())) {
+                assertEquals(List.of(target), left.toList(), writeMode + ": no temporary file left");
+            }
+        }
+    }
+
+    @Test
     public void theIoErrorDetailFallsBackToTheExceptionClass() {
         assertEquals("java.io.IOException", FileWriteAction.detail(new IOException()));
         assertEquals("boom", FileWriteAction.detail(new IOException("boom")));

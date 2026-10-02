@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.Copybot;
+import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -134,9 +135,9 @@ public class ResumeEndToEndTest {
         String[] result = capture(pipeline, "--dry-run", "--from-file=IMG_02.JPG");
 
         assertEquals("0", result[0]);
-        assertTrue(result[1].contains("SKIP  IMG_01.JPG"), result[1]);
-        assertTrue(result[1].contains("COPY  IMG_02.JPG"), result[1]);
-        assertTrue(result[1].contains("[MANUAL]"), result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.skip", "IMG_01.JPG", "").strip()), result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_02.JPG")), result[1]);
+        assertTrue(result[1].contains("[" + ResourcesEngine.getString("cli.plan.source.MANUAL") + "]"), result[1]);
         assertFalse(Files.exists(nas.resolve("IMG_02.JPG")), "a dry run writes nothing");
     }
 
@@ -193,7 +194,7 @@ public class ResumeEndToEndTest {
 
         String[] result = capture(pipeline);
 
-        assertTrue(result[2].contains("ERROR IMG_01.JPG"), result[2]);
+        assertTrue(result[2].contains(ResourcesEngine.getString("cli.item.error", "IMG_01.JPG", "").strip()), result[2]);
     }
 
     @Test
@@ -284,7 +285,7 @@ public class ResumeEndToEndTest {
     }
 
     private static boolean hasWarning(String output) {
-        return output.lines().anyMatch(line -> line.startsWith("Warning: "));
+        return output.lines().anyMatch(line -> line.startsWith(ResourcesEngine.getString("cli.warning", "")));
     }
 
     @Test
@@ -305,7 +306,7 @@ public class ResumeEndToEndTest {
         String[] result = capture(pipeline);
 
         assertEquals("0", result[0], result[2]);
-        assertEquals(1, result[2].lines().filter(line -> line.startsWith("Warning: ")).count(), result[2]);
+        assertEquals(1, result[2].lines().filter(line -> line.startsWith(ResourcesEngine.getString("cli.warning", ""))).count(), result[2]);
         assertTrue(Files.exists(nas.resolve("IMG_01.JPG")));
         assertFalse(Files.exists(card.resolve("IMG_01.JPG")), "deleteSource: the source is gone once copied and verified");
     }

@@ -162,7 +162,7 @@ public class Copybot implements Callable<Integer> {
         return state -> {
             List<String> warnings = state.getWarnings();
             if (!warnings.isEmpty() && printed.compareAndSet(false, true)) {
-                warnings.forEach(w -> System.err.println("Warning: " + w));
+                warnings.forEach(w -> System.err.println(ResourcesEngine.getString("cli.warning", w)));
             }
         };
     }
@@ -213,7 +213,7 @@ public class Copybot implements Callable<Integer> {
         }
         for (WorkItemExecution item : state.getWorkItems()) {
             if (item.getStatus() == ItemStatus.ERROR) {
-                System.err.println("ERROR " + name(item) + "  " + message(item.getError()));
+                System.err.println(ResourcesEngine.getString("cli.item.error", name(item), message(item.getError())));
             }
         }
     }

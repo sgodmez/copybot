@@ -6,6 +6,7 @@ import com.copybot.plugin.api.action.WorkItemMetadata;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -17,7 +18,7 @@ public record ItemKey(Instant date, String name) implements Comparable<ItemKey> 
     private static final Comparator<ItemKey> ORDER = Comparator.comparing(ItemKey::date).thenComparing(ItemKey::name);
 
     public ItemKey {
-        date = date.truncatedTo(ChronoUnit.SECONDS);
+        date = Objects.requireNonNull(date, "date").truncatedTo(ChronoUnit.SECONDS);
         name = name == null ? "" : name;
     }
 
