@@ -8,7 +8,9 @@ import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
+import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.Compare;
+import com.copybot.resources.ResourcesEngine;
 import com.google.gson.JsonElement;
 
 import java.io.IOException;
@@ -23,7 +25,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.regex.Pattern;
 
 /**
  * Writes the items under outPattern (spec safe-write): an existing target is compared then skipped,
@@ -35,8 +36,6 @@ import java.util.regex.Pattern;
  * write; the writer's in-flight guard still refuses two writes of one final target.
  */
 public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> implements IOutAction {
-    private static final Pattern PARAM_PATTERN = Pattern.compile("\\{(.*?)\\}");
-
     /** Resolutions of one item when its target keeps being created by another process. */
     private static final int TARGET_ATTEMPTS = 3;
 
@@ -70,11 +69,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
 
     @Override
     public Set<Path> touchedPaths(WorkItem item) {
-        // static prefix of the out pattern, before the first {placeholder}
-        String outPattern = settings.outPattern();
-        int firstParam = outPattern.indexOf('{');
-        String prefix = firstParam < 0 ? outPattern : outPattern.substring(0, firstParam);
-        return Set.of(Path.of(prefix));
+        return Set.of(Path.of(settings.outPattern().staticPrefix()));
     }
 
     /** Direct use outside the engine: a write under a new run id; a skipped item simply returns. */
@@ -96,7 +91,18 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
      */
     @Override
     public WriteResult write(WorkItem workItem, WriteContext context) {
-        Path target = Path.of(resolveFileName(workItem));
+        OutPattern.Resolution resolution = resolution(workItem);
+        if (!resolution.complete()) {
+            switch (settings.onMissingKey()) {
+                case ERROR -> throw missingKey(workItem, resolution);
+                case SKIP -> {
+                    return WriteResult.skipped(null, ResourcesEngine.getString("write.skip.missing-key",
+                            String.join(", ", resolution.missing())));
+                }
+                case LITERAL -> { } // the expression stays as written (historical behaviour)
+            }
+        }
+        Path target = Path.of(resolution.text());
         Path key = target.toAbsolutePath().normalize();
         TargetLock lock;
         try {
@@ -178,14 +184,29 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         }
     }
 
+    /** @throws CopybotException write.pattern.missing-key, unless onMissingKey is "literal" */
     @Override
     public Optional<Path> resolveTarget(WorkItem workItem) {
-        return Optional.of(Path.of(resolveFileName(workItem)));
+        OutPattern.Resolution resolution = resolution(workItem);
+        if (!resolution.complete() && settings.onMissingKey() != FileWriteSettings.MissingKey.LITERAL) {
+            throw missingKey(workItem, resolution);
+        }
+        return Optional.of(Path.of(resolution.text()));
     }
 
-    private String resolveFileName(WorkItem workItem) {
-        return PARAM_PATTERN.matcher(settings.outPattern())
-                .replaceAll(m -> workItem.getMetadatas().display().getOrDefault(m.group(1), m.group(0)).toString());
+    /**
+     * The target of the item, or why there is none (spec pattern-helper §2).
+     *
+     * @return the resolution; with ERROR or SKIP, check {@link OutPattern.Resolution#complete()} first
+     */
+    private OutPattern.Resolution resolution(WorkItem workItem) {
+        return settings.outPattern().resolve(workItem.getMetadatas().display());
+    }
+
+    private CopybotException missingKey(WorkItem workItem, OutPattern.Resolution resolution) {
+        // URL items have no file name
+        String name = workItem.getNameDisplay() != null ? workItem.getNameDisplay() : workItem.getSourceLocationDisplay();
+        return CopybotException.ofResource("write.pattern.missing-key", String.join(", ", resolution.missing()), name);
     }
 
     private WriteResult doWrite(WorkItem workItem, Path target, String runId) throws IOException {

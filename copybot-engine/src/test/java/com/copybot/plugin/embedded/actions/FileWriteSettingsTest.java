@@ -25,7 +25,7 @@ public class FileWriteSettingsTest {
     public void everythingButTheOutPatternHasADefault() {
         FileWriteSettings settings = settings("{\"outPattern\":\"nas/{name}\"}");
 
-        assertEquals("nas/{name}", settings.outPattern());
+        assertEquals("nas/{name}", settings.outPattern().pattern());
         assertEquals(Compare.PARTIAL_HASH, settings.compare());
         assertEquals(Policy.SKIP, settings.ifIdentical());
         assertEquals(Policy.RENAME, settings.ifDifferent());

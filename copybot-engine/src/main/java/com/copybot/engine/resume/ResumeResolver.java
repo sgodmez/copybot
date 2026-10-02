@@ -144,7 +144,14 @@ public final class ResumeResolver {
             if (item.getStatus() == ItemStatus.ERROR || key.isEmpty()) {
                 continue;
             }
-            Optional<Path> target = out.resolveTarget(item.getWorkItem());
+            Optional<Path> target;
+            try {
+                target = out.resolveTarget(item.getWorkItem());
+            } catch (CopybotException e) {
+                // e.g. no value for a pattern expression: this item cannot be probed, it stays selected and
+                // fails or is skipped at the execution, by its own onMissingKey (spec pattern-helper §2)
+                continue;
+            }
             if (target.isEmpty()) {
                 return noTarget(explicit);
             }

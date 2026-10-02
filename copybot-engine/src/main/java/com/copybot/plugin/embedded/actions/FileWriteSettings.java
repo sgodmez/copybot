@@ -1,6 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
 import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
@@ -10,7 +11,8 @@ import java.util.stream.Collectors;
 
 /** The validated file.write configuration, defaults applied (spec safe-write §1 to §5). */
 record FileWriteSettings(
-        String outPattern,
+        OutPattern outPattern,
+        MissingKey onMissingKey,
         Compare compare,
         Policy ifIdentical,
         Policy ifDifferent,
@@ -30,6 +32,22 @@ record FileWriteSettings(
         private final String jsonName;
 
         Compare(String jsonName) {
+            this.jsonName = jsonName;
+        }
+
+        @Override
+        public String jsonName() {
+            return jsonName;
+        }
+    }
+
+    /** What to do when an expression of outPattern has no value for an item (spec pattern-helper §2). */
+    enum MissingKey implements Named {
+        ERROR("error"), SKIP("skip"), LITERAL("literal");
+
+        private final String jsonName;
+
+        MissingKey(String jsonName) {
             this.jsonName = jsonName;
         }
 
@@ -94,12 +112,14 @@ record FileWriteSettings(
     }
 
     /**
-     * @throws CopybotException write.config.no-out-pattern, write.config.unknown-value
+     * @throws CopybotException write.config.no-out-pattern, pattern.syntax, write.config.unknown-value
      */
     static FileWriteSettings of(FileWriteConfig config) {
         if (config == null || config.outPattern() == null || config.outPattern().isBlank()) {
             throw CopybotException.ofResource("write.config.no-out-pattern");
         }
+        OutPattern pattern = OutPattern.parse(config.outPattern());
+        MissingKey missingKey = parse("onMissingKey", config.onMissingKey(), MissingKey.ERROR, MissingKey.class);
         FileWriteConfig.OnConflict onConflict = config.onConflict();
         Compare compare = Compare.PARTIAL_HASH;
         Policy ifIdentical = Policy.SKIP;
@@ -109,7 +129,7 @@ record FileWriteSettings(
             ifIdentical = parse("onConflict.ifIdentical", onConflict.ifIdentical(), Policy.SKIP, Policy.class);
             ifDifferent = parse("onConflict.ifDifferent", onConflict.ifDifferent(), Policy.RENAME, Policy.class);
         }
-        return new FileWriteSettings(config.outPattern(), compare, ifIdentical, ifDifferent,
+        return new FileWriteSettings(pattern, missingKey, compare, ifIdentical, ifDifferent,
                 parse("writeMode", config.writeMode(), WriteMode.TEMP_AND_RENAME, WriteMode.class),
                 parse("verify", config.verify(), Verify.SIZE, Verify.class),
                 Boolean.TRUE.equals(config.deleteSource()));

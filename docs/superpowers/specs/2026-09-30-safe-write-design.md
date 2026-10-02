@@ -14,6 +14,7 @@ Décisions actées avec l'utilisateur : conflit à deux branches (identique / di
 ```json
 "actionConfig": {
   "outPattern": "//nas/photo/{captureDate.Y}-{captureDate.m}-{captureDate.D}/{name}",
+  "onMissingKey": "error",
   "onConflict": { "compare": "partialHash", "ifIdentical": "skip", "ifDifferent": "rename" },
   "writeMode": "tempAndRename",
   "verify": "size",
@@ -21,7 +22,7 @@ Décisions actées avec l'utilisateur : conflit à deux branches (identique / di
 }
 ```
 
-Tous les champs sauf `outPattern` sont optionnels (défauts ci-dessus). L'ancien booléen `overwrite` est supprimé, sans compatibilité (le produit n'est pas encore sorti) : `onConflict` le remplace.
+Tous les champs sauf `outPattern` sont optionnels (défauts ci-dessus). L'ancien booléen `overwrite` est supprimé, sans compatibilité (le produit n'est pas encore sorti) : `onConflict` le remplace. Syntaxe de `outPattern` (repli `|`, valeurs fixes) et `onMissingKey` : voir la spec pattern-helper (2026-10-02).
 
 ## 2. Conflit : la cible existe déjà
 

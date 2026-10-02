@@ -15,6 +15,8 @@ public class SafeWriteBundleTest {
 
     static final List<String> KEYS = List.of(
             "write.skip.identical",
+            "write.pattern.missing-key",
+            "write.skip.missing-key",
             "write.skip.exists",
             "write.conflict.error",
             "write.verify.size",
@@ -27,7 +29,8 @@ public class SafeWriteBundleTest {
             "read.config.no-path",
             "write.skip.same-file",
             "write.error.io-detail",
-            "write.warn.direct-mode");
+            "write.warn.direct-mode",
+            "pattern.syntax");
 
     /** Properties.load(InputStream) reads ISO-8859-1 and the backslash-u escapes, like ResourceBundle. */
     private static Properties bundle(String name) throws IOException {
@@ -37,6 +40,15 @@ public class SafeWriteBundleTest {
             properties.load(in);
         }
         return properties;
+    }
+
+    /** Guards the escapes: raw UTF-8 bytes in the ISO-8859-1 French bundle would read as "Ã©". */
+    @Test
+    public void thePatternSyntaxReasonsAreReadWithTheirAccentsInFrench() throws IOException {
+        Properties french = bundle("engineBundle_fr.properties");
+        assertEquals("accolade non fermée", french.getProperty("pattern.syntax.unclosed-brace"));
+        assertEquals("texte après une valeur fixe", french.getProperty("pattern.syntax.text-after-quote"));
+        assertTrue(french.getProperty("pattern.syntax").contains("invalide à la position"));
     }
 
     @Test

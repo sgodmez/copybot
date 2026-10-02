@@ -62,6 +62,7 @@ public class EmbeddedConfigSchemaTest {
         assertEquals(jsonNames(FileWriteSettings.Policy.values()), field(schema, "onConflict.ifDifferent").enumValues());
         assertEquals(jsonNames(FileWriteSettings.WriteMode.values()), field(schema, "writeMode").enumValues());
         assertEquals(jsonNames(FileWriteSettings.Verify.values()), field(schema, "verify").enumValues());
+        assertEquals(jsonNames(FileWriteSettings.MissingKey.values()), field(schema, "onMissingKey").enumValues());
         assertEquals(FieldKind.BOOLEAN, field(schema, "deleteSource").kind());
     }
 
@@ -75,6 +76,7 @@ public class EmbeddedConfigSchemaTest {
         assertEquals(defaults.ifDifferent().jsonName(), field(schema, "onConflict.ifDifferent").defaultValue());
         assertEquals(defaults.writeMode().jsonName(), field(schema, "writeMode").defaultValue());
         assertEquals(defaults.verify().jsonName(), field(schema, "verify").defaultValue());
+        assertEquals(defaults.onMissingKey().jsonName(), field(schema, "onMissingKey").defaultValue());
         assertEquals(String.valueOf(defaults.deleteSource()), field(schema, "deleteSource").defaultValue());
     }
 

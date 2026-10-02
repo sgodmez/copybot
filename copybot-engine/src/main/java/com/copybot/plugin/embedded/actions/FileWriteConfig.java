@@ -12,6 +12,7 @@ import com.copybot.plugin.api.config.Required;
  * and defaults are the ones of {@link FileWriteSettings}.
  *
  * @param onConflict   what to do when the target already exists
+ * @param onMissingKey "error" (default), "skip" or "literal": what to do when an expression of outPattern has no value
  * @param writeMode    "tempAndRename" (default) or "direct" (with "overwrite", the original is lost as soon
  *                     as the write starts)
  * @param verify       "none", "size" (default) or "readBack"
@@ -20,6 +21,9 @@ import com.copybot.plugin.api.config.Required;
 public record FileWriteConfig(
         @Required @PatternField
         String outPattern,
+
+        @AllowedValues({"error", "skip", "literal"}) @DefaultValue("error")
+        String onMissingKey,
 
         OnConflict onConflict,
 
