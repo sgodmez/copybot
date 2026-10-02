@@ -201,4 +201,20 @@ public class FileReadActionTest {
         assertThrows(CopybotException.class, () -> action.loadConfig(JsonParser.parseString("{\"recursive\":true}")));
         assertThrows(CopybotException.class, () -> action.loadConfig(JsonParser.parseString("{\"path\":\" \"}")));
     }
+
+    @Test
+    public void workItemOfGivesAFileTheBaseMetadataOfTheListing() throws IOException {
+        Path file = card.resolve("a.jpg");
+        List<WorkItem> listed = new ArrayList<>();
+        action(",\"recursive\":false,\"include\":[\"a.jpg\"]").listFiles(listed::add);
+
+        WorkItem item = FileReadAction.workItemOf(file);
+
+        assertEquals(file, item.getLocalLocation());
+        assertEquals("a.jpg", item.getMetadatas().display().get("name"));
+        assertEquals(Files.size(file), item.getMetadatas().getSize());
+        assertTrue(item.getMetadatas().getTime("lastModified").isPresent());
+        assertEquals(listed.getFirst().getMetadatas().display(), item.getMetadatas().display());
+        assertEquals(listed.getFirst().getMetadatas().getTime("creation"), item.getMetadatas().getTime("creation"));
+    }
 }

@@ -403,6 +403,101 @@ class SampleSessionTest {
         assertEquals(Optional.of(ResourcesEngine.getString("sample.not-listed")), sample.failure());
     }
 
+    // ---- analyseFile ----
+
+    private static PipelineConfig withFirstIn(String plugin, String action) {
+        PipelineStepConfig in = new PipelineStepConfig(plugin, action, null, null, null, null, null, null);
+        return new PipelineConfig(List.of(in), List.of(), List.of(), null, null, null);
+    }
+
+    private static final PipelineConfig FILE_READ = withFirstIn(null, "file.read");
+
+    @Test
+    void aChosenFileGetsTheBaseMetadataWithoutAnyListing() throws IOException {
+        Path file = Files.writeString(dir.resolve("chosen.JPG"), "12345");
+        Steps steps = new Steps().withIn(consumer -> {
+            throw new IllegalStateException("never listed");
+        });
+        Sample sample = session(steps).analyseFile(FILE_READ, file);
+        assertEquals(Optional.empty(), sample.failure());
+        assertEquals(1, sample.items().size());
+        SampleItem item = sample.items().get(0);
+        assertEquals("chosen.JPG", item.sourceName());
+        assertEquals("chosen.JPG", item.display().get("name"));
+        assertEquals(0, steps.inCalls.get(), "the in steps are not listed");
+        assertEquals(List.of(), sample.notes());
+    }
+
+    @Test
+    void aChosenFileGoesThroughTheAnalysesAndTheDryRun() throws IOException {
+        Path file = Files.writeString(dir.resolve("x.NEF"), "x");
+        Steps steps = new Steps();
+        steps.withAnalyse(item -> item.getMetadatas().display().put("captureDate.Y", "2026"));
+        steps.withProcess("convert", item -> {
+            WorkItem jpg = item.copyForDryRun();
+            jpg.getMetadatas().display().put("name", "x.jpg");
+            return Optional.of(List.of(jpg));
+        });
+        Sample sample = session(steps).analyseFile(FILE_READ, file);
+        assertEquals(1, sample.items().size());
+        assertEquals("x.NEF", sample.items().get(0).sourceName());
+        assertEquals("x.jpg", sample.items().get(0).name());
+        assertEquals("2026", sample.items().get(0).display().get("captureDate.Y"));
+    }
+
+    @Test
+    void aChosenFileWhoseAnalysisFailsIsAnItemInError() throws IOException {
+        Path file = Files.writeString(dir.resolve("bad.JPG"), "x");
+        Steps steps = new Steps();
+        steps.withAnalyse(item -> {
+            throw new IllegalStateException("corrupt");
+        });
+        Sample sample = session(steps).analyseFile(FILE_READ, file);
+        assertTrue(sample.items().get(0).error().orElseThrow().contains("corrupt"));
+    }
+
+    @Test
+    void aMissingChosenFileIsAFailureThatNeverEscapes() {
+        Sample sample = session(new Steps()).analyseFile(FILE_READ, dir.resolve("gone.JPG"));
+        assertTrue(sample.failure().isPresent());
+        assertTrue(sample.items().isEmpty());
+    }
+
+    @Test
+    void aChosenFileTellsWhenTheFirstInStepIsNotFileRead() throws IOException {
+        Path file = Files.writeString(dir.resolve("a.JPG"), "x");
+        String note = ResourcesEngine.getString("sample.picked-base-metadata");
+        assertEquals(List.of(note), session(new Steps()).analyseFile(withFirstIn("camera", "camera.read"), file).notes());
+        assertEquals(List.of(note), session(new Steps()).analyseFile(CONFIG, file).notes());
+        assertEquals(List.of(), session(new Steps()).analyseFile(withFirstIn("embedded", "file.read"), file).notes());
+        assertFalse(note.startsWith("%"), "the note is in the bundle");
+    }
+
+    @Test
+    void aCancelledChosenFileIsACancelledSample() throws Exception {
+        Path file = Files.writeString(dir.resolve("a.JPG"), "x");
+        CountDownLatch started = new CountDownLatch(1);
+        Steps steps = new Steps();
+        steps.withAnalyse(item -> {
+            started.countDown();
+            try {
+                new CountDownLatch(1).await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted");
+            }
+        });
+        SampleSession session = session(steps);
+        AtomicReference<Sample> result = new AtomicReference<>();
+        Thread caller = new Thread(() -> result.set(session.analyseFile(FILE_READ, file)));
+        caller.start();
+        assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS));
+        session.cancel();
+        caller.join(2000);
+        assertFalse(caller.isAlive());
+        assertEquals(Optional.of(ResourcesEngine.getString("sample.cancelled")), result.get().failure());
+    }
+
     @Test
     void cancelEndsTheOperationWithACancelledSample() throws Exception {
         CountDownLatch started = new CountDownLatch(1);

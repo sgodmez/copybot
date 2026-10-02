@@ -84,9 +84,7 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
                 // with recursive=false the sub-directories arrive here: not regular files
                 if (attrs.isRegularFile() && (includeHidden || !isHidden(file, attrs))
                         && selected(root.relativize(file))) {
-                    WorkItem wi = new WorkItem(file);
-                    extractMetadata(file, wi.getMetadatas());
-                    workItemConsumer.accept(wi);
+                    workItemConsumer.accept(workItemOf(file));
                 }
                 return FileVisitResult.CONTINUE;
             }
@@ -192,7 +190,19 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
         return List.copyOf(matchers);
     }
 
-    private void extractMetadata(Path path, WorkItemMetadata metadatas) throws IOException {
+    /**
+     * The item file.read lists for this file, with its base metadata (name, size, times): also used by the
+     * pipeline editor's sample to test a file chosen by the user.
+     *
+     * @throws IOException the attributes of the file cannot be read (missing file...)
+     */
+    public static WorkItem workItemOf(Path file) throws IOException {
+        WorkItem item = new WorkItem(file);
+        extractMetadata(file, item.getMetadatas());
+        return item;
+    }
+
+    private static void extractMetadata(Path path, WorkItemMetadata metadatas) throws IOException {
         // file metadatas
         metadatas.display().put("name", path.getFileName().toString());
 

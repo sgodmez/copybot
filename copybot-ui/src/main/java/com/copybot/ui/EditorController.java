@@ -21,6 +21,7 @@ import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.Views;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.Cursor;
@@ -56,11 +57,14 @@ import javafx.util.StringConverter;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 
@@ -116,6 +120,13 @@ public class EditorController {
     private boolean closed;
     /** The helper of the out form shown, null when another form is shown. */
     private PatternHelper patternHelper;
+    /** What the helper keeps across rebuilt forms while the editor is open (panel expanded, tested files). */
+    private final PatternHelper.State helperState = new PatternHelper.State();
+    /** Analyses the files the user chose to test, one at a time, apart from the sample's session. */
+    private SampleSession pinnedSession;
+    /** Tested files waiting for their analysis, and whether one runs. */
+    private final Set<Path> pinnedQueue = new LinkedHashSet<>();
+    private boolean pinnedRunning;
 
     /** A pipeline file is being read for {@link #open} (JavaFX thread only): another open is ignored. */
     private static boolean loading;
@@ -234,6 +245,9 @@ public class EditorController {
         stage.setOnHidden(e -> {
             closed = true;
             cancelSample();
+            if (pinnedSession != null) {
+                pinnedSession.cancel();
+            }
         });
         // no default button (Enter in a field must not save): Ctrl+S (Cmd+S) instead
         shortcut(saveButton, "editor.save.tooltip",
@@ -488,19 +502,19 @@ public class EditorController {
             }
 
             @Override
-            public Node patternHelper(ConfigField field, TextInputControl input) {
+            public ConfigForm.Helper patternHelper(ConfigField field, TextInputControl input) {
                 if (!outStep) {
                     return null;
                 }
                 ConfigField onMissingKey = action.configSchema().flatMap(schema -> schema.field("onMissingKey")).orElse(null);
                 patternHelper = new PatternHelper(input,
                         () -> onMissingKey == null ? null : document.configText(step, onMissingKey),
-                        EditorController.this::resample, EditorController.this::cancelSample);
+                        helperState, helperActions());
                 if (sample != null) {
                     patternHelper.showSample(sample);
                 }
                 ensureSample();
-                return patternHelper;
+                return new ConfigForm.Helper(patternHelper.pickerButton(), patternHelper);
             }
 
             @Override
@@ -565,9 +579,127 @@ public class EditorController {
             return;
         }
         showSampleResult(result, in, processing);
+        if (result.failure().isEmpty()) {
+            // analysed with the steps of this sample: the tested files follow
+            // over a copy: analysePinned replaces the entries of the list
+            List.copyOf(helperState.pinned).forEach(pinned -> analysePinned(pinned.file()));
+        }
         if (patternHelper != null && result.failure().isEmpty()) {
             // the steps may have been edited while it ran (the out form shown again meanwhile): catch up
             ensureSample();
+        }
+    }
+
+    // ---- tested files (spec pattern-helper §5) ----
+
+    private PatternHelper.Actions helperActions() {
+        return new PatternHelper.Actions() {
+            @Override
+            public void retry() {
+                resample();
+            }
+
+            @Override
+            public void cancel() {
+                cancelSample();
+            }
+
+            @Override
+            public void test(Path file) {
+                Path normalized = file.toAbsolutePath().normalize();
+                helperState.pinned.removeIf(pinned -> pinned.file().equals(normalized));
+                helperState.pinned.addFirst(new PatternHelper.Pinned(normalized, null));
+                analysePinned(normalized);
+            }
+
+            @Override
+            public void unpin(Path file) {
+                helperState.pinned.removeIf(pinned -> pinned.file().equals(file));
+                pinnedQueue.remove(file);
+                refreshHelper();
+            }
+
+            @Override
+            public Path sourceFolder() {
+                return EditorController.this.sourceFolder();
+            }
+        };
+    }
+
+    /** The path of the first input step's actionConfig when it is an existing folder, else null. */
+    private Path sourceFolder() {
+        List<JsonObject> in = document.steps(Section.IN);
+        if (in.isEmpty() || !(in.getFirst().get("actionConfig") instanceof JsonObject config)
+                || !(config.get("path") instanceof JsonPrimitive path) || !path.isString()) {
+            return null;
+        }
+        try {
+            Path folder = Path.of(path.getAsString());
+            return Files.isDirectory(folder) ? folder : null;
+        } catch (InvalidPathException e) {
+            return null;
+        }
+    }
+
+    /** Shows the file as being analysed and queues its analysis (with the steps current when it starts). */
+    private void analysePinned(Path file) {
+        setPinned(file, null);
+        pinnedQueue.add(file);
+        refreshHelper();
+        nextPinned();
+    }
+
+    /** Runs the next queued analysis unless one runs: the session runs one operation at a time. */
+    private void nextPinned() {
+        if (pinnedRunning || pinnedQueue.isEmpty() || closed) {
+            return;
+        }
+        Path file = pinnedQueue.iterator().next();
+        pinnedQueue.remove(file);
+        PipelineConfig config;
+        try {
+            config = document.samplingConfig();
+        } catch (IllegalArgumentException e) {
+            setPinned(file, Sample.failed(String.valueOf(e.getMessage())));
+            refreshHelper();
+            nextPinned();
+            return;
+        }
+        if (pinnedSession == null) {
+            pinnedSession = PipelineSampler.open();
+        }
+        SampleSession session = pinnedSession;
+        pinnedRunning = true;
+        background(() -> session.analyseFile(config, file),
+                result -> pinnedDone(file, result),
+                e -> pinnedDone(file, Sample.failed(String.valueOf(e.getMessage()))));
+    }
+
+    private void pinnedDone(Path file, Sample result) {
+        pinnedRunning = false;
+        if (closed) {
+            return;
+        }
+        if (!pinnedQueue.contains(file)) { // queued again meanwhile: the newer analysis decides
+            setPinned(file, result);
+        }
+        refreshHelper();
+        nextPinned();
+    }
+
+    /** Replaces the analysis of a tested file still pinned (an unpinned one is left alone). */
+    private void setPinned(Path file, Sample result) {
+        List<PatternHelper.Pinned> pinned = helperState.pinned;
+        for (int i = 0; i < pinned.size(); i++) {
+            if (pinned.get(i).file().equals(file)) {
+                pinned.set(i, new PatternHelper.Pinned(file, result));
+            }
+        }
+    }
+
+    private void refreshHelper() {
+        if (patternHelper != null) {
+            patternHelper.refresh();
         }
     }
 

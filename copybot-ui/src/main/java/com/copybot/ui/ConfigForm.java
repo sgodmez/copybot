@@ -5,6 +5,7 @@ import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.FieldHint;
 import com.copybot.plugin.api.config.FieldKind;
 import com.copybot.resources.ResourcesEngine;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.ComboBox;
@@ -60,12 +61,16 @@ final class ConfigForm {
         }
 
         /**
-         * The helper shown under a {@link FieldHint#PATTERN} field, built on its text control (spec pattern-helper
-         * §5); null: the fixed line of known variables.
+         * The helper of a {@link FieldHint#PATTERN} field, built on its text control (spec pattern-helper §5);
+         * null: the fixed line of known variables.
          */
-        default Node patternHelper(ConfigField field, TextInputControl input) {
+        default Helper patternHelper(ConfigField field, TextInputControl input) {
             return null;
         }
+    }
+
+    /** What a pattern helper adds to its field: a node right of the control (null for none), one under it. */
+    record Helper(Node beside, Node below) {
     }
 
     /**
@@ -129,16 +134,23 @@ final class ConfigForm {
         VBox box = new VBox(3);
         box.getChildren().add(new Label(access.label(field) + (field.required() ? " *" : "")));
         Node control = input(field);
-        box.getChildren().add(control);
+        TextInputControl text = field.hasHint(FieldHint.PATTERN) ? textControl(control) : null;
+        Helper helper = text != null ? access.patternHelper(field, text) : null;
+        if (helper != null && helper.beside() != null) {
+            HBox row = new HBox(5, control, helper.beside());
+            row.setAlignment(Pos.CENTER_LEFT);
+            HBox.setHgrow(control, Priority.ALWAYS);
+            box.getChildren().add(row);
+        } else {
+            box.getChildren().add(control);
+        }
         String description = access.description(field);
         if (!description.isEmpty()) {
             box.getChildren().add(small(description));
         }
         if (field.hasHint(FieldHint.PATTERN)) {
-            TextInputControl text = textControl(control);
-            Node helper = text != null ? access.patternHelper(field, text) : null;
             if (helper != null) {
-                box.getChildren().add(helper);
+                box.getChildren().add(helper.below());
             } else {
                 String variables = ConfigSchema.PATTERN_VARIABLES.stream().map(v -> "{" + v + "}").collect(Collectors.joining(" "));
                 box.getChildren().add(small(ResourcesEngine.getString("editor.pattern-variables", variables)));
