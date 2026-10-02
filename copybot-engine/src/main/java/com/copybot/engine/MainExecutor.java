@@ -7,7 +7,6 @@ import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.WorkItemExecution;
-import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resources.FootprintResolver;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resume.ResumeContext;
@@ -369,6 +368,7 @@ public class MainExecutor implements Runnable {
             proposal = resolver.propose(orderedItems);
             state.setResumeProposal(proposal);
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
+            projectItems();
             state.setStatus(PipelineStatus.PREPARED);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -377,6 +377,33 @@ public class MainExecutor implements Runnable {
         } finally {
             state.setListingInProgress(false);
             endPhase();
+        }
+    }
+
+    /** The process steps among the item steps (the instances the execution will use). */
+    @SuppressWarnings("unchecked")
+    private List<PipelineStep<IProcessAction>> processSteps() {
+        List<PipelineStep<IProcessAction>> steps = new ArrayList<>();
+        for (PipelineStep<?> step : itemSteps) {
+            if (step.getAction() instanceof IProcessAction) {
+                steps.add((PipelineStep<IProcessAction>) step);
+            }
+        }
+        return steps;
+    }
+
+    /**
+     * The dry run of the process steps for every item prepared without error, selected or not, so that a manual
+     * resume point chosen later needs nothing more (spec pattern-helper §4.3). A failing dry run is shown, never
+     * an item error. The dry run uses the same action instances as the execution: dryRun must not change their state.
+     */
+    private void projectItems() throws InterruptedException {
+        List<PipelineStep<IProcessAction>> steps = processSteps();
+        for (WorkItemExecution exec : orderedItems) {
+            checkCancelled();
+            if (exec.getStatus() != ItemStatus.ERROR) {
+                exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
+            }
         }
     }
 
@@ -464,8 +491,8 @@ public class MainExecutor implements Runnable {
 
     private void resolveStepsIfNeeded() {
         if (pipelineConfig != null && inSteps == null) {
-            inSteps = doResolveStep(pipelineConfig.inSteps(), IInAction.class);
-            itemSteps = resolveOtherSteps(pipelineConfig);
+            inSteps = StepResolver.in(pipelineConfig);
+            itemSteps = StepResolver.itemSteps(pipelineConfig);
             barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
             startProcessingWhileListing = Boolean.TRUE.equals(pipelineConfig.startProcessingWhileListing());
         }
@@ -805,27 +832,6 @@ public class MainExecutor implements Runnable {
             return StepOutcome.CONTINUE;
         }
         throw new UnsupportedOperationException("Unsupported action type: " + action.getClass());
-    }
-
-    private static List<PipelineStep<?>> resolveOtherSteps(PipelineConfig pipelineConfig) {
-        List<PipelineStep<?>> steps = new ArrayList<>();
-        steps.addAll(doResolveStep(pipelineConfig.analyseSteps(), IAnalyzeAction.class));
-        steps.addAll(doResolveStep(pipelineConfig.actionSteps(), IProcessAction.class));
-        if (pipelineConfig.outStep() != null) {
-            steps.add(PluginEngine.resolve(pipelineConfig.outStep(), IOutAction.class));
-        }
-        return Collections.unmodifiableList(steps);
-    }
-
-    private static <A extends IAction> List<PipelineStep<A>> doResolveStep(List<PipelineStepConfig> stepConfigs, Class<A> actionClass) {
-        if (stepConfigs == null || stepConfigs.isEmpty()) {
-            return List.of();
-        }
-        List<PipelineStep<A>> steps = new ArrayList<>(stepConfigs.size());
-        for (PipelineStepConfig stepConfig : stepConfigs) {
-            steps.add(PluginEngine.resolve(stepConfig, actionClass));
-        }
-        return Collections.unmodifiableList(steps);
     }
 
     /**

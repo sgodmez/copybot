@@ -30,7 +30,10 @@ public class SafeWriteBundleTest {
             "write.skip.same-file",
             "write.error.io-detail",
             "write.warn.direct-mode",
-            "pattern.syntax");
+            "pattern.syntax",
+            "dryrun.filtered",
+            "dryrun.unsupported",
+            "dryrun.failed");
 
     /** Properties.load(InputStream) reads ISO-8859-1 and the backslash-u escapes, like ResourceBundle. */
     private static Properties bundle(String name) throws IOException {

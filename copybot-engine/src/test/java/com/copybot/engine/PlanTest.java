@@ -104,7 +104,8 @@ public class PlanTest {
     public void theTargetIsTheDirectoryTheOutStepWouldWriteTo() {
         Plan plan = prepared(new TargetOut(null), null);
 
-        assertEquals(Optional.of(tempDir.resolve("nas").resolve("IMG_02")), plan.targetOf(named(plan, "IMG_02.JPG")));
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas").resolve("IMG_02"))),
+                plan.projectionOf(named(plan, "IMG_02.JPG")));
         assertFalse(Files.exists(tempDir.resolve("nas")), "resolving writes nothing");
     }
 
@@ -122,23 +123,24 @@ public class PlanTest {
         }
         Plan plan = prepared(new NameOnlyOut(), null);
 
-        assertEquals(Optional.of(Path.of("").toAbsolutePath()), plan.targetOf(named(plan, "IMG_02.JPG")),
+        assertEquals(new TargetProjection.Targets(List.of(Path.of("").toAbsolutePath())),
+                plan.projectionOf(named(plan, "IMG_02.JPG")),
                 "where the item is written, like the resume probe sees it");
     }
 
     @Test
-    public void anUnresolvableTargetIsEmpty() {
+    public void anUnresolvableTargetShowsItsMessage() {
         Plan plan = prepared(new TargetOut("IMG_01.JPG"), null);
 
-        assertEquals(Optional.empty(), plan.targetOf(named(plan, "IMG_01.JPG")));
-        assertTrue(plan.targetOf(named(plan, "IMG_03.JPG")).isPresent());
+        assertEquals(new TargetProjection.Failed("no value for a pattern variable"), plan.projectionOf(named(plan, "IMG_01.JPG")));
+        assertInstanceOf(TargetProjection.Targets.class, plan.projectionOf(named(plan, "IMG_03.JPG")));
     }
 
     @Test
     public void withoutOutStepThereIsNoTarget() {
         Plan plan = prepared(null, null);
 
-        assertEquals(Optional.empty(), plan.targetOf(named(plan, "IMG_01.JPG")));
+        assertEquals(TargetProjection.NONE, plan.projectionOf(named(plan, "IMG_01.JPG")));
     }
 
     @Test

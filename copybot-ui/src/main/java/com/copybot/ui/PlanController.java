@@ -36,10 +36,12 @@ import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.RadioButton;
+import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.ToggleGroup;
+import javafx.scene.control.Tooltip;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.util.StringConverter;
@@ -129,6 +131,16 @@ public class PlanController {
         nameColumn.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().getWorkItem().getNameDisplay()));
         dateColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.dateText(c.getValue())));
         targetColumn.setCellValueFactory(c -> new SimpleStringProperty(targetText(c.getValue())));
+        targetColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String text, boolean empty) {
+                super.updateItem(text, empty);
+                setText(empty ? null : text);
+                WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
+                String tooltip = item == null || plan == null ? null : PlanViewModel.targetTooltip(plan.projectionOf(item));
+                setTooltip(tooltip == null ? null : new Tooltip(tooltip));
+            }
+        });
         sizeColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.sizeText(c.getValue())));
         statusColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.statusText(c.getValue())));
         itemsTable.setRowFactory(table -> resumeFromHereRow());
@@ -248,7 +260,7 @@ public class PlanController {
     }
 
     private String targetText(WorkItemExecution item) {
-        return plan == null ? "" : plan.targetOf(item).map(Path::toString).orElse("");
+        return plan == null ? "" : PlanViewModel.targetText(plan.projectionOf(item));
     }
 
     private List<WorkItemExecution> ordered() {

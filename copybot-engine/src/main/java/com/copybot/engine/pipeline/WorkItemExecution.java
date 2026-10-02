@@ -1,5 +1,6 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.engine.Projection;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -20,6 +21,8 @@ public class WorkItemExecution {
     private volatile Set<String> waitingFor = Set.of();
     private volatile Throwable error;
     private volatile String skipReason;
+    /** What the process steps would produce, by their dry run; set at the end of the preparation (spec pattern-helper §4.3). */
+    private volatile Projection projection;
 
     /**
      * Resume ordering key, frozen at the preparation barrier: a later step may replace the work item
@@ -139,6 +142,15 @@ public class WorkItemExecution {
 
     public String getSkipReason() {
         return skipReason;
+    }
+
+    /** The dry run of the process steps; null when not computed. */
+    public Projection getProjection() {
+        return projection;
+    }
+
+    public void setProjection(Projection projection) {
+        this.projection = projection;
     }
 
     /**

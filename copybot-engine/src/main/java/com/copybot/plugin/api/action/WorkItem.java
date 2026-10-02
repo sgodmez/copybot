@@ -23,6 +23,29 @@ public class WorkItem {
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
+    private WorkItem() {
+    }
+
+    /**
+     * A copy for a dry run (spec pattern-helper §4): same source, its own metadata tables (the values, immutable,
+     * are shared), so that changing the copy never changes this item.
+     */
+    public WorkItem copyForDryRun() {
+        WorkItem copy = new WorkItem();
+        copy.sourceLocationDisplay = sourceLocationDisplay;
+        copy.nameDisplay = nameDisplay;
+        copy.sourceLocationUrl = sourceLocationUrl;
+        copy.inputStreamSupplier = inputStreamSupplier;
+        copy.sourceLocationPath = sourceLocationPath;
+        copy.tempLocation = tempLocation;
+        copy.isLocal = isLocal;
+        copy.isDeleteAfterCompletion = isDeleteAfterCompletion;
+        copy.isDeleted = isDeleted;
+        copy.metadatas.raw().putAll(metadatas.raw());
+        copy.metadatas.display().putAll(metadatas.display());
+        return copy;
+    }
+
     public WorkItem(URL sourceLocationUrl, Supplier<InputStream> inputStreamSupplier) {
         this.sourceLocationUrl = sourceLocationUrl;
         this.inputStreamSupplier = inputStreamSupplier;

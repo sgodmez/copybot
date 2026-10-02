@@ -1,6 +1,7 @@
 package com.copybot.ui.model;
 
 import com.copybot.engine.Plan;
+import com.copybot.engine.TargetProjection;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
@@ -14,6 +15,7 @@ import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.RecentPipelines.LastRun;
 import com.copybot.utils.FileUtil;
 
+import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -24,6 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * The state of the plan view (spec desktop-ui §2), without JavaFX: the phase and the buttons it allows,
@@ -351,6 +354,25 @@ public final class PlanViewModel {
     /** A size for the display, in the current locale and language ("292,97 Ko"). */
     private static String displaySize(long size, int decimals) {
         return FileUtil.toAutoUnitSize(size, decimals, Locale.getDefault());
+    }
+
+    /** The target column (spec pattern-helper §4.3): the first directory and "(+N)", or why there is none. */
+    public static String targetText(TargetProjection projection) {
+        return switch (projection) {
+            case TargetProjection.Targets t -> t.directories().isEmpty() ? ""
+                    : t.directories().getFirst() + (t.directories().size() > 1
+                    ? " " + ResourcesEngine.getString("plan.target.more", t.directories().size() - 1) : "");
+            case TargetProjection.Filtered f -> ResourcesEngine.getString("dryrun.filtered", f.action());
+            case TargetProjection.Unknown u -> ResourcesEngine.getString("dryrun.unsupported", u.action());
+            case TargetProjection.Failed f -> f.message();
+            case TargetProjection.None n -> "";
+        };
+    }
+
+    /** Every directory, one per line, when there are several; null otherwise. */
+    public static String targetTooltip(TargetProjection projection) {
+        return projection instanceof TargetProjection.Targets t && t.directories().size() > 1
+                ? t.directories().stream().map(Path::toString).collect(Collectors.joining("\n")) : null;
     }
 
     /** The "Size" column: the item's size for the display, "?" when unknown. */

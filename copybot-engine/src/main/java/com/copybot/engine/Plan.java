@@ -9,10 +9,13 @@ import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.exception.CopybotException;
 import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -87,22 +90,43 @@ public final class Plan {
     }
 
     /**
-     * The (absolute) directory the out step would write this item to ({@link IOutAction#resolveTarget}), without
-     * writing anything; empty without out step, when the action cannot tell or fails to resolve it.
+     * Where the out step would write what this item becomes after the dry run of the process steps
+     * ({@link IOutAction#resolveTarget}), without writing anything (spec pattern-helper §4.3).
      */
-    public Optional<Path> targetOf(WorkItemExecution item) {
+    public TargetProjection projectionOf(WorkItemExecution item) {
         IOutAction out = executor.findOutAction();
         if (out == null) {
-            return Optional.empty();
+            return TargetProjection.NONE;
         }
-        try {
-            // absolute, like the resume probe: a pattern without directory part writes to the current one
-            return out.resolveTarget(item.getWorkItem()).map(target -> target.toAbsolutePath().normalize().getParent());
-        } catch (RuntimeException e) {
-            // e.g. a pattern variable this item has no value for, in a plugin
-            LOG.debug(e, "plan.target.failed", item.getWorkItem().getNameDisplay(), String.valueOf(e));
-            return Optional.empty();
+        Projection projection = item.getProjection();
+        if (projection == null) { // not prepared (error before the barrier): the item as it is
+            projection = new Projection.Projected(List.of(item.getWorkItem()));
         }
+        return switch (projection) {
+            case Projection.Filtered f -> new TargetProjection.Filtered(f.action());
+            case Projection.Unsupported u -> new TargetProjection.Unknown(u.action());
+            case Projection.Failed f -> new TargetProjection.Failed(ResourcesEngine.getString("dryrun.failed", f.action(), f.message()));
+            case Projection.Projected p -> targets(out, p.items());
+        };
+    }
+
+    private static TargetProjection targets(IOutAction out, List<WorkItem> items) {
+        List<Path> directories = new ArrayList<>();
+        for (WorkItem produced : items) {
+            try {
+                Optional<Path> target = out.resolveTarget(produced);
+                if (target.isEmpty()) {
+                    return TargetProjection.NONE;
+                }
+                // absolute, like the resume probe: a pattern without directory part writes to the current one
+                directories.add(target.get().toAbsolutePath().normalize().getParent());
+            } catch (RuntimeException e) {
+                // e.g. a pattern variable this item has no value for
+                LOG.debug(e, "plan.target.failed", produced.getNameDisplay(), String.valueOf(e));
+                return new TargetProjection.Failed(e.getMessage() != null ? e.getMessage() : e.getClass().getName());
+            }
+        }
+        return new TargetProjection.Targets(directories);
     }
 
     /** Re-applies a manual resume point to the item statuses, without executing anything (dry-run display). */

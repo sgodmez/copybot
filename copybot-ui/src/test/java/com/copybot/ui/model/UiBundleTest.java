@@ -22,7 +22,7 @@ public class UiBundleTest {
             "home.title", "home.open", "home.new", "home.remove", "home.missing", "home.empty", "home.file-filter",
             "recent.never-run", "recent.last-run",
             "pipeline.status.SUCCESS", "pipeline.status.ERROR", "pipeline.status.CANCELLED",
-            "plan.back", "plan.edit", "plan.steps", "plan.source", "plan.out-pattern", "plan.resume-mode",
+            "plan.target.more", "plan.back","plan.edit", "plan.steps", "plan.source", "plan.out-pattern", "plan.resume-mode",
             "plan.resume-mode.absent", "plan.resume-mode.none", "plan.resume-mode.state",
             "plan.resume-mode.destination", "plan.resume-mode.stateThenDestination", "plan.last-run",
             "plan.resume.all", "plan.resume.after", "plan.resume.from", "plan.resume.from-date",

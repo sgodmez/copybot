@@ -1,6 +1,7 @@
 package com.copybot.ui.model;
 
 import com.copybot.engine.Plan;
+import com.copybot.engine.TargetProjection;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.WorkItemExecution;
@@ -566,5 +567,28 @@ public class PlanViewModelTest {
         } finally {
             ResourcesEngine.loadLanguage(previous);
         }
+    }
+
+    @Test
+    public void theTargetTextShowsTheFirstDirectoryAndHowManyMore() {
+        TargetProjection two = new TargetProjection.Targets(List.of(Path.of("/nas/2026"), Path.of("/nas/thumbs")));
+
+        assertEquals(Path.of("/nas/2026") + " " + ResourcesEngine.getString("plan.target.more", 1), PlanViewModel.targetText(two));
+        assertEquals(Path.of("/nas/2026") + "\n" + Path.of("/nas/thumbs"), PlanViewModel.targetTooltip(two));
+    }
+
+    @Test
+    public void theTargetTextExplainsWhyThereIsNoTarget() {
+        assertEquals(ResourcesEngine.getString("dryrun.filtered", "drop"), PlanViewModel.targetText(new TargetProjection.Filtered("drop")));
+        assertEquals(ResourcesEngine.getString("dryrun.unsupported", "legacy"), PlanViewModel.targetText(new TargetProjection.Unknown("legacy")));
+        assertEquals("No value for {x}: a", PlanViewModel.targetText(new TargetProjection.Failed("No value for {x}: a")));
+        assertEquals("", PlanViewModel.targetText(TargetProjection.NONE));
+        assertNull(PlanViewModel.targetTooltip(TargetProjection.NONE));
+    }
+
+    @Test
+    public void aSingleTargetHasNoTooltip() {
+        assertEquals(Path.of("/nas/2026").toString(), PlanViewModel.targetText(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
+        assertNull(PlanViewModel.targetTooltip(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
     }
 }
