@@ -543,6 +543,39 @@ public final class PlanViewModel {
                 pipelineStatusText(run.status()), run.copied(), run.skipped(), run.errors());
     }
 
+    /** The look of a badge of the last run. */
+    public enum BadgeKind { SUCCESS, ERROR, NEUTRAL }
+
+    /** A small label of the last run line: its text and its look. */
+    public record Badge(String text, BadgeKind kind) {
+    }
+
+    /** The date of a last run, "dd/MM/yyyy HH:mm". */
+    public static String lastRunDate(LastRun run) {
+        return ITEM_DATE.format(run.at().atZone(ZoneId.systemDefault()));
+    }
+
+    /**
+     * The badges of the last run line: the status, then the copied, skipped and error counts (the error
+     * badge is red only when there is an error); none when the pipeline never ran.
+     */
+    public static List<Badge> lastRunBadges(LastRun run) {
+        if (run == null) {
+            return List.of();
+        }
+        String status = pipelineStatusText(run.status());
+        Badge statusBadge = switch (run.status()) {
+            case SUCCESS -> new Badge("✓ " + status, BadgeKind.SUCCESS);
+            case ERROR -> new Badge("✗ " + status, BadgeKind.ERROR);
+            default -> new Badge(status, BadgeKind.NEUTRAL);
+        };
+        return List.of(statusBadge,
+                new Badge(ResourcesEngine.getString("plan.badge.copied", run.copied()), BadgeKind.NEUTRAL),
+                new Badge(ResourcesEngine.getString("plan.badge.skipped", run.skipped()), BadgeKind.NEUTRAL),
+                new Badge(ResourcesEngine.getString(run.errors() > 1 ? "plan.badge.errors" : "plan.badge.error", run.errors()),
+                        run.errors() > 0 ? BadgeKind.ERROR : BadgeKind.NEUTRAL));
+    }
+
     /** The resume mode of the header: "no resume", "cursor, then destination"...; the raw mode when unknown. */
     public static String resumeModeText(String mode) {
         return mode == null

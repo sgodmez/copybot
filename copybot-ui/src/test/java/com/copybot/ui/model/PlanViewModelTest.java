@@ -516,6 +516,35 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void theLastRunBadgesTellTheStatusAndTheCounts() {
+        assertEquals(List.of(), PlanViewModel.lastRunBadges(null), "never run: no badge");
+
+        List<PlanViewModel.Badge> ok = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.SUCCESS, 107, 803, 0));
+        assertEquals(4, ok.size());
+        assertEquals(PlanViewModel.BadgeKind.SUCCESS, ok.get(0).kind());
+        assertTrue(ok.get(0).text().startsWith("✓ "), ok.get(0).text());
+        assertTrue(ok.get(1).text().contains("107"), ok.get(1).text());
+        assertTrue(ok.get(2).text().contains("803"), ok.get(2).text());
+        assertTrue(ok.get(3).text().startsWith("0 "), ok.get(3).text());
+        assertEquals(PlanViewModel.BadgeKind.NEUTRAL, ok.get(3).kind(), "no error: grey");
+        ok.forEach(badge -> assertTranslated(badge.text()));
+
+        List<PlanViewModel.Badge> failed = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.ERROR, 1, 0, 2));
+        assertEquals(PlanViewModel.BadgeKind.ERROR, failed.get(0).kind());
+        assertTrue(failed.get(0).text().startsWith("✗ "), failed.get(0).text());
+        assertEquals(PlanViewModel.BadgeKind.ERROR, failed.get(3).kind(), "errors: red");
+        assertTrue(failed.get(3).text().startsWith("2 "), failed.get(3).text());
+
+        List<PlanViewModel.Badge> stopped = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.CANCELLED, 5, 0, 0));
+        assertEquals(PlanViewModel.BadgeKind.NEUTRAL, stopped.get(0).kind());
+        assertEquals(PlanViewModel.pipelineStatusText(PipelineStatus.CANCELLED), stopped.get(0).text());
+        assertEquals(ITEM_DATE_SHOT, PlanViewModel.lastRunDate(new LastRun(SHOT, PipelineStatus.SUCCESS, 0, 0, 0)));
+    }
+
+    private static final String ITEM_DATE_SHOT =
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
+
+    @Test
     public void anUnknownHeaderValueIsShownRaw() {
         assertEquals("hand-edited", PlanViewModel.resumeModeText("hand-edited"), "never a %key label");
         assertEquals("NEW", PlanViewModel.pipelineStatusText(PipelineStatus.NEW), "never a %key label");
