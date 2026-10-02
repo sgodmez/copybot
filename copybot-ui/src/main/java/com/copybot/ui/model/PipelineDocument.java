@@ -1,11 +1,13 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.FieldKind;
 import com.copybot.utils.JsonTexts;
+import com.copybot.utils.GsonUtil;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -341,6 +343,36 @@ public final class PipelineDocument {
     private static boolean bool(JsonObject object, String member) {
         JsonElement value = object.get(member);
         return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() && value.getAsBoolean();
+    }
+
+    // ---- sampling (spec pattern-helper §5) ----
+
+    /** The JSON of the input steps, "" when absent: the sample is listed again when it changes. */
+    public String samplingInJson() {
+        return json(root.get(Section.IN.jsonName()));
+    }
+
+    /** The JSON of the analysis and action steps: the sample is analysed again when it changes. */
+    public String samplingProcessingJson() {
+        JsonObject processing = new JsonObject();
+        processing.add(Section.ANALYZE.jsonName(), root.get(Section.ANALYZE.jsonName()));
+        processing.add(Section.PROCESS.jsonName(), root.get(Section.PROCESS.jsonName()));
+        return json(processing);
+    }
+
+    /**
+     * The document read as the engine reads a pipeline, for the sampler. Read from a copy: Gson hands the
+     * "actionConfig" elements over as they are, and the sampler reads them on another thread while the document
+     * keeps being edited.
+     *
+     * @throws IllegalArgumentException the engine cannot read it (the message says why)
+     */
+    public PipelineConfig samplingConfig() {
+        try {
+            return GsonUtil.getGson().fromJson(root.deepCopy(), PipelineConfig.class);
+        } catch (JsonParseException | IllegalStateException | NumberFormatException e) {
+            throw new IllegalArgumentException(e.getMessage(), e);
+        }
     }
 
     // ---- steps ----

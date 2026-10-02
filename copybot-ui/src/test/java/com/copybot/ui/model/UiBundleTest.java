@@ -12,6 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.List;
 import java.util.Properties;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -33,6 +34,8 @@ public class UiBundleTest {
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
             "plan.analysing", "plan.resolving",
             "plan.prepare-failed", "plan.finished",
+            "helper.loading", "helper.cancel", "helper.retry", "helper.sample", "helper.truncated", "helper.keys",
+            "helper.preview", "helper.effect.error", "helper.effect.skip", "helper.effect.literal",
             "item.status.PENDING", "item.status.WAITING_RESOURCES", "item.status.RUNNING",
             "item.status.RUNNING.percent", "item.status.DONE", "item.status.SKIPPED", "item.status.ERROR",
             "resume.dialog.title", "resume.dialog.all", "resume.dialog.date", "resume.dialog.file",
@@ -77,6 +80,18 @@ public class UiBundleTest {
                 assertDoesNotThrow(() -> new MessageFormat(value), key + " in " + file);
                 assertFalse(value.contains("\uFFFD"), key + " in " + file + " was re-encoded");
             }
+        }
+    }
+
+    /** The engine formats every text through MessageFormat, which eats a lone apostrophe. */
+    @Test
+    public void noValueHasALoneApostrophe() throws IOException {
+        for (String file : List.of("uiBundle.properties", "uiBundle_fr.properties")) {
+            Properties properties = bundle(file);
+            List<String> offending = properties.stringPropertyNames().stream()
+                    .filter(key -> Pattern.compile("(?<!')'(?!')").matcher(properties.getProperty(key)).find())
+                    .sorted().toList();
+            assertTrue(offending.isEmpty(), "lone apostrophe (write '') in " + file + ": " + offending);
         }
     }
 

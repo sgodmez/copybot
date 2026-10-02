@@ -58,6 +58,14 @@ final class ConfigForm {
         default boolean commitOnEdit(ConfigField field) {
             return true;
         }
+
+        /**
+         * The helper shown under a {@link FieldHint#PATTERN} field, built on its text control (spec pattern-helper
+         * §5); null: the fixed line of known variables.
+         */
+        default Node patternHelper(ConfigField field, TextInputControl input) {
+            return null;
+        }
     }
 
     /**
@@ -120,16 +128,38 @@ final class ConfigForm {
         }
         VBox box = new VBox(3);
         box.getChildren().add(new Label(access.label(field) + (field.required() ? " *" : "")));
-        box.getChildren().add(input(field));
+        Node control = input(field);
+        box.getChildren().add(control);
         String description = access.description(field);
         if (!description.isEmpty()) {
             box.getChildren().add(small(description));
         }
         if (field.hasHint(FieldHint.PATTERN)) {
-            String variables = ConfigSchema.PATTERN_VARIABLES.stream().map(v -> "{" + v + "}").collect(Collectors.joining(" "));
-            box.getChildren().add(small(ResourcesEngine.getString("editor.pattern-variables", variables)));
+            TextInputControl text = textControl(control);
+            Node helper = text != null ? access.patternHelper(field, text) : null;
+            if (helper != null) {
+                box.getChildren().add(helper);
+            } else {
+                String variables = ConfigSchema.PATTERN_VARIABLES.stream().map(v -> "{" + v + "}").collect(Collectors.joining(" "));
+                box.getChildren().add(small(ResourcesEngine.getString("editor.pattern-variables", variables)));
+            }
         }
         return box;
+    }
+
+    /** The text control of an input: the input itself, or the text field of a path input (with its browse button). */
+    private static TextInputControl textControl(Node input) {
+        if (input instanceof TextInputControl text) {
+            return text;
+        }
+        if (input instanceof HBox row) {
+            for (Node child : row.getChildren()) {
+                if (child instanceof TextInputControl text) {
+                    return text;
+                }
+            }
+        }
+        return null;
     }
 
     private static Node withDescription(Node node, String description) {

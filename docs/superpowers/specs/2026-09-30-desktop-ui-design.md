@@ -56,7 +56,7 @@ Fenêtre séparée ouverte par « Éditer… » (vue du plan) ou « Nouveau… �
 
 - Nouveau `ConfigSchema` dans l'API plugin : liste de champs `{ name, kind, required, defaultValue, hints, labelKey, descriptionKey, children | enumValues | elementSchema }` avec `kind` ∈ `STRING, BOOLEAN, INTEGER, DECIMAL, PATH, ENUM, RECORD, LIST`.
 - Construit par introspection des **composants du record** de config : `AbstractActionWithConfig` fournit `configSchema()` à partir de `getConfigClass()` ; `IAction` a `default Optional<ConfigSchema> configSchema()` (vide) — une action peut le surcharger si l'introspection ne suffit pas.
-- Annotations (package API plugin) : `@DirectoryPath`, `@FilePath`, `@PatternField` (l'éditeur affiche les variables de pattern connues : `name`, `size`, et pour chaque date `creation`, `lastModified`, `captureDate` : `.Y .y .m .D`), `@DefaultValue("…")`, `@Required`.
+- Annotations (package API plugin) : `@DirectoryPath`, `@FilePath`, `@PatternField` (l'éditeur affiche une aide construite sur un échantillon réel du pipeline (spec pattern-helper, 2026-10-02), la liste fixe restant le secours quand l'échantillon échoue), `@DefaultValue("…")`, `@Required`.
 - Libellés i18n : `plugin.<plugin>.<action>.config.<champ>.name` / `.description`, champs imbriqués `…config.<champ>.<sous-champ>.name` ; clé absente ⇒ nom du champ.
 - **Catalogue** : `PluginEngine` expose les actions chargées (plugin, version, code, type d'étape, nom et description localisés, schéma).
 - Les configs embarquées (`FileReadConfig`, `FileWriteConfig` et leurs sous-records de l'écriture sûre) sont annotées et ont leurs libellés EN/FR.

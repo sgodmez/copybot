@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
@@ -333,6 +334,70 @@ public class PipelineDocumentTest {
         expected.getAsJsonArray("inSteps").get(0).getAsJsonObject().getAsJsonObject("actionConfig")
                 .addProperty("path", "E:/DCIM");
         assertEquals(expected, tree(Files.readString(file)));
+    }
+
+    // ---- sampling (spec pattern-helper §5) ----
+
+    @Test
+    public void editingTheOutStepChangesNeitherSamplingJson() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        String in = document.samplingInJson();
+        String processing = document.samplingProcessingJson();
+
+        document.setConfigText(document.steps(Section.OUT).getFirst(), field(WRITE, "outPattern"), "nas/{name}/x");
+
+        assertEquals(in, document.samplingInJson(), "the input steps are unchanged");
+        assertEquals(processing, document.samplingProcessingJson(), "the processing steps are unchanged");
+    }
+
+    @Test
+    public void editingAnInputStepChangesOnlyTheSamplingInputJson() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        String in = document.samplingInJson();
+        String processing = document.samplingProcessingJson();
+
+        document.setConfigText(document.steps(Section.IN).getFirst(), field(READ, "path"), "E:/DCIM");
+
+        assertNotEquals(in, document.samplingInJson(), "the input steps changed");
+        assertEquals(processing, document.samplingProcessingJson(), "the processing steps are unchanged");
+    }
+
+    @Test
+    public void addingAnAnalyseStepChangesOnlyTheSamplingProcessingJson() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        String in = document.samplingInJson();
+        String processing = document.samplingProcessingJson();
+
+        document.addStep(Section.ANALYZE, EXIF_2);
+
+        assertEquals(in, document.samplingInJson(), "the input steps are unchanged");
+        assertNotEquals(processing, document.samplingProcessingJson(), "the processing steps changed");
+    }
+
+    @Test
+    public void theSamplingInputJsonIsEmptyWithoutInputSteps() {
+        assertEquals("", PipelineDocument.empty().samplingInJson());
+    }
+
+    @Test
+    public void theSamplingConfigIsTheDocumentReadAsAPipeline() {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}]}");
+
+        assertEquals(1, document.samplingConfig().inSteps().size());
+        assertThrows(IllegalArgumentException.class,
+                () -> PipelineDocument.parse("{\"inSteps\":[{\"maxConcurrency\":\"many\"}]}").samplingConfig(),
+                "a document the engine cannot read");
+    }
+
+    @Test
+    public void theSamplingConfigDoesNotFollowLaterEdits() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        PipelineConfig config = document.samplingConfig();
+
+        document.setConfigText(document.steps(Section.IN).getFirst(), field(READ, "path"), "E:/DCIM");
+
+        assertEquals("D:/DCIM", config.inSteps().getFirst().actionConfig().getAsJsonObject().get("path").getAsString(),
+                "the sampler reads it on another thread: it shares nothing with the document");
     }
 
     @Test

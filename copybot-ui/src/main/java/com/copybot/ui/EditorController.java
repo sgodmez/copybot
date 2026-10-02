@@ -1,11 +1,16 @@
 package com.copybot.ui;
 
+import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.engine.plugin.PluginEngine;
+import com.copybot.engine.sample.PipelineSampler;
+import com.copybot.engine.sample.Sample;
+import com.copybot.engine.sample.SampleSession;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.PatternHelperModel;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
@@ -32,6 +37,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextInputControl;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
@@ -97,6 +103,19 @@ public class EditorController {
     private boolean saving;
     /** The controls of the current form whose text does not parse: no save meanwhile. */
     private final ConfigForm.Invalid invalid = new ConfigForm.Invalid();
+
+    /** The sample of the edited pipeline (spec pattern-helper §5), opened on the first out form shown. */
+    private SampleSession sampleSession;
+    private Sample sample;
+    /** The JSON the sample was taken from, null before the first one (and after a failed one). */
+    private String sampledIn;
+    private String sampledProcessing;
+    /** A sample is being taken in the background. */
+    private boolean sampling;
+    /** Set when the window closes: late background callbacks must not touch it. */
+    private boolean closed;
+    /** The helper of the out form shown, null when another form is shown. */
+    private PatternHelper patternHelper;
 
     /** A pipeline file is being read for {@link #open} (JavaFX thread only): another open is ignored. */
     private static boolean loading;
@@ -210,6 +229,11 @@ public class EditorController {
             if (saving || (document.isModified() && !confirm(ResourcesEngine.getString("editor.discard")))) {
                 e.consume();
             }
+        });
+        // both ways out (an accepted close request, the close after a save): the sample is no longer wanted
+        stage.setOnHidden(e -> {
+            closed = true;
+            cancelSample();
         });
         // no default button (Enter in a field must not save): Ctrl+S (Cmd+S) instead
         shortcut(saveButton, "editor.save.tooltip",
@@ -363,6 +387,7 @@ public class EditorController {
     // ---- forms ----
 
     private void showForm(EditorNode node) {
+        patternHelper = null; // it belongs to the form being replaced
         formBox.getChildren().clear();
         invalid.clear();
         if (node == null || node.kind() == Kind.SECTION) {
@@ -434,8 +459,8 @@ public class EditorController {
         }
         Optional<ConfigSchema> schema = catalogAction.configSchema();
         if (schema.isPresent()) {
-            formBox.getChildren().add(ConfigForm.build(schema.get().fields(), configAccess(step, catalogAction), stage,
-                    invalid));
+            formBox.getChildren().add(ConfigForm.build(schema.get().fields(),
+                    configAccess(step, catalogAction, node.section() == Section.OUT), stage, invalid));
         } else {
             formBox.getChildren().addAll(new Label(ResourcesEngine.getString("editor.no-schema")),
                     readOnly(PipelineDocument.json(step.get("actionConfig"))));
@@ -446,7 +471,8 @@ public class EditorController {
         formBox.getChildren().add(advanced);
     }
 
-    private ConfigForm.Access configAccess(JsonObject step, CatalogAction action) {
+    /** @param outStep the step is the output one: its pattern field gets the sample-based helper */
+    private ConfigForm.Access configAccess(JsonObject step, CatalogAction action, boolean outStep) {
         return new ConfigForm.Access() {
             @Override
             public String text(ConfigField field) {
@@ -456,6 +482,25 @@ public class EditorController {
             @Override
             public void setText(ConfigField field, String text) {
                 document.setConfigText(step, field, text);
+                if (patternHelper != null) {
+                    patternHelper.refresh(); // "onMissingKey" may have changed: the effects shown follow it
+                }
+            }
+
+            @Override
+            public Node patternHelper(ConfigField field, TextInputControl input) {
+                if (!outStep) {
+                    return null;
+                }
+                ConfigField onMissingKey = action.configSchema().flatMap(schema -> schema.field("onMissingKey")).orElse(null);
+                patternHelper = new PatternHelper(input,
+                        () -> onMissingKey == null ? null : document.configText(step, onMissingKey),
+                        EditorController.this::resample, EditorController.this::cancelSample);
+                if (sample != null) {
+                    patternHelper.showSample(sample);
+                }
+                ensureSample();
+                return patternHelper;
             }
 
             @Override
@@ -473,6 +518,79 @@ public class EditorController {
                 return PipelineDocument.json(document.configValue(step, field));
             }
         };
+    }
+
+    // ---- sample (spec pattern-helper §5) ----
+
+    /**
+     * Starts a sample when none matches the steps being edited: listed again when the input steps changed,
+     * analysed again when only the analysis or action steps did. While one runs, the helper just shows it loading.
+     */
+    private void ensureSample() {
+        if (sampling) {
+            if (patternHelper != null) {
+                patternHelper.showLoading();
+            }
+            return;
+        }
+        String in = document.samplingInJson();
+        String processing = document.samplingProcessingJson();
+        PatternHelperModel.Rerun rerun = PatternHelperModel.rerun(sampledIn, sampledProcessing, in, processing);
+        if (rerun == PatternHelperModel.Rerun.NONE) {
+            return;
+        }
+        PipelineConfig config;
+        try {
+            config = document.samplingConfig();
+        } catch (IllegalArgumentException e) {
+            showSampleResult(Sample.failed(String.valueOf(e.getMessage())), in, processing);
+            return;
+        }
+        if (sampleSession == null) {
+            sampleSession = PipelineSampler.open();
+        }
+        SampleSession session = sampleSession;
+        sampling = true;
+        if (patternHelper != null) {
+            patternHelper.showLoading();
+        }
+        background(() -> rerun == PatternHelperModel.Rerun.LIST ? session.list(config) : session.analyse(config),
+                result -> sampleDone(result, in, processing),
+                e -> sampleDone(Sample.failed(String.valueOf(e.getMessage())), in, processing));
+    }
+
+    private void sampleDone(Sample result, String in, String processing) {
+        sampling = false;
+        if (closed) {
+            return;
+        }
+        showSampleResult(result, in, processing);
+        if (patternHelper != null && result.failure().isEmpty()) {
+            // the steps may have been edited while it ran (the out form shown again meanwhile): catch up
+            ensureSample();
+        }
+    }
+
+    private void showSampleResult(Sample result, String in, String processing) {
+        sample = result;
+        // a failed (or cancelled) sample is not remembered as taken: the next display of the out form tries again
+        sampledIn = result.failure().isPresent() ? null : in;
+        sampledProcessing = result.failure().isPresent() ? null : processing;
+        if (patternHelper != null) {
+            patternHelper.showSample(result);
+        }
+    }
+
+    /** "Retry": listed again. */
+    private void resample() {
+        sampledIn = null;
+        ensureSample();
+    }
+
+    private void cancelSample() {
+        if (sampleSession != null) {
+            sampleSession.cancel();
+        }
     }
 
     private ConfigForm.Access advancedAccess(EditorNode node, JsonObject step) {
