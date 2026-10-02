@@ -91,7 +91,8 @@ public final class Plan {
 
     /**
      * Where the out step would write what this item becomes after the dry run of the process steps
-     * ({@link IOutAction#resolveTarget}), without writing anything (spec pattern-helper §4.3).
+     * ({@link IOutAction#resolveTarget}), without writing anything (spec pattern-helper §4.3). Callable while
+     * the plan is being prepared (any thread): the items analysed so far have their target, the others none.
      */
     public TargetProjection projectionOf(WorkItemExecution item) {
         IOutAction out = executor.findOutAction();
@@ -99,6 +100,9 @@ public final class Plan {
             return TargetProjection.NONE;
         }
         Projection projection = item.getProjection();
+        if (projection == null && executor.isPreparing()) { // not analysed yet
+            return TargetProjection.NONE;
+        }
         if (projection == null) { // not prepared (error before the barrier): the item as it is
             projection = new Projection.Projected(List.of(item.getWorkItem()));
         }

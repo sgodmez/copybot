@@ -2,6 +2,7 @@ package com.copybot.engine;
 
 import com.copybot.engine.ControlFakes.FakeAction;
 import com.copybot.engine.pipeline.ItemStatus;
+import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
@@ -10,6 +11,7 @@ import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
@@ -208,6 +210,53 @@ public class PrepareDryRunTest {
         plan.getExecutor().execute(null);
 
         assertEquals(List.of("DSC_1.NEF"), process.processed, "the dry run did not touch the real item");
+    }
+
+    /** Analysing DSC_2 waits until DSC_1's target is known, then records it and DSC_2's own. */
+    final class WaitForFirstTarget extends FakeAction implements IAnalyzeAction {
+        Plan plan;
+        final List<TargetProjection> seen = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+            if (!item.getNameDisplay().equals("DSC_2.NEF")) {
+                return;
+            }
+            WorkItemExecution first = named(plan.getState(), "DSC_1.NEF");
+            WorkItemExecution second = named(plan.getState(), "DSC_2.NEF");
+            try {
+                ControlFakes.awaitTrue(() -> plan.projectionOf(first) instanceof TargetProjection.Targets);
+            } catch (InterruptedException e) {
+                throw new IllegalStateException(e);
+            }
+            seen.add(plan.projectionOf(first));
+            seen.add(plan.projectionOf(second));
+        }
+    }
+
+    private static WorkItemExecution named(PipelineState state, String name) {
+        return state.getWorkItems().stream()
+                .filter(w -> w.getWorkItem().getNameDisplay().equals(name))
+                .findFirst().orElseThrow();
+    }
+
+    @Test
+    public void theTargetIsKnownAsSoonAsTheItemIsAnalysed() {
+        WaitForFirstTarget analyze = new WaitForFirstTarget();
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new NamedIn("DSC_1.NEF", "DSC_2.NEF"), ControlFakes.emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, ControlFakes.emptyConfig()), processStep("convert", toJpg()),
+                        new PipelineStep<>(null, new Out(), ControlFakes.emptyConfig())),
+                1, false, null, registry(Map.of("disk:*", 1000)),
+                new ResumeContext(ResumeMode.STATE, new ResumeStateStore(tempDir.resolve("p.state.json"))));
+        analyze.plan = new Plan(executor);
+
+        executor.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, executor.getState().getStatus());
+        assertEquals(List.of(out(), TargetProjection.NONE), analyze.seen,
+                "while preparing, DSC_1 analysed has its target, DSC_2 being analysed has none yet");
+        assertEquals(out(), analyze.plan.projectionOf(named(analyze.plan, "DSC_2.NEF")));
     }
 
     @Test

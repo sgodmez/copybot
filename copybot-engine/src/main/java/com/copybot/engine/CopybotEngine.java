@@ -126,18 +126,34 @@ public final class CopybotEngine implements AutoCloseable {
      * @throws CopybotException      when the pipeline file is missing or invalid, or its resume mode unknown
      */
     public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher) {
+        return prepare(pipelinePath, watcher, null);
+    }
+
+    /**
+     * Same as {@link #prepare(Path, Consumer)}, handing the plan out before it is prepared: its
+     * {@link Plan#projectionOf} gives the target of each item as soon as it is analysed.
+     *
+     * @param started optional, called on the caller's thread once the pipeline file is read, before the
+     *                listing. It must not call any engine operation.
+     */
+    public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started) {
         begin();
         MainExecutor mainExecutor = endOnFailure(() -> {
             PipelineConfig pipelineConfig = readPipeline(pipelinePath);
             return new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
         });
-        return prepareBegun(mainExecutor);
+        return prepareBegun(mainExecutor, started);
     }
 
     // visible for tests: prepares a pipeline built from pre-resolved steps
-    Plan prepare(MainExecutor mainExecutor) {
+    Plan prepare(MainExecutor mainExecutor, Consumer<Plan> started) {
         begin();
-        return prepareBegun(mainExecutor);
+        return prepareBegun(mainExecutor, started);
+    }
+
+    // visible for tests
+    Plan prepare(MainExecutor mainExecutor) {
+        return prepare(mainExecutor, null);
     }
 
     /**
@@ -296,9 +312,13 @@ public final class CopybotEngine implements AutoCloseable {
     }
 
     /** begin() was called; end() is called once the preparation is over. */
-    private Plan prepareBegun(MainExecutor mainExecutor) {
+    private Plan prepareBegun(MainExecutor mainExecutor, Consumer<Plan> started) {
         try {
             track(mainExecutor);
+            Plan plan = new Plan(mainExecutor);
+            if (started != null) {
+                started.accept(plan);
+            }
             mainExecutor.prepare();
             boolean kept = false;
             if (mainExecutor.getState().getStatus() == PipelineStatus.PREPARED) {
@@ -312,7 +332,7 @@ public final class CopybotEngine implements AutoCloseable {
             if (!kept) {
                 mainExecutor.resume(); // a failed, cancelled or orphan preparation leaves nothing paused
             }
-            return new Plan(mainExecutor);
+            return plan;
         } finally {
             end();
         }

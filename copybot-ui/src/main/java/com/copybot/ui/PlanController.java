@@ -111,6 +111,8 @@ public class PlanController {
     /** The token of the current preparation and of the execution of its plan. */
     private Object operation = new Object();
     private Plan plan;
+    /** The plan being prepared, until {@code prepare()} returns: the targets of the items analysed so far. */
+    private Plan preparingPlan;
     /** The execution of the plan, completed once the engine accepted it (null before the copy). */
     private CompletableFuture<Execution> execution;
     /**
@@ -137,7 +139,8 @@ public class PlanController {
                 super.updateItem(text, empty);
                 setText(empty ? null : text);
                 WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
-                String tooltip = item == null || plan == null ? null : PlanViewModel.targetTooltip(plan.projectionOf(item));
+                Plan shown = targetsPlan();
+                String tooltip = item == null || shown == null ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
                 setTooltip(tooltip == null ? null : new Tooltip(tooltip));
             }
         });
@@ -178,6 +181,7 @@ public class PlanController {
     private void reload() {
         operation = new Object(); // a late notification of the dropped plan is ignored
         plan = null;
+        preparingPlan = null;
         execution = null;
         model = new PlanViewModel(false);
         model.setFilter(filterCombo.getValue() == null ? Filter.ALL : filterCombo.getValue());
@@ -260,7 +264,13 @@ public class PlanController {
     }
 
     private String targetText(WorkItemExecution item) {
-        return plan == null ? "" : PlanViewModel.targetText(plan.projectionOf(item));
+        Plan shown = targetsPlan();
+        return shown == null ? "" : PlanViewModel.targetText(shown.projectionOf(item));
+    }
+
+    /** The prepared plan, or while preparing the plan being prepared (its targets fill in as items are analysed). */
+    private Plan targetsPlan() {
+        return plan != null ? plan : preparingPlan;
     }
 
     private List<WorkItemExecution> ordered() {
@@ -298,6 +308,7 @@ public class PlanController {
         operation = op;
         Object hold = hold();
         plan = null;
+        preparingPlan = null;
         execution = null;
         model.startPreparing();
         refresh();
@@ -305,7 +316,8 @@ public class PlanController {
             CopybotMainUi.executor.submit(() -> {
                 Plan prepared;
                 try {
-                    prepared = CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state));
+                    prepared = CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state),
+                            started -> Platform.runLater(() -> onPrepareStarted(op, started)));
                 } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
                     Platform.runLater(() -> onPrepareRefused(op, hold, t));
                     return;
@@ -317,9 +329,17 @@ public class PlanController {
         }
     }
 
+    /** The watcher notifications that follow refresh the table, so its targets fill in. */
+    private void onPrepareStarted(Object op, Plan started) {
+        if (op == operation && plan == null) {
+            preparingPlan = started;
+        }
+    }
+
     private void onPrepareRefused(Object op, Object hold, Throwable failure) {
         release(hold); // prepare() has returned (thrown)
         if (op == operation) {
+            preparingPlan = null;
             model.reset();
         }
         refresh();
@@ -349,6 +369,7 @@ public class PlanController {
             return;
         }
         plan = prepared;
+        preparingPlan = null;
         model.update(prepared.getState(), prepared.getOrderedItems());
         afterUpdate();
     }

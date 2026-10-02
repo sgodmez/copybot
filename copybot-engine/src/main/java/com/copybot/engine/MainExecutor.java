@@ -67,7 +67,8 @@ public class MainExecutor implements Runnable {
     private final WriteContext writeContext = WriteContext.newRun();
 
     private List<PipelineStep<IInAction>> inSteps;
-    private List<PipelineStep<?>> itemSteps;
+    /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
+    private volatile List<PipelineStep<?>> itemSteps;
     private boolean startProcessingWhileListing;
 
     /** null: single-phase run without barrier nor resume (historical behaviour of run()). */
@@ -87,6 +88,14 @@ public class MainExecutor implements Runnable {
 
     /** Set once the configuration warnings are published: prepare() collects them, execute() keeps them. */
     private boolean warningsCollected;
+
+    /**
+     * While preparing, the process steps dry-run for each item as soon as it is analysed (null otherwise):
+     * the targets show up during the preparation, not only at its end.
+     */
+    private volatile List<PipelineStep<IProcessAction>> dryRunSteps;
+    /** From the start of {@link #prepare()} until it returns. */
+    private volatile boolean preparing;
 
     private ResumeResolver resolver;
     private ResumeProposal proposal;
@@ -349,6 +358,7 @@ public class MainExecutor implements Runnable {
         if (resume == null) {
             throw new IllegalStateException("prepare() requires a resume context");
         }
+        preparing = true;
         markRunning();
         state.setListingInProgress(true);
         startPhase();
@@ -357,6 +367,7 @@ public class MainExecutor implements Runnable {
             resolveStepsIfNeeded();
             phaseEnd = barrierIndex;
             finalPhase = false;
+            dryRunSteps = processSteps();
             runListings();
             commitPhase();
             if (listingFailed.get()) {
@@ -375,9 +386,16 @@ public class MainExecutor implements Runnable {
         } catch (RuntimeException | Error e) {
             onPhaseFailed(e, true);
         } finally {
+            dryRunSteps = null;
             state.setListingInProgress(false);
             endPhase();
+            preparing = false;
         }
+    }
+
+    /** True while {@link #prepare()} runs: an item without projection is then not analysed yet. */
+    boolean isPreparing() {
+        return preparing;
     }
 
     /** The process steps among the item steps (the instances the execution will use). */
@@ -394,14 +412,16 @@ public class MainExecutor implements Runnable {
 
     /**
      * The dry run of the process steps for every item prepared without error, selected or not, so that a manual
-     * resume point chosen later needs nothing more (spec pattern-helper §4.3). A failing dry run is shown, never
-     * an item error. The dry run uses the same action instances as the execution: dryRun must not change their state.
+     * resume point chosen later needs nothing more (spec pattern-helper §4.3). Most items were projected as soon
+     * as they were analysed ({@link #projectEarly}): this completes the others (e.g. filtered before the barrier).
+     * A failing dry run is shown, never an item error. The dry run uses the same action instances as the
+     * execution, possibly from several threads: dryRun must not change their state.
      */
     private void projectItems() throws InterruptedException {
         List<PipelineStep<IProcessAction>> steps = processSteps();
         for (WorkItemExecution exec : orderedItems) {
             checkCancelled();
-            if (exec.getStatus() != ItemStatus.ERROR) {
+            if (exec.getStatus() != ItemStatus.ERROR && exec.getProjection() == null) {
                 exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
             }
         }
@@ -749,6 +769,7 @@ public class MainExecutor implements Runnable {
                 exec.setReady();
                 if (!finalPhase) {
                     exec.markPrepared(); // stopped at the preparation barrier: analysed
+                    projectEarly(exec);
                 }
             }
         } catch (InterruptedException e) {
@@ -773,6 +794,14 @@ public class MainExecutor implements Runnable {
             }
         } finally {
             notifyWatcher();
+        }
+    }
+
+    /** While preparing, the target of an item is known as soon as it is analysed (spec pattern-helper §4.3). */
+    private void projectEarly(WorkItemExecution exec) {
+        List<PipelineStep<IProcessAction>> steps = dryRunSteps;
+        if (steps != null) {
+            exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
         }
     }
 
