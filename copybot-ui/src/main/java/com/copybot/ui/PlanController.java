@@ -637,8 +637,9 @@ public class PlanController {
         pauseButton.setDisable(!model.canPause());
         stopButton.setDisable(!model.canStop());
 
-        show(progressBox, model.isExecutionActive() || phase == Phase.FINISHED);
-        progressBar.setProgress(model.progress().fraction());
+        boolean preparing = phase == Phase.PREPARING;
+        show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);
+        progressBar.setProgress(preparing ? model.prepareFraction() : model.progress().fraction());
         progressLabel.setText(model.progressText());
         statusLine.setText(model.statusLine());
 

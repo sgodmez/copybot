@@ -31,6 +31,7 @@ public class UiBundleTest {
             "plan.filter.ALL", "plan.filter.TO_COPY", "plan.filter.SKIPPED", "plan.filter.ERRORS",
             "plan.column.date", "plan.column.target", "plan.menu.resume-from-here", "plan.prepare", "plan.copy",
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
+            "plan.analysing", "plan.resolving",
             "plan.prepare-failed", "plan.finished",
             "item.status.PENDING", "item.status.WAITING_RESOURCES", "item.status.RUNNING",
             "item.status.RUNNING.percent", "item.status.DONE", "item.status.SKIPPED", "item.status.ERROR",

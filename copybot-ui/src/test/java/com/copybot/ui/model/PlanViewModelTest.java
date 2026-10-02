@@ -14,6 +14,7 @@ import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PlanViewModel.Filter;
 import com.copybot.ui.model.PlanViewModel.Phase;
+import com.copybot.ui.model.PlanViewModel.PrepareStage;
 import com.copybot.ui.model.PlanViewModel.Progress;
 import com.copybot.ui.model.RecentPipelines.LastRun;
 import com.copybot.utils.FileUtil;
@@ -109,7 +110,37 @@ public class PlanViewModelTest {
         assertFalse(model.canPrepare());
         assertFalse(model.canStop(), "a preparation is not stopped from the view");
         assertTrue(model.isActive());
-        assertTrue(model.statusLine().contains("1"), model.statusLine());
+        assertTrue(model.progressText().contains("1"), model.progressText());
+        assertEquals("", model.statusLine(), "the preparation is told next to its bar");
+    }
+
+    @Test
+    public void thePreparationBarListsThenAnalysesThenResolves() throws IOException {
+        PlanViewModel model = new PlanViewModel(false);
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        model.startPreparing();
+        assertEquals(PrepareStage.LISTING, model.prepareStage(), "listing until the engine says otherwise");
+
+        PipelineState state = state(PipelineStatus.RUNNING, a, b);
+        state.setListingInProgress(true);
+        model.update(state, List.of());
+        assertEquals(PrepareStage.LISTING, model.prepareStage());
+        assertEquals(PlanViewModel.INDETERMINATE, model.prepareFraction(), "the total is unknown while listing");
+        assertTrue(model.progressText().contains("2"), model.progressText());
+
+        state.setListingInProgress(false);
+        a.markPrepared();
+        model.update(state, List.of());
+        assertEquals(PrepareStage.ANALYSING, model.prepareStage());
+        assertEquals(0.5, model.prepareFraction());
+        assertTrue(model.progressText().contains("1 / 2"), model.progressText());
+
+        b.markPrepared();
+        model.update(state, List.of());
+        assertEquals(PrepareStage.RESOLVING, model.prepareStage(), "every file analysed: the resume point remains");
+        assertEquals(PlanViewModel.INDETERMINATE, model.prepareFraction());
+        assertTranslated(model.progressText());
     }
 
     @Test

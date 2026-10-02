@@ -46,6 +46,12 @@ public final class PlanViewModel {
 
     public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS }
 
+    /** The steps of a preparation: listing the source (total unknown), analysing the files, computing the resume point. */
+    public enum PrepareStage { LISTING, ANALYSING, RESOLVING }
+
+    /** A progress without known end (the value of JavaFX's {@code ProgressBar.INDETERMINATE_PROGRESS}). */
+    public static final double INDETERMINATE = -1;
+
     /** Files and bytes processed (done, skipped or failed) among those selected when the copy started. */
     public record Progress(int doneFiles, int totalFiles, long doneBytes, long totalBytes) {
         /** 0 to 1, by bytes when the sizes are known, by files otherwise. */
@@ -69,6 +75,8 @@ public final class PlanViewModel {
     private Filter filter = Filter.ALL;
     private List<WorkItemExecution> items = List.of();
     private PipelineStatus status;
+    /** The source is still being listed (only meaningful while preparing). */
+    private boolean listing;
     private List<String> warnings = List.of();
     private ResumeProposal proposal;
     private ResumePoint override;
@@ -86,6 +94,7 @@ public final class PlanViewModel {
     public void startPreparing() {
         clear();
         phase = Phase.PREPARING;
+        listing = true; // until the engine says otherwise
         autoExecuteArmed = true;
     }
 
@@ -112,6 +121,7 @@ public final class PlanViewModel {
         finishedReported = false;
         items = List.of();
         status = null;
+        listing = false;
         warnings = List.of();
         proposal = null;
         override = null;
@@ -127,6 +137,7 @@ public final class PlanViewModel {
      */
     public void update(PipelineState state, List<WorkItemExecution> ordered) {
         status = state.getStatus();
+        listing = state.isListingInProgress();
         proposal = state.getResumeProposal();
         failure = state.getFailure();
         List<String> all = new ArrayList<>(state.getWarnings());
@@ -308,6 +319,23 @@ public final class PlanViewModel {
         return new Progress(done, selectedAtStart.size(), doneBytes, totalBytes);
     }
 
+    /** Where the preparation is (only meaningful in PREPARING). */
+    public PrepareStage prepareStage() {
+        if (listing) {
+            return PrepareStage.LISTING;
+        }
+        return preparedCount() < items.size() ? PrepareStage.ANALYSING : PrepareStage.RESOLVING;
+    }
+
+    /** The bar of the preparation: the analysed share of the listed files, {@link #INDETERMINATE} otherwise. */
+    public double prepareFraction() {
+        return prepareStage() == PrepareStage.ANALYSING ? (double) preparedCount() / items.size() : INDETERMINATE;
+    }
+
+    private int preparedCount() {
+        return (int) items.stream().filter(WorkItemExecution::isPrepared).count();
+    }
+
     private static long size(WorkItemExecution item) {
         Long size = item.getWorkItem().getMetadatas().getSize();
         return size == null ? 0 : size;
@@ -337,17 +365,26 @@ public final class PlanViewModel {
         return ResourcesEngine.getString("plan.copy", counts.selected(), displaySize(counts.selectedBytes(), 1));
     }
 
-    /** "12 / 40 files, 1.2 GB / 3.5 GB". */
+    /**
+     * "12 / 40 files, 1.2 GB / 3.5 GB"; while preparing, its step: "Listing the source… 120 files",
+     * "Analysing the files… 40 / 120", "Computing the resume point…".
+     */
     public String progressText() {
+        if (phase == Phase.PREPARING) {
+            return switch (prepareStage()) {
+                case LISTING -> ResourcesEngine.getString("plan.preparing", items.size());
+                case ANALYSING -> ResourcesEngine.getString("plan.analysing", preparedCount(), items.size());
+                case RESOLVING -> ResourcesEngine.getString("plan.resolving");
+            };
+        }
         Progress p = progress();
         return ResourcesEngine.getString("plan.progress", p.doneFiles(), p.totalFiles(),
                 displaySize(p.doneBytes(), 1), displaySize(p.totalBytes(), 1));
     }
 
-    /** The status line under the table: listing, preparation failure, end of the run; empty otherwise. */
+    /** The status line under the table: preparation failure, end of the run; empty otherwise (the preparation is told by the bar). */
     public String statusLine() {
         return switch (phase) {
-            case PREPARING -> ResourcesEngine.getString("plan.preparing", items.size());
             case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
             case FINISHED -> ResourcesEngine.getString("plan.finished", pipelineStatusText(status),
                     copied(), counts().skipped(), counts().errors());

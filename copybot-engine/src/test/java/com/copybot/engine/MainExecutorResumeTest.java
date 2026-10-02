@@ -127,6 +127,8 @@ public class MainExecutorResumeTest {
         assertEquals(3, analyze.seen.size(), "analyses run for every listed item");
         assertTrue(out.written.isEmpty(), "nothing after the barrier runs while preparing");
         assertTrue(exec.getState().getWorkItems().stream().allMatch(w -> w.getStatus() == ItemStatus.PENDING));
+        assertTrue(exec.getState().getWorkItems().stream().allMatch(WorkItemExecution::isPrepared),
+                "every item reached the barrier: the preparation progress is complete");
         assertEquals(ResumeSource.NONE, exec.getState().getResumeProposal().source());
         assertFalse(Files.exists(store().getPath()), "preparing never writes the state file");
     }

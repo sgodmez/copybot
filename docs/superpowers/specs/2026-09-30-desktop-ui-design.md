@@ -33,6 +33,7 @@ Tableau (le `TableView` existant, enrichi) :
 
 Barre d'actions :
 - « Préparer le plan » (avant préparation, ou pour re-préparer) ;
+- pendant la préparation : une barre de progression par étape — listing (barre indéterminée, « Listing de la source… N fichiers »), analyse (fichiers analysés / listés, « Analyse des fichiers… X / N »), calcul du point de reprise (barre indéterminée) ;
 - après préparation : « Copier N fichiers (X Go) » ; case **« exécution automatique »** à côté, initialisée avec `ui.autoExecute` du pipeline JSON (défaut `false`) ; changer la case n'affecte que la session (le fichier n'est modifié que par l'éditeur). Si la case est cochée, la copie démarre dès que le plan est prêt (sauf plan en erreur) ;
 - pendant l'exécution : « Pause » / « Reprendre », « Stop » ; une barre de progression (fichiers et octets traités / sélectionnés).
 - À la fin : récapitulatif (copiés / ignorés / erreurs), enregistré dans le récent du pipeline.

@@ -33,6 +33,8 @@ public class WorkItemExecution {
     /** The execution this one was forked from by a process step, null for a listed item. */
     private volatile WorkItemExecution parent;
     private volatile boolean forkFailed;
+    /** True once the preparation is over for this item: it reached the preparation barrier or failed before it. */
+    private volatile boolean prepared;
 
     public WorkItemExecution(WorkItem wi, List<PipelineStep<?>> pipelineSteps) {
         this.wi = wi;
@@ -147,6 +149,16 @@ public class WorkItemExecution {
         this.skipReason = null;
         this.waitingFor = Set.of();
         this.status = ItemStatus.PENDING;
+    }
+
+    /** Called by the preparation once this item reached the barrier (analysed) or failed before it. */
+    public void markPrepared() {
+        this.prepared = true;
+    }
+
+    /** True once the preparation is over for this item: the progress of the analyses. */
+    public boolean isPrepared() {
+        return prepared;
     }
 
     public WorkStatus getWorkStatus() {

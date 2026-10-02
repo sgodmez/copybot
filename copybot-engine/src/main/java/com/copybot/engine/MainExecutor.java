@@ -720,6 +720,9 @@ public class MainExecutor implements Runnable {
                 exec.setDone();
             } else {
                 exec.setReady();
+                if (!finalPhase) {
+                    exec.markPrepared(); // stopped at the preparation barrier: analysed
+                }
             }
         } catch (InterruptedException e) {
             exec.setReady(); // not left WAITING_RESOURCES / RUNNING: the item is simply not done
@@ -737,6 +740,9 @@ public class MainExecutor implements Runnable {
             } else {
                 exec.setError(t);
                 exec.propagateFailureToAncestors(); // a failed fork holds the resume cursor back before its parent
+                if (!finalPhase) {
+                    exec.markPrepared(); // failed before the barrier: nothing more to prepare for it
+                }
             }
         } finally {
             notifyWatcher();
