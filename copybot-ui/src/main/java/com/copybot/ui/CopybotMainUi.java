@@ -6,6 +6,7 @@ import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.UiPreferences;
 import com.copybot.ui.util.Views;
 import javafx.application.Application;
+import javafx.application.HostServices;
 import javafx.scene.Parent;
 import javafx.scene.Scene;
 import javafx.scene.image.Image;
@@ -30,9 +31,13 @@ public class CopybotMainUi extends Application {
      */
     public static ExecutorService executor;
 
+    /** For opening folders from the views; set at startup. */
+    public static HostServices HOST_SERVICES;
+
 
     @Override
     public void start(Stage stage) {
+        HOST_SERVICES = getHostServices();
         var params = getParameters();
         Optional<Path> pathArg = Optional.ofNullable(params.getNamed().get("config-file")).map(Path::of);
 

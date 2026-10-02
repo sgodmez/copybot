@@ -19,6 +19,11 @@
                   <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
                </items>
             </Menu>
+            <Menu mnemonicParsing="false" text="%menu.tools">
+               <items>
+                  <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
+               </items>
+            </Menu>
             <Menu mnemonicParsing="false" text="%menu.help">
                <items>
                   <MenuItem mnemonicParsing="false" text="%menu.help.about" />

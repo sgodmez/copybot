@@ -5,6 +5,7 @@ import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.FieldKind;
+import com.copybot.utils.JsonTexts;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -13,13 +14,8 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
-import com.google.gson.Strictness;
-import com.google.gson.TypeAdapter;
-import com.google.gson.stream.JsonReader;
-import com.google.gson.stream.JsonToken;
 
 import java.io.IOException;
-import java.io.StringReader;
 import java.math.BigDecimal;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
@@ -31,7 +27,6 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -88,7 +83,6 @@ public final class PipelineDocument {
             advanced("version", FieldKind.STRING, null));
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().disableHtmlEscaping().create();
-    private static final TypeAdapter<JsonElement> STRICT_READER = new Gson().getAdapter(JsonElement.class);
 
     private static final String RESUME_CURSOR_SUFFIX = ".state.json";
 
@@ -175,54 +169,7 @@ public final class PipelineDocument {
                 throw new IllegalArgumentException("\"" + section.jsonName() + "\" is not made of step objects");
             }
         }
-        return new PipelineDocument(root, !isStrictJson(json), duplicateKeys(json));
-    }
-
-    /** The paths of the members repeated in an object, read as leniently as the tree was parsed. */
-    private static List<String> duplicateKeys(String json) {
-        List<String> duplicates = new ArrayList<>();
-        try (JsonReader reader = new JsonReader(new StringReader(json))) {
-            reader.setStrictness(Strictness.LENIENT);
-            collectDuplicateKeys(reader, duplicates);
-        } catch (IOException | RuntimeException e) {
-            // parsed already: cannot happen, and only a warning is lost
-        }
-        return duplicates;
-    }
-
-    private static void collectDuplicateKeys(JsonReader reader, List<String> duplicates) throws IOException {
-        switch (reader.peek()) {
-            case BEGIN_OBJECT -> {
-                reader.beginObject();
-                Set<String> names = new HashSet<>();
-                while (reader.hasNext()) {
-                    if (!names.add(reader.nextName())) {
-                        duplicates.add(reader.getPath().replaceFirst("^\\$\\.", ""));
-                    }
-                    collectDuplicateKeys(reader, duplicates);
-                }
-                reader.endObject();
-            }
-            case BEGIN_ARRAY -> {
-                reader.beginArray();
-                while (reader.hasNext()) {
-                    collectDuplicateKeys(reader, duplicates);
-                }
-                reader.endArray();
-            }
-            default -> reader.skipValue();
-        }
-    }
-
-    /** The text is one strict (RFC 8259) JSON value: no comment, single quote, unquoted name... */
-    private static boolean isStrictJson(String json) {
-        try (JsonReader reader = new JsonReader(new StringReader(json))) {
-            reader.setStrictness(Strictness.STRICT);
-            STRICT_READER.read(reader);
-            return reader.peek() == JsonToken.END_DOCUMENT;
-        } catch (IOException | RuntimeException e) { // MalformedJsonException is an IOException
-            return false;
-        }
+        return new PipelineDocument(root, !JsonTexts.isStrictJson(json), JsonTexts.duplicateKeys(json));
     }
 
     private static boolean isArrayOfObjects(JsonElement value) {
