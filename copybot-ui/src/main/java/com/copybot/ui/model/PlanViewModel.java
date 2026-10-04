@@ -1,6 +1,8 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
+import com.copybot.engine.Projection;
 import com.copybot.engine.TargetProjection;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineState;
@@ -10,6 +12,7 @@ import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.RecentPipelines.LastRun;
@@ -27,6 +30,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * The state of the plan view (spec desktop-ui §2), without JavaFX: the phase and the buttons it allows,
@@ -428,6 +432,38 @@ public final class PlanViewModel {
     public static String targetTooltip(TargetProjection projection) {
         return projection instanceof TargetProjection.Targets t && t.directories().size() > 1
                 ? t.directories().stream().map(Path::toString).collect(Collectors.joining("\n")) : null;
+    }
+
+    /**
+     * The planned processing of an item ("Planned processing…" of the row menu): the source, its status, each
+     * process step and what it produced, then every file the out step would write, or why the dry run stopped.
+     */
+    public static String detailText(WorkItemExecution item, ItemDetail detail) {
+        WorkItem source = item.getWorkItem();
+        List<String> lines = new ArrayList<>();
+        lines.add("📂 " + source.getNameDisplay());
+        lines.add("   " + Stream.of(source.getSourceLocationDisplay(), sizeText(item), dateText(item))
+                .filter(s -> s != null && !s.isEmpty())
+                .collect(Collectors.joining(" · ")));
+        lines.add(ResourcesEngine.getString("plan.detail.status", statusText(item)));
+        lines.add("");
+        for (Projection.Step step : detail.steps()) {
+            lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced()));
+        }
+        switch (detail.outcome()) {
+            case TargetProjection.Targets t -> {
+                for (int i = 0; i < detail.targets().size(); i++) {
+                    lines.add((i == 0 ? "💾 " : "   ") + detail.targets().get(i));
+                }
+            }
+            case TargetProjection.Filtered f ->
+                    lines.add("⚙ " + f.action() + " → " + ResourcesEngine.getString("plan.detail.filtered"));
+            case TargetProjection.Unknown u ->
+                    lines.add("⚙ " + u.action() + " → " + ResourcesEngine.getString("plan.detail.unsupported"));
+            case TargetProjection.Failed f -> lines.add("⚠ " + f.message());
+            case TargetProjection.None n -> lines.add("💾 " + ResourcesEngine.getString("plan.detail.no-target"));
+        }
+        return String.join("\n", lines);
     }
 
     /** The "Size" column: the item's size for the display, "?" when unknown. */

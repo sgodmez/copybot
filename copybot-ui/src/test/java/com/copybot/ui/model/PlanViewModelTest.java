@@ -1,6 +1,8 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
+import com.copybot.engine.Projection;
 import com.copybot.engine.TargetProjection;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
@@ -696,6 +698,46 @@ public class PlanViewModelTest {
         assertEquals("No value for {x}: a", PlanViewModel.targetText(new TargetProjection.Failed("No value for {x}: a")));
         assertEquals("", PlanViewModel.targetText(TargetProjection.NONE));
         assertNull(PlanViewModel.targetTooltip(TargetProjection.NONE));
+    }
+
+    @Test
+    public void theDetailShowsTheSourceTheStatusEachStepAndEveryTarget() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(
+                new Projection.Step("convert", List.of("DSC_1.NEF", "DSC_1.jpg")),
+                new Projection.Step("rename", List.of("a.nef", "a.jpg"))),
+                new TargetProjection.Targets(List.of(Path.of("/nas"))), List.of(Path.of("/nas/a.nef"), Path.of("/nas/a.jpg")));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals("📂 DSC_1.NEF", lines.get(0));
+        assertTrue(lines.get(1).contains(tempDir.toString()), lines.get(1));
+        assertTrue(lines.get(1).contains(PlanViewModel.sizeText(item)), lines.get(1));
+        assertTrue(lines.get(1).contains(PlanViewModel.dateText(item)), lines.get(1));
+        assertEquals(ResourcesEngine.getString("plan.detail.status", PlanViewModel.statusText(item)), lines.get(2));
+        assertEquals(List.of(
+                "⚙ convert → DSC_1.NEF, DSC_1.jpg",
+                "⚙ rename → a.nef, a.jpg",
+                "💾 " + Path.of("/nas/a.nef"),
+                "   " + Path.of("/nas/a.jpg")), lines.subList(4, lines.size()));
+    }
+
+    @Test
+    public void theDetailEndsOnTheStepThatStoppedTheDryRun() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        List<Projection.Step> converted = List.of(new Projection.Step("convert", List.of("DSC_1.jpg")));
+
+        assertEquals("⚙ drop → " + ResourcesEngine.getString("plan.detail.filtered"),
+                lastLine(item, new ItemDetail(converted, new TargetProjection.Filtered("drop"), List.of())));
+        assertEquals("⚙ legacy → " + ResourcesEngine.getString("plan.detail.unsupported"),
+                lastLine(item, new ItemDetail(converted, new TargetProjection.Unknown("legacy"), List.of())));
+        assertEquals("⚠ no codec", lastLine(item, new ItemDetail(converted, new TargetProjection.Failed("no codec"), List.of())));
+        assertEquals("💾 " + ResourcesEngine.getString("plan.detail.no-target"),
+                lastLine(item, new ItemDetail(converted, TargetProjection.NONE, List.of())));
+    }
+
+    private static String lastLine(WorkItemExecution item, ItemDetail detail) {
+        return PlanViewModel.detailText(item, detail).lines().toList().getLast();
     }
 
     @Test

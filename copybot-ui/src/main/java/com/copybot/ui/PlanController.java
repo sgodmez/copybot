@@ -1,6 +1,7 @@
 package com.copybot.ui;
 
 import com.copybot.engine.Execution;
+import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.WorkItemExecution;
@@ -40,6 +41,7 @@ import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
 import javafx.scene.layout.FlowPane;
@@ -157,7 +159,7 @@ public class PlanController {
         });
         sizeColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.sizeText(c.getValue())));
         statusColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.statusText(c.getValue())));
-        itemsTable.setRowFactory(table -> resumeFromHereRow());
+        itemsTable.setRowFactory(table -> rowWithMenu());
 
         filterCombo.getItems().setAll(Filter.values());
         filterCombo.setConverter(new StringConverter<>() {
@@ -662,7 +664,7 @@ public class PlanController {
 
     // ---- resume point ----
 
-    private TableRow<WorkItemExecution> resumeFromHereRow() {
+    private TableRow<WorkItemExecution> rowWithMenu() {
         TableRow<WorkItemExecution> row = new TableRow<>();
         MenuItem fromHere = new MenuItem(ResourcesEngine.getString("plan.menu.resume-from-here"));
         fromHere.setOnAction(e -> {
@@ -670,11 +672,43 @@ public class PlanController {
                 model.resumePointFrom(row.getItem()).ifPresent(this::applyResumePoint);
             }
         });
-        ContextMenu menu = new ContextMenu(fromHere);
-        menu.setOnShowing(e -> fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty()));
+        MenuItem detail = new MenuItem(ResourcesEngine.getString("plan.menu.detail"));
+        detail.setOnAction(e -> {
+            if (row.getItem() != null) {
+                showDetail(row.getItem());
+            }
+        });
+        ContextMenu menu = new ContextMenu(fromHere, detail);
+        menu.setOnShowing(e -> {
+            fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty());
+            Plan shown = targetsPlan();
+            detail.setDisable(row.getItem() == null || shown == null || shown.detailOf(row.getItem()).isEmpty());
+        });
         row.contextMenuProperty().bind(Bindings.when(row.emptyProperty())
                 .then((ContextMenu) null).otherwise(menu));
         return row;
+    }
+
+    /** The planned processing of this item, read only: available as soon as it is analysed, and after the copy. */
+    private void showDetail(WorkItemExecution item) {
+        Plan shown = targetsPlan();
+        Optional<ItemDetail> detail = shown == null ? Optional.empty() : shown.detailOf(item);
+        if (detail.isEmpty()) {
+            return;
+        }
+        TextArea text = new TextArea(PlanViewModel.detailText(item, detail.get()));
+        text.setEditable(false);
+        text.setWrapText(false);
+        text.setStyle("-fx-font-family: 'Consolas', 'monospace';");
+        text.setPrefColumnCount(80);
+        text.setPrefRowCount(Math.min(20, (int) text.getText().lines().count() + 1));
+        Dialog<Void> dialog = new Dialog<>();
+        dialog.initOwner(CopybotMainUi.STAGE);
+        dialog.setTitle(ResourcesEngine.getString("plan.detail.title", item.getWorkItem().getNameDisplay()));
+        dialog.setResizable(true);
+        dialog.getDialogPane().setContent(text);
+        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        dialog.show();
     }
 
     @FXML
