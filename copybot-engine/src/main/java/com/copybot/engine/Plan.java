@@ -177,6 +177,27 @@ public final class Plan {
     }
 
     /**
+     * Leaves these items out of the run, whatever the resume point (SKIPPED, "ignored by the user"); a failed
+     * item stays as it is. An ignored item counts as passed for the resume cursor: it is not proposed again.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     */
+    public void ignore(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setIgnored(items, true, override);
+    }
+
+    /**
+     * Brings ignored items back: the resume point in force decides again whether they are copied.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     */
+    public void unignore(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setIgnored(items, false, override);
+    }
+
+    /**
      * Resume from this listed file (its name when it was listed), included.
      *
      * @throws CopybotException resume.from-file.not-found, or resume.from-file.no-date for a listed file

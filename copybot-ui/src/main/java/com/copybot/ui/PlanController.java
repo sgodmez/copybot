@@ -25,7 +25,9 @@ import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.fxml.FXML;
 import javafx.scene.Node;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -37,6 +39,8 @@ import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.RadioButton;
+import javafx.scene.control.SelectionMode;
+import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
@@ -50,6 +54,7 @@ import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -159,6 +164,7 @@ public class PlanController {
         });
         sizeColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.sizeText(c.getValue())));
         statusColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.statusText(c.getValue())));
+        itemsTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
         itemsTable.setRowFactory(table -> rowWithMenu());
 
         filterCombo.getItems().setAll(Filter.values());
@@ -662,8 +668,12 @@ public class PlanController {
         return backButton.getScene() != null && backButton.getScene() == CopybotMainUi.STAGE.getScene();
     }
 
-    // ---- resume point ----
+    // ---- context menu of the rows ----
 
+    /**
+     * "Resume from here" and "Planned processing…" for the clicked row; ignore, include again, always ignore for
+     * the selected rows.
+     */
     private TableRow<WorkItemExecution> rowWithMenu() {
         TableRow<WorkItemExecution> row = new TableRow<>();
         MenuItem fromHere = new MenuItem(ResourcesEngine.getString("plan.menu.resume-from-here"));
@@ -678,11 +688,22 @@ public class PlanController {
                 showDetail(row.getItem());
             }
         });
-        ContextMenu menu = new ContextMenu(fromHere, detail);
+        MenuItem ignore = new MenuItem();
+        ignore.setOnAction(e -> ignoreForThisRun(model.ignorable(selectedRows()), true));
+        MenuItem unignore = new MenuItem();
+        unignore.setOnAction(e -> ignoreForThisRun(model.unignorable(selectedRows()), false));
+        MenuItem exclude = new MenuItem();
+        exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
+        ContextMenu menu = new ContextMenu(fromHere, detail, new SeparatorMenuItem(), ignore, unignore, exclude);
         menu.setOnShowing(e -> {
             fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty());
             Plan shown = targetsPlan();
             detail.setDisable(row.getItem() == null || shown == null || shown.detailOf(row.getItem()).isEmpty());
+            List<WorkItemExecution> selected = selectedRows();
+            boolean busy = busy();
+            setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
+            setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
+            setCountedItem(exclude, "plan.menu.exclude", busy ? 0 : model.excludable(selected).size());
         });
         row.contextMenuProperty().bind(Bindings.when(row.emptyProperty())
                 .then((ContextMenu) null).otherwise(menu));
@@ -709,6 +730,106 @@ public class PlanController {
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.show();
     }
+
+    /** The label with the number of rows it applies to, disabled for none. */
+    private static void setCountedItem(MenuItem item, String key, int count) {
+        item.setText(ResourcesEngine.getString(key, count));
+        item.setDisable(count == 0);
+    }
+
+    /** The selected rows (a right click selects the clicked row when it is not selected yet). */
+    private List<WorkItemExecution> selectedRows() {
+        return List.copyOf(itemsTable.getSelectionModel().getSelectedItems());
+    }
+
+    /** In memory on the prepared, idle plan, like a resume point: nothing is executed. */
+    private void ignoreForThisRun(List<WorkItemExecution> items, boolean ignore) {
+        if (plan == null || busy() || items.isEmpty()) {
+            return;
+        }
+        try {
+            if (ignore) {
+                plan.ignore(items, model.override());
+            } else {
+                plan.unignore(items, model.override());
+            }
+            model.update(plan.getState(), plan.getOrderedItems());
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+        }
+        refresh();
+    }
+
+    /**
+     * Excludes the files of these rows from the pipeline for good ("exclude" globs of its file.read steps), after
+     * a confirmation; in a prepared plan they are also ignored for this run, so it need not be prepared again.
+     */
+    private void alwaysIgnore(List<WorkItemExecution> rows) {
+        List<Path> files = model.excludable(rows);
+        if (files.isEmpty() || busy()) {
+            return;
+        }
+        try {
+            PipelineDocument document = PipelineDocument.load(pipelinePath);
+            PipelineDocument.Exclusion exclusion = document.exclude(files);
+            if (!exclusion.added().isEmpty()) {
+                if (!confirmExclusion(document, exclusion)) {
+                    return;
+                }
+                document.save(pipelinePath);
+            } else {
+                informExclusion(exclusion);
+            }
+            List<WorkItemExecution> excluded = rows.stream()
+                    .filter(r -> r.getListedPath().filter(p -> !exclusion.uncovered().contains(p)).isPresent())
+                    .toList();
+            List<WorkItemExecution> toIgnore = model.ignorable(excluded);
+            if (plan != null && !toIgnore.isEmpty()) {
+                plan.ignore(toIgnore, model.override());
+                model.update(plan.getState(), plan.getOrderedItems());
+            }
+        } catch (IOException | RuntimeException e) { // unreadable pipeline, failed save: the file is left as it was
+            PopinUtil.showError(e);
+        }
+        refresh();
+    }
+
+    /** The globs about to be added, the files no step lists, the loss of a non-strict file's comments. */
+    private boolean confirmExclusion(PipelineDocument document, PipelineDocument.Exclusion exclusion) {
+        List<String> parts = new ArrayList<>();
+        parts.add(ResourcesEngine.getString("plan.exclude.confirm", exclusion.added().size(),
+                RecentPipelines.displayName(pipelinePath)) + "\n" + String.join("\n", exclusion.added()));
+        uncoveredText(exclusion).ifPresent(parts::add);
+        if (document.isLenient()) {
+            parts.add(ResourcesEngine.getString("editor.lenient"));
+        }
+        ButtonType add = new ButtonType(ResourcesEngine.getString("plan.exclude.add"), ButtonBar.ButtonData.OK_DONE);
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION, String.join("\n\n", parts), add, ButtonType.CANCEL);
+        alert.initOwner(CopybotMainUi.STAGE);
+        alert.setTitle(ResourcesEngine.getString("plan.exclude.title"));
+        alert.setHeaderText(null);
+        return alert.showAndWait().filter(choice -> choice == add).isPresent();
+    }
+
+    /** Nothing added: the files are already excluded, or no step lists them. */
+    private void informExclusion(PipelineDocument.Exclusion exclusion) {
+        String text = uncoveredText(exclusion).orElse(ResourcesEngine.getString("plan.exclude.already"));
+        Alert alert = new Alert(Alert.AlertType.INFORMATION, text, ButtonType.OK);
+        alert.initOwner(CopybotMainUi.STAGE);
+        alert.setTitle(ResourcesEngine.getString("plan.exclude.title"));
+        alert.setHeaderText(null);
+        alert.showAndWait();
+    }
+
+    private static Optional<String> uncoveredText(PipelineDocument.Exclusion exclusion) {
+        if (exclusion.uncovered().isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(ResourcesEngine.getString("plan.exclude.uncovered") + "\n"
+                + exclusion.uncovered().stream().map(Path::toString).collect(Collectors.joining("\n")));
+    }
+
+    // ---- resume point ----
 
     @FXML
     protected void onChangeResumeClick() {

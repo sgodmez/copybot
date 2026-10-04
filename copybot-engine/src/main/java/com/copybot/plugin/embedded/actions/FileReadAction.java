@@ -190,6 +190,31 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
         return List.copyOf(matchers);
     }
 
+    /** The characters a glob reads as syntax: escaped by {@link #excludeGlob}. */
+    private static final String GLOB_SYNTAX = "\\*?[]{},";
+
+    /**
+     * The exclude glob that matches this file alone: its path relative to the listed folder, '/' between the
+     * names, the glob syntax escaped ("sub/IMG\[1\].jpg"). Like every glob of file.read, case-insensitive.
+     *
+     * @param relative the file relative to the "path" of file.read, not empty
+     */
+    public static String excludeGlob(Path relative) {
+        StringBuilder glob = new StringBuilder();
+        for (Path name : relative) {
+            if (!glob.isEmpty()) {
+                glob.append('/');
+            }
+            for (char c : name.toString().toCharArray()) {
+                if (GLOB_SYNTAX.indexOf(c) >= 0) {
+                    glob.append('\\');
+                }
+                glob.append(c);
+            }
+        }
+        return glob.toString();
+    }
+
     /**
      * The item file.read lists for this file, with its base metadata (name, size, times): also used by the
      * pipeline editor's sample to test a file chosen by the user.

@@ -317,6 +317,72 @@ public class PipelineDocumentTest {
         return document.steps(Section.IN).stream().map(s -> s.get("action").getAsString()).toList();
     }
 
+    // ---- exclusions ----
+
+    private PipelineDocument twoCards() {
+        return PipelineDocument.parse("""
+                {
+                  "inSteps": [
+                    { "action": "file.read", "actionConfig": { "path": "%s", "exclude": [ "**/*.tmp" ] } },
+                    { "plugin": "embedded", "action": "file.read", "actionConfig": { "path": "%s", "recursive": false } },
+                    { "plugin": "com.other", "action": "file.read", "actionConfig": { "path": "%s" } }
+                  ]
+                }
+                """.formatted(json(tempDir.resolve("a")), json(tempDir.resolve("b")), json(tempDir.resolve("c"))));
+    }
+
+    private static String json(Path path) {
+        return path.toString().replace("\\", "\\\\");
+    }
+
+    private static List<String> excludes(PipelineDocument document, int step) {
+        JsonObject config = document.steps(Section.IN).get(step).getAsJsonObject("actionConfig");
+        return config.has("exclude")
+                ? config.getAsJsonArray("exclude").asList().stream().map(e -> e.getAsString()).toList() : List.of();
+    }
+
+    @Test
+    public void excludingAFileAddsItsGlobToTheFileReadStepThatListsIt() {
+        PipelineDocument document = twoCards();
+
+        PipelineDocument.Exclusion exclusion = document.exclude(List.of(
+                tempDir.resolve("a/DCIM/IMG[1].jpg"), tempDir.resolve("b/IMG_2.jpg")));
+
+        assertEquals(List.of("DCIM/IMG\\[1\\].jpg", "IMG_2.jpg"), exclusion.added());
+        assertEquals(List.of(), exclusion.uncovered());
+        assertEquals(List.of("**/*.tmp", "DCIM/IMG\\[1\\].jpg"), excludes(document, 0), "added after the existing ones");
+        assertEquals(List.of("IMG_2.jpg"), excludes(document, 1), "the list is created");
+        assertTrue(document.isModified());
+    }
+
+    @Test
+    public void aFileNoFileReadStepListsIsReportedUncovered() {
+        PipelineDocument document = twoCards();
+
+        PipelineDocument.Exclusion exclusion = document.exclude(List.of(
+                tempDir.resolve("b/sub/IMG_3.jpg"), // not recursive: not listed
+                tempDir.resolve("c/IMG_4.jpg"), // another plugin's action
+                tempDir.resolve("elsewhere/IMG_5.jpg")));
+
+        assertEquals(List.of(), exclusion.added());
+        assertEquals(List.of(tempDir.resolve("b/sub/IMG_3.jpg"), tempDir.resolve("c/IMG_4.jpg"),
+                tempDir.resolve("elsewhere/IMG_5.jpg")), exclusion.uncovered());
+        assertEquals(List.of(), excludes(document, 2));
+        assertFalse(document.isModified());
+    }
+
+    @Test
+    public void aFileAlreadyExcludedIsNotAddedTwice() {
+        PipelineDocument document = twoCards();
+        document.exclude(List.of(tempDir.resolve("b/IMG_2.jpg")));
+
+        PipelineDocument.Exclusion again = document.exclude(List.of(tempDir.resolve("b/img_2.JPG")));
+
+        assertEquals(List.of(), again.added(), "the globs are case-insensitive");
+        assertEquals(List.of(), again.uncovered());
+        assertEquals(List.of("IMG_2.jpg"), excludes(document, 1));
+    }
+
     // ---- fields ----
 
     private static ConfigField field(CatalogAction action, String path) {

@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
+import com.copybot.plugin.embedded.actions.FileReadAction;
 import com.copybot.plugin.api.config.FieldKind;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.JsonTexts;
@@ -25,11 +26,13 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -491,6 +494,92 @@ public final class PipelineDocument {
             root.getAsJsonArray(section.jsonName()).remove(index);
         }
         modified = true;
+    }
+
+    // ---- exclusions ("always ignore" in the plan view) ----
+
+    private static final String FILE_READ = "file.read";
+
+    /**
+     * What {@link #exclude} did.
+     *
+     * @param added     the globs added, in order (a glob already there is not added again)
+     * @param uncovered the files no file.read step of the pipeline lists: nothing could exclude them
+     */
+    public record Exclusion(List<String> added, List<Path> uncovered) {
+    }
+
+    /**
+     * Excludes these files for good: each one is added to the "exclude" globs of every file.read input step that
+     * lists it (a file under its "path", at the first level only when "recursive" is false), as the glob that
+     * matches this file alone ({@link FileReadAction#excludeGlob}).
+     */
+    public Exclusion exclude(Collection<Path> files) {
+        List<String> added = new ArrayList<>();
+        List<Path> uncovered = new ArrayList<>();
+        for (Path file : files) {
+            Path absolute = file.toAbsolutePath().normalize();
+            boolean covered = false;
+            for (JsonObject step : steps(Section.IN)) {
+                Optional<Path> relative = listedBy(step, absolute);
+                if (relative.isPresent()) {
+                    covered = true;
+                    String glob = FileReadAction.excludeGlob(relative.get());
+                    if (addExclude(step, glob)) {
+                        added.add(glob);
+                    }
+                }
+            }
+            if (!covered) {
+                uncovered.add(file);
+            }
+        }
+        return new Exclusion(List.copyOf(added), List.copyOf(uncovered));
+    }
+
+    /** The file relative to the "path" of this step when it is a file.read step that lists it, empty otherwise. */
+    private static Optional<Path> listedBy(JsonObject step, Path file) {
+        JsonElement action = step.get("action");
+        JsonElement plugin = step.get("plugin");
+        boolean embedded = plugin == null || plugin.isJsonNull()
+                || plugin.isJsonPrimitive() && (plugin.getAsString().isBlank() || CatalogAction.EMBEDDED_PLUGIN.equals(plugin.getAsString()));
+        JsonElement path = get(step, List.of("actionConfig", "path"));
+        if (!embedded || action == null || !action.isJsonPrimitive() || !FILE_READ.equals(action.getAsString())
+                || path == null || !path.isJsonPrimitive() || path.getAsString().isBlank()) {
+            return Optional.empty();
+        }
+        Path root;
+        try {
+            root = Path.of(path.getAsString()).toAbsolutePath().normalize();
+        } catch (InvalidPathException e) {
+            return Optional.empty();
+        }
+        if (!file.startsWith(root) || file.equals(root)) {
+            return Optional.empty();
+        }
+        Path relative = root.relativize(file);
+        JsonElement recursive = get(step, List.of("actionConfig", "recursive"));
+        boolean firstLevelOnly = recursive != null && recursive.isJsonPrimitive()
+                && recursive.getAsJsonPrimitive().isBoolean() && !recursive.getAsBoolean();
+        return firstLevelOnly && relative.getNameCount() > 1 ? Optional.empty() : Optional.of(relative);
+    }
+
+    /** Adds the glob to the step's "exclude" list (created when absent); false when it is already there. */
+    private boolean addExclude(JsonObject step, String glob) {
+        JsonObject config = step.getAsJsonObject("actionConfig");
+        JsonElement exclude = config.get("exclude");
+        if (exclude == null || !exclude.isJsonArray()) {
+            exclude = new JsonArray();
+            config.add("exclude", exclude);
+        }
+        for (JsonElement existing : exclude.getAsJsonArray()) {
+            if (existing.isJsonPrimitive() && existing.getAsString().equalsIgnoreCase(glob)) {
+                return false; // the globs are case-insensitive
+            }
+        }
+        exclude.getAsJsonArray().add(glob);
+        modified = true;
+        return true;
     }
 
     // ---- fields ----

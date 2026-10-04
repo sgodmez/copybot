@@ -170,6 +170,91 @@ public class PlanTest {
         assertFalse(Plan.Counts.isSelected(ItemStatus.SKIPPED));
     }
 
+    // ---- files ignored by the user ----
+
+    @Test
+    public void anIgnoredFileIsSkippedWhateverTheResumePoint() {
+        Plan plan = prepared(new TargetOut(null), null);
+        WorkItemExecution second = named(plan, "IMG_02.JPG");
+
+        plan.ignore(List.of(second), null);
+
+        assertEquals(ItemStatus.SKIPPED, second.getStatus());
+        assertTrue(second.isIgnored());
+        assertEquals(ResourcesEngine.getString("plan.skip.ignored"), second.getSkipReason());
+        assertEquals(new Plan.Counts(2, 1, 0, 400), plan.counts());
+
+        plan.preview(ResumePoint.all());
+
+        assertEquals(ItemStatus.SKIPPED, second.getStatus(), "a resume point does not select it again");
+        assertEquals(new Plan.Counts(2, 1, 0, 400), plan.counts());
+    }
+
+    @Test
+    public void anUnignoredFileIsDecidedAgainByTheResumePointInForce() {
+        Plan plan = prepared(new TargetOut(null), 1);
+        WorkItemExecution first = named(plan, "IMG_01.JPG");
+        WorkItemExecution second = named(plan, "IMG_02.JPG");
+        String cursorReason = first.getSkipReason();
+        plan.ignore(List.of(first, second), null);
+
+        plan.unignore(List.of(first, second), null);
+
+        assertFalse(first.isIgnored());
+        assertEquals(ItemStatus.SKIPPED, first.getStatus(), "before the cursor");
+        assertEquals(cursorReason, first.getSkipReason());
+        assertEquals(ItemStatus.PENDING, second.getStatus());
+
+        plan.ignore(List.of(first), ResumePoint.all());
+        plan.unignore(List.of(first), ResumePoint.all());
+
+        assertEquals(ItemStatus.PENDING, first.getStatus(), "the manual point given selects it");
+    }
+
+    @Test
+    public void aFailedFileCannotBeIgnored() {
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new PartlyDatedIn(), emptyConfig())), List.of(),
+                0, false, null, registry(Map.of("disk:*", 1000)),
+                new ResumeContext(ResumeMode.STATE, new ResumeStateStore(tempDir.resolve("p.state.json"))));
+        executor.prepare();
+        Plan plan = new Plan(executor);
+        WorkItemExecution noDate = named(plan, "NODATE.BIN");
+
+        plan.ignore(List.of(noDate), null);
+
+        assertEquals(ItemStatus.ERROR, noDate.getStatus());
+        assertFalse(noDate.isIgnored());
+    }
+
+    @Test
+    public void anIgnoredFileIsNotCopiedAndTheCursorPassesIt() {
+        Plan plan = prepared(new TargetOut(null), null);
+        WorkItemExecution second = named(plan, "IMG_02.JPG");
+        plan.ignore(List.of(second), null);
+
+        plan.getExecutor().execute(null);
+
+        assertEquals(PipelineStatus.SUCCESS, plan.getState().getStatus());
+        assertEquals(ItemStatus.DONE, named(plan, "IMG_01.JPG").getStatus());
+        assertEquals(ItemStatus.SKIPPED, second.getStatus());
+        assertEquals(ItemStatus.DONE, named(plan, "IMG_03.JPG").getStatus());
+        assertEquals(Optional.of(day(3)), new ResumeStateStore(tempDir.resolve("p.state.json")).readCursor());
+        assertThrows(IllegalStateException.class, () -> plan.ignore(List.of(named(plan, "IMG_01.JPG")), null),
+                "an executed plan is not changed any more");
+    }
+
+    @Test
+    public void theListedPathOfAnItemIsKeptWhenAStepReplacesIt() throws IOException {
+        WorkItemExecution listed = item("a.jpg", null);
+        listed.replaceWorkItem(new WorkItem(tempDir.resolve("a.webp")));
+        WorkItemExecution forked = item("a-2.jpg", null);
+        forked.setParent(listed);
+
+        assertEquals(Optional.of(tempDir.resolve("a.jpg")), listed.getListedPath());
+        assertEquals(Optional.of(tempDir.resolve("a.jpg")), forked.getListedPath(), "the file it comes from");
+    }
+
     private WorkItemExecution item(String name, Long size) throws IOException {
         WorkItem wi = new WorkItem(tempDir.resolve(name));
         if (size != null) {

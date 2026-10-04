@@ -431,6 +431,47 @@ public class PlanViewModelTest {
         assertEquals(Optional.empty(), model.resumePointFrom(keyed));
     }
 
+    // ---- files ignored by the user ----
+
+    @Test
+    public void onlyRowsToCopyOrSkippedByTheResumePointCanBeIgnoredForThisRun() throws IOException {
+        WorkItemExecution toCopy = item("a.jpg", 1);
+        WorkItemExecution beforeCursor = item("b.jpg", 1);
+        beforeCursor.setSkipped("already imported");
+        WorkItemExecution failed = item("c.jpg", 1);
+        failed.setError(new IllegalStateException("no date"));
+        WorkItemExecution ignored = item("d.jpg", 1);
+        ignored.setIgnored("ignored by the user");
+        PlanViewModel model = prepared(false, toCopy, beforeCursor, failed, ignored);
+        List<WorkItemExecution> all = List.of(toCopy, beforeCursor, failed, ignored);
+
+        assertEquals(List.of(toCopy, beforeCursor), model.ignorable(all));
+        assertEquals(List.of(ignored), model.unignorable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.ignorable(all), "not once the copy started");
+        assertEquals(List.of(), model.unignorable(all));
+    }
+
+    @Test
+    public void alwaysIgnoreExcludesTheListedFilesOnceEachWhenTheEngineIsIdle() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution fork = item("a-2.jpg", 1);
+        fork.setParent(a);
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setDone();
+        PlanViewModel model = prepared(false, a, fork, b);
+
+        assertEquals(List.of(tempDir.resolve("a.jpg"), tempDir.resolve("b.jpg")), model.excludable(List.of(a, fork, b)));
+
+        model.startExecuting();
+        assertEquals(List.of(), model.excludable(List.of(a, b)), "not while copying");
+
+        model.update(state(PipelineStatus.SUCCESS, a, b), List.of(a, b));
+        assertEquals(List.of(tempDir.resolve("b.jpg")), model.excludable(List.of(b)), "after the copy too");
+    }
+
     // ---- automatic execution, progress, end of run ----
 
     @Test

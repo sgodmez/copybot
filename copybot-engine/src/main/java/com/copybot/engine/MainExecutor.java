@@ -26,6 +26,7 @@ import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -431,6 +432,34 @@ public class MainExecutor implements Runnable {
     void applyOverride(ResumePoint override) {
         if (override != null) {
             resolver.apply(override, ResumeSource.MANUAL, orderedItems);
+        }
+    }
+
+    /**
+     * Leaves these items out of the run (ignore), or brings them back: an item brought back is decided again by
+     * the resume point in force (override, or the proposed one). Only the items to copy or skipped by the resume
+     * point can be ignored, not the failed ones.
+     *
+     * @throws IllegalStateException the plan is not PREPARED (being prepared, executed or already executed)
+     */
+    void setIgnored(Collection<WorkItemExecution> items, boolean ignore, ResumePoint override) {
+        if (state.getStatus() != PipelineStatus.PREPARED) {
+            throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
+        }
+        for (WorkItemExecution item : items) {
+            if (ignore && !item.isIgnored()
+                    && (item.getStatus() == ItemStatus.PENDING || item.getStatus() == ItemStatus.SKIPPED)) {
+                item.setIgnored(ResourcesEngine.getString("plan.skip.ignored"));
+            } else if (!ignore && item.isIgnored()) {
+                item.clearIgnored();
+            }
+        }
+        if (!ignore) {
+            if (override != null) {
+                resolver.apply(override, ResumeSource.MANUAL, orderedItems);
+            } else {
+                resolver.apply(proposal.point(), proposal.source(), orderedItems);
+            }
         }
     }
 

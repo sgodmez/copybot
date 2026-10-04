@@ -87,6 +87,21 @@ public class FileReadActionTest {
     }
 
     @Test
+    public void theExcludeGlobOfAFileExcludesThatFileAlone() throws IOException {
+        file("sub/IMG[1]{a,b}.jpg");
+        file("sub/IMG1a.jpg");
+
+        String glob = FileReadAction.excludeGlob(Path.of("sub", "IMG[1]{a,b}.jpg"));
+
+        assertEquals("sub/IMG\\[1\\]\\{a\\,b\\}.jpg", glob);
+        assertEquals(List.of("a.jpg", "b.NEF", "notes.tmp", "sub/IMG1a.jpg", "sub/c.JPG", "sub/deep/d.nef", "sub/e.tmp"),
+                list(",\"exclude\":[\"" + glob.replace("\\", "\\\\") + "\"]"));
+        assertEquals(List.of("a.jpg", "b.NEF", "notes.tmp", "sub/IMG1a.jpg", "sub/IMG[1]{a,b}.jpg", "sub/deep/d.nef", "sub/e.tmp"),
+                list(",\"exclude\":[\"" + FileReadAction.excludeGlob(Path.of("SUB", "C.jpg")) + "\"]"),
+                "case-insensitive, like every glob of file.read");
+    }
+
+    @Test
     public void hiddenFilesAndFoldersAreSkippedByDefault() throws IOException {
         file(".hidden.jpg");
         file("._a.jpg");

@@ -33,6 +33,8 @@ public class UiBundleTest {
             "plan.resume.source.MANUAL", "plan.resume.change", "plan.placeholder",
             "plan.filter.ALL", "plan.filter.TO_COPY", "plan.filter.SKIPPED", "plan.filter.ERRORS",
             "plan.column.date", "plan.column.target", "plan.menu.resume-from-here", "plan.prepare", "plan.copy",
+            "plan.menu.ignore", "plan.menu.unignore", "plan.menu.exclude", "plan.exclude.title",
+            "plan.exclude.confirm", "plan.exclude.add", "plan.exclude.already", "plan.exclude.uncovered",
             "plan.warning.nothing-to-copy",
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
             "plan.analysing", "plan.resolving",

@@ -72,13 +72,13 @@ public final class ResumeResolver {
     }
 
     /**
-     * Applies a resume point to the items still undecided (PENDING or SKIPPED); failed items are left
-     * alone, items without any date become errors (never silently skipped). Uses the keys frozen by
-     * {@link #order(Collection)}.
+     * Applies a resume point to the items still undecided (PENDING or SKIPPED); failed items and the items
+     * the user ignored are left alone, items without any date become errors (never silently skipped). Uses
+     * the keys frozen by {@link #order(Collection)}.
      */
     public void apply(ResumePoint point, ResumeSource source, List<WorkItemExecution> ordered) {
         for (WorkItemExecution item : ordered) {
-            if (item.getStatus() != ItemStatus.PENDING && item.getStatus() != ItemStatus.SKIPPED) {
+            if (item.isIgnored() || item.getStatus() != ItemStatus.PENDING && item.getStatus() != ItemStatus.SKIPPED) {
                 continue;
             }
             Optional<ItemKey> key = item.getResumeKey();
@@ -96,7 +96,7 @@ public final class ResumeResolver {
      * The cursor to persist once the run is over: the last item of the longest run of successes among
      * the selected items (in key order), never before the automatic resume point nor the previous cursor.
      * A selected item succeeded when it ended DONE, or SKIPPED during the execution (the out step found it
-     * already at the destination: spec safe-write §2), and none of its forks failed.
+     * already at the destination: spec safe-write §2) or by the user (ignored), and none of its forks failed.
      *
      * @return empty when there is nothing (new) to write
      */
@@ -124,7 +124,10 @@ public final class ResumeResolver {
         return next;
     }
 
-    /** For a selected item: SKIPPED can only come from the execution, the resume point skipped only the others. */
+    /**
+     * For a selected item: SKIPPED can only come from the execution or from the user, the resume point skipped
+     * only the others.
+     */
     private static boolean succeeded(WorkItemExecution item) {
         ItemStatus status = item.getStatus();
         return (status == ItemStatus.DONE || status == ItemStatus.SKIPPED) && !item.hasFailedFork();

@@ -326,6 +326,33 @@ public final class PlanViewModel {
         return canChangeResumePoint() ? item.getResumeKey().map(ResumePoint::from) : Optional.empty();
     }
 
+    // ---- files ignored by the user (context menu of the rows) ----
+
+    /** Among these rows, those "Ignore for this copy" leaves out: a prepared plan, rows to copy or skipped by the resume point. */
+    public List<WorkItemExecution> ignorable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> !i.isIgnored()
+                && (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)).toList();
+    }
+
+    /** Among these rows, those "Include again" brings back: a prepared plan, rows ignored for this run. */
+    public List<WorkItemExecution> unignorable(List<WorkItemExecution> rows) {
+        return phase == Phase.PREPARED ? rows.stream().filter(WorkItemExecution::isIgnored).toList() : List.of();
+    }
+
+    /**
+     * The files "Always ignore" excludes from the pipeline for these rows: their listed local files, once each.
+     * Before and after an execution, never while the engine is busy.
+     */
+    public List<Path> excludable(List<WorkItemExecution> rows) {
+        if (isActive()) {
+            return List.of();
+        }
+        return rows.stream().map(WorkItemExecution::getListedPath).flatMap(Optional::stream).distinct().toList();
+    }
+
     public List<WorkItemExecution> items() {
         return items;
     }
