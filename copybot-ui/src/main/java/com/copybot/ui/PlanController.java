@@ -700,12 +700,11 @@ public class PlanController {
         text.setEditable(false);
         text.setWrapText(false);
         text.setStyle("-fx-font-family: 'Consolas', 'monospace';");
-        text.setPrefColumnCount(80);
-        text.setPrefRowCount(Math.min(20, (int) text.getText().lines().count() + 1));
         Dialog<Void> dialog = new Dialog<>();
         dialog.initOwner(CopybotMainUi.STAGE);
         dialog.setTitle(ResourcesEngine.getString("plan.detail.title", item.getWorkItem().getNameDisplay()));
         dialog.setResizable(true);
+        dialog.getDialogPane().setPrefSize(950, 560); // long target paths fit without scrolling
         dialog.getDialogPane().setContent(text);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
         dialog.show();
