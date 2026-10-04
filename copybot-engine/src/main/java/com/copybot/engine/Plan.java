@@ -119,15 +119,38 @@ public final class Plan {
         if (projection == null) { // not prepared (error before the barrier): the item as it is
             projection = new Projection.Projected(List.of(item.getWorkItem()));
         }
+        return outcome(out, projection, new ArrayList<>());
+    }
+
+    /**
+     * The planned processing of this item (desktop UI): the trace of the dry run of the process steps, then
+     * where the out step would write each produced item. Empty while the item is not analysed yet, or when it
+     * failed before its dry run. Callable from any thread, like {@link #projectionOf}.
+     */
+    public Optional<ItemDetail> detailOf(WorkItemExecution item) {
+        Projection projection = item.getProjection();
+        if (projection == null) {
+            return Optional.empty();
+        }
+        IOutAction out = executor.findOutAction();
+        List<Path> files = new ArrayList<>();
+        TargetProjection outcome = out == null && projection instanceof Projection.Projected
+                ? TargetProjection.NONE : outcome(out, projection, files);
+        return Optional.of(new ItemDetail(projection.trace(), outcome,
+                outcome instanceof TargetProjection.Targets ? files : List.of()));
+    }
+
+    /** How the dry run ended; out is only used (non null then) when it projected items, whose files go to files. */
+    private static TargetProjection outcome(IOutAction out, Projection projection, List<Path> files) {
         return switch (projection) {
             case Projection.Filtered f -> new TargetProjection.Filtered(f.action());
             case Projection.Unsupported u -> new TargetProjection.Unknown(u.action());
             case Projection.Failed f -> new TargetProjection.Failed(ResourcesEngine.getString("dryrun.failed", f.action(), f.message()));
-            case Projection.Projected p -> targets(out, p.items());
+            case Projection.Projected p -> targets(out, p.items(), files);
         };
     }
 
-    private static TargetProjection targets(IOutAction out, List<WorkItem> items) {
+    private static TargetProjection targets(IOutAction out, List<WorkItem> items, List<Path> files) {
         List<Path> directories = new ArrayList<>();
         for (WorkItem produced : items) {
             try {
@@ -136,7 +159,9 @@ public final class Plan {
                     return TargetProjection.NONE;
                 }
                 // absolute, like the resume probe: a pattern without directory part writes to the current one
-                directories.add(target.get().toAbsolutePath().normalize().getParent());
+                Path file = target.get().toAbsolutePath().normalize();
+                files.add(file);
+                directories.add(file.getParent());
             } catch (RuntimeException e) {
                 // e.g. a pattern variable this item has no value for
                 LOG.debug(e, "plan.target.failed", produced.getNameDisplay(), String.valueOf(e));

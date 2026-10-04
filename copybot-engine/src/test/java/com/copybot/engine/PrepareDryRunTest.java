@@ -203,6 +203,43 @@ public class PrepareDryRunTest {
     }
 
     @Test
+    public void theDetailTracesTheStepsAndGivesEveryTargetFile() {
+        Process fork = new Process(item -> {
+            WorkItem thumb = item.copyForDryRun();
+            thumb.getMetadatas().display().put("name", "thumbs/DSC_1.jpg");
+            item.getMetadatas().display().put("name", "DSC_1.jpg");
+            return Optional.of(List.of(item, thumb));
+        });
+        Plan plan = prepared(new NamedIn("DSC_1.NEF"), fork, true);
+
+        ItemDetail detail = plan.detailOf(named(plan, "DSC_1.NEF")).orElseThrow();
+
+        assertEquals(List.of(new Projection.Step("convert", List.of("DSC_1.jpg", "thumbs/DSC_1.jpg"))), detail.steps());
+        assertInstanceOf(TargetProjection.Targets.class, detail.outcome());
+        assertEquals(List.of(tempDir.resolve("out").resolve("DSC_1.jpg").toAbsolutePath().normalize(),
+                tempDir.resolve("out").resolve("thumbs").resolve("DSC_1.jpg").toAbsolutePath().normalize()), detail.targets());
+    }
+
+    @Test
+    public void theDetailOfAFilteredItemSaysWhoFilteredIt() {
+        Plan plan = prepared(new NamedIn("DSC_1.NEF"), new Process(item -> Optional.of(List.of())), true);
+
+        ItemDetail detail = plan.detailOf(named(plan, "DSC_1.NEF")).orElseThrow();
+
+        assertEquals(new ItemDetail(List.of(), new TargetProjection.Filtered("convert"), List.of()), detail);
+    }
+
+    @Test
+    public void withoutOutStepTheDetailStillTracesTheSteps() {
+        Plan plan = prepared(new NamedIn("DSC_1.NEF"), toJpg(), false);
+
+        ItemDetail detail = plan.detailOf(named(plan, "DSC_1.NEF")).orElseThrow();
+
+        assertEquals(new ItemDetail(List.of(new Projection.Step("convert", List.of("DSC_1.jpg"))), TargetProjection.NONE,
+                List.of()), detail);
+    }
+
+    @Test
     public void theExecutionStillRunsDoProcessOnTheRealItem() {
         Process process = toJpg();
         Plan plan = prepared(new NamedIn("DSC_1.NEF"), process, true);

@@ -11,6 +11,7 @@ import java.util.Optional;
 /**
  * Chains the dry run of the process steps on a copy of an item (spec pattern-helper §4.2).
  * A produced item that one step drops simply disappears; the projection is Filtered only when no item is left.
+ * The names produced by each step are kept as its trace (names only: a plan holds one per listed item).
  */
 public final class DryRunner {
 
@@ -20,6 +21,7 @@ public final class DryRunner {
     /** Never throws for a plugin failure: it becomes {@link Projection.Failed}. */
     public static Projection project(WorkItem item, List<PipelineStep<IProcessAction>> processSteps) {
         List<WorkItem> current = List.of(item.copyForDryRun());
+        List<Projection.Step> trace = new ArrayList<>();
         for (PipelineStep<IProcessAction> step : processSteps) {
             List<WorkItem> next = new ArrayList<>();
             for (WorkItem produced : current) {
@@ -27,23 +29,33 @@ public final class DryRunner {
                 try {
                     result = step.getAction().dryRun(produced);
                 } catch (RuntimeException e) {
-                    return new Projection.Failed(actionName(step), e.getMessage() != null ? e.getMessage() : e.getClass().getName());
+                    return new Projection.Failed(actionName(step), e.getMessage() != null ? e.getMessage() : e.getClass().getName(), trace);
                 }
                 if (result == null || result.isEmpty()) {
-                    return new Projection.Unsupported(actionName(step), current);
+                    return new Projection.Unsupported(actionName(step), current, trace);
                 }
                 next.addAll(result.get());
             }
             if (next.isEmpty()) {
-                return new Projection.Filtered(actionName(step));
+                return new Projection.Filtered(actionName(step), trace);
             }
             current = next;
+            trace.add(new Projection.Step(actionName(step), current.stream().map(DryRunner::itemName).toList()));
         }
-        return new Projection.Projected(current);
+        return new Projection.Projected(current, trace);
     }
 
     /** The action code of the step, as written in the pipeline. */
     public static String actionName(PipelineStep<?> step) {
         return step.getConfig() == null ? step.getAction().getClass().getSimpleName() : step.getConfig().action();
+    }
+
+    /** display.name, else the name of the source, else its location. */
+    public static String itemName(WorkItem item) {
+        String name = item.getMetadatas().display().get("name");
+        if (name != null) {
+            return name;
+        }
+        return item.getNameDisplay() != null ? item.getNameDisplay() : item.getSourceLocationDisplay();
     }
 }

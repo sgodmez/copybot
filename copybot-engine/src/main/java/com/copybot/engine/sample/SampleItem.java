@@ -1,5 +1,6 @@
 package com.copybot.engine.sample;
 
+import com.copybot.engine.DryRunner;
 import com.copybot.plugin.api.action.WorkItem;
 
 import java.util.HashMap;
@@ -28,10 +29,6 @@ public record SampleItem(String sourceName, String name, Map<String, String> dis
 
     /** display.name, else the name of the source. */
     static String name(WorkItem item) {
-        String name = item.getMetadatas().display().get("name");
-        if (name != null) {
-            return name;
-        }
-        return item.getNameDisplay() != null ? item.getNameDisplay() : item.getSourceLocationDisplay();
+        return DryRunner.itemName(item);
     }
 }

@@ -117,6 +117,40 @@ public class DryRunnerTest {
     }
 
     @Test
+    public void theTraceNamesWhatEachStepProduced() throws IOException {
+        FakeProcess fork = new FakeProcess(item -> {
+            WorkItem thumb = item.copyForDryRun();
+            thumb.getMetadatas().display().put("name", "thumb_" + item.getMetadatas().display().get("name"));
+            return Optional.of(List.of(item, thumb));
+        });
+
+        Projection projection = DryRunner.project(nef(), List.of(step("fork", fork), step("conv", toJpg())));
+
+        assertEquals(List.of(
+                new Projection.Step("fork", List.of("DSC_1.NEF", "thumb_DSC_1.NEF")),
+                new Projection.Step("conv", List.of("DSC_1.jpg", "thumb_DSC_1.jpg"))), projection.trace());
+    }
+
+    @Test
+    public void theTraceStopsBeforeTheStepThatEndedTheDryRun() throws IOException {
+        List<Projection.Step> converted = List.of(new Projection.Step("conv", List.of("DSC_1.jpg")));
+
+        assertEquals(converted, DryRunner.project(nef(), List.of(step("conv", toJpg()),
+                step("drop", new FakeProcess(i -> Optional.of(List.of()))))).trace());
+        assertEquals(converted, DryRunner.project(nef(), List.of(step("conv", toJpg()),
+                step("legacy", new FakeProcess(i -> Optional.empty())))).trace());
+        assertEquals(converted, DryRunner.project(nef(), List.of(step("conv", toJpg()),
+                step("boom", new FakeProcess(i -> {
+                    throw new IllegalStateException("no codec");
+                })))).trace());
+    }
+
+    @Test
+    public void withoutProcessStepTheTraceIsEmpty() throws IOException {
+        assertEquals(List.of(), DryRunner.project(nef(), List.of()).trace());
+    }
+
+    @Test
     public void theRealItemIsNeverTouchedByTheDryRun() throws IOException {
         WorkItem item = nef();
 
