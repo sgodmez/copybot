@@ -127,6 +127,21 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void whileListingTheRowsAreInDateOrderNotInListingOrder() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution video2026 = new WorkItemExecution(new WorkItem(tempDir.resolve("C0001.MP4")), List.of());
+        video2026.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2026-08-07T10:00:00Z"));
+        WorkItemExecution photo2023 = new WorkItemExecution(new WorkItem(tempDir.resolve("DSC00001.JPG")), List.of());
+        photo2023.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2023-12-24T10:00:00Z"));
+        WorkItemExecution undated = new WorkItemExecution(new WorkItem(tempDir.resolve("x.jpg")), List.of());
+
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, undated, video2026, photo2023), List.of()); // the card's order
+
+        assertEquals(List.of(photo2023, video2026, undated), model.items(), "by date as soon as listed, the undated last");
+    }
+
+    @Test
     public void thePreparationBarListsThenAnalysesThenResolves() throws IOException {
         PlanViewModel model = new PlanViewModel();
         WorkItemExecution a = item("a.jpg", 1);

@@ -224,7 +224,7 @@ public final class PlanViewModel {
      * The latest engine state (watcher notification, end of the preparation, pause...).
      *
      * @param ordered the plan's items in resume order once it is prepared, empty before: the rows are
-     *                then in listing order; items forked during the execution come after the ordered ones
+     *                then in date order ({@link #DATE_ORDER}); items forked during the execution come after the ordered ones
      */
     public void update(PipelineState state, List<WorkItemExecution> ordered) {
         status = state.getStatus();
@@ -239,7 +239,8 @@ public final class PlanViewModel {
         warnings = List.copyOf(all);
         List<WorkItemExecution> listed = List.copyOf(state.getWorkItems());
         if (ordered.isEmpty()) {
-            items = listed;
+            // the date is known at the listing: no need to wait for the resume order (the same, by date then name)
+            items = listed.stream().sorted(DATE_ORDER).toList();
         } else {
             Set<WorkItemExecution> known = Collections.newSetFromMap(new IdentityHashMap<>());
             known.addAll(ordered);
