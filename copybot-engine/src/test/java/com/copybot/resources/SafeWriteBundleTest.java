@@ -29,7 +29,6 @@ public class SafeWriteBundleTest {
             "read.config.no-path",
             "write.skip.same-file",
             "write.error.io-detail",
-            "write.warn.direct-mode",
             "pattern.syntax",
             "dryrun.filtered",
             "dryrun.unsupported",

@@ -137,15 +137,13 @@ record FileWriteSettings(
 
     /**
      * Allowed but warned: deleting the sources after a verification lighter than readBack (spec safe-write
-     * §5), and the direct write mode, where a crash or a cancel can leave a partial file under the final name.
+     * §5). The direct write mode is not warned at every run: its risk (a partial file left under the final name
+     * by a crash) is told by the description of writeMode in the editor, where it is chosen.
      */
     List<String> warnings() {
         List<String> warnings = new ArrayList<>();
         if (deleteSource && verify != Verify.READ_BACK) {
             warnings.add(ResourcesEngine.getString("write.warn.delete-without-read-back", verify.jsonName()));
-        }
-        if (writeMode == WriteMode.DIRECT) {
-            warnings.add(ResourcesEngine.getString("write.warn.direct-mode"));
         }
         return List.copyOf(warnings);
     }

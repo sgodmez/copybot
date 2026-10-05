@@ -423,8 +423,8 @@ public class FileWriteActionTest {
     }
 
     @Test
-    public void directModeIsWarned() {
-        assertEquals(1, action(tempDir.resolve("x"), ",\"writeMode\":\"direct\"").configWarnings().size());
+    public void directModeIsAChoiceToldInTheEditorNotAWarningOfEveryRun() {
+        assertEquals(List.of(), action(tempDir.resolve("x"), ",\"writeMode\":\"direct\"").configWarnings());
         assertEquals(List.of(), action(tempDir.resolve("x"), "").configWarnings());
     }
 
