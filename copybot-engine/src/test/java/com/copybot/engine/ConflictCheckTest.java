@@ -148,8 +148,21 @@ public class ConflictCheckTest {
         exec.prepare();
 
         assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
-        assertTrue(log.indexOf("check IMG_01.JPG") < log.indexOf("analyse IMG_20.JPG"),
-                "the first file is checked before the last one is analysed, got " + log);
+        // which file starts first is up to the threads (a ticket orders the waiters, not who finds the disk free):
+        // what matters is that the checks are not all pushed behind every analysis
+        List<String> snapshot = List.copyOf(log);
+        int firstCheck = -1;
+        int lastAnalysis = -1;
+        for (int i = 0; i < snapshot.size(); i++) {
+            if (snapshot.get(i).startsWith("check ") && firstCheck < 0) {
+                firstCheck = i;
+            }
+            if (snapshot.get(i).startsWith("analyse ")) {
+                lastAnalysis = i;
+            }
+        }
+        assertEquals(40, snapshot.size(), "20 analyses and 20 checks, got " + snapshot);
+        assertTrue(firstCheck < lastAnalysis, "a check runs while files are still analysed, got " + snapshot);
     }
 
     @Test
