@@ -12,6 +12,7 @@ import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.resources.ResourcesEngine;
@@ -167,6 +168,36 @@ public class PlanTest {
         assertTrue(plan.toAnalyse().isEmpty());
         assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas").resolve("IMG_01"))), plan.projectionOf(old));
         assertTrue(plan.detailOf(old).isPresent());
+    }
+
+    @Test
+    public void anItemSelectedAgainThatAProcessStepFiltersShowsWhoFilteredItOnceAnalysed() {
+        final class DropAll extends FakeAction implements IProcessAction {
+            @Override
+            public List<WorkItem> doProcess(WorkItem item) {
+                return List.of();
+            }
+
+            @Override
+            public Optional<List<WorkItem>> dryRun(WorkItem item) {
+                return Optional.of(List.of());
+            }
+        }
+        ResumeStateStore store = new ResumeStateStore(tempDir.resolve("p.state.json"));
+        store.writeCursor(day(1));
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new SizedIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, new DropAll(), emptyConfig()), new PipelineStep<>(null, new TargetOut(null), emptyConfig())),
+                0, false, null, registry(Map.of("disk:*", 1000)), new ResumeContext(ResumeMode.STATE, store));
+        executor.prepare();
+        Plan plan = new Plan(executor);
+        WorkItemExecution old = named(plan, "IMG_01.JPG");
+
+        plan.preview(ResumePoint.all());
+        executor.analyseDeferred();
+
+        assertInstanceOf(TargetProjection.Filtered.class, plan.projectionOf(old), "like an item analysed by the preparation");
+        assertEquals(plan.projectionOf(named(plan, "IMG_02.JPG")), plan.projectionOf(old));
     }
 
     @Test
