@@ -100,6 +100,8 @@ public class PlanController {
     @FXML private VBox resumeBox;
     @FXML private Label resumeLabel;
     @FXML private Label resumeCountLabel;
+    /** The files to copy whose target already exists (spec conflict-check §5). */
+    @FXML private Label conflictLabel;
     @FXML private Hyperlink changeResumeLink;
     @FXML private ComboBox<Filter> filterCombo;
     @FXML private TableView<WorkItemExecution> itemsTable;
@@ -1189,6 +1191,9 @@ public class PlanController {
         show(resumeBox, resume.isPresent());
         resumeCountLabel.setText(model.resumeCountText().orElse(""));
         show(resumeCountLabel, model.resumeCountText().isPresent());
+        Optional<String> conflicts = model.conflictText();
+        conflictLabel.setText(conflicts.orElse(""));
+        show(conflictLabel, conflicts.isPresent());
         changeResumeLink.setDisable(!model.canChangeResumePoint());
 
         placeholder.setText(phase == Phase.NOT_PREPARED ? ResourcesEngine.getString("plan.placeholder") : "");

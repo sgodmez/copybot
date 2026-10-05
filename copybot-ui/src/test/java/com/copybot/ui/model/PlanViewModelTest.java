@@ -12,6 +12,8 @@ import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.TargetCheck;
+import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -1167,5 +1169,75 @@ public class PlanViewModelTest {
         rows.sort(PlanViewModel.SIZE_ORDER);
 
         assertEquals(List.of(kb, nineMb, tenMb, unknown), rows, "by bytes, the unknown sizes last");
+    }
+
+    // ---- conflicts announced by the plan (spec conflict-check §5) ----
+
+    private WorkItemExecution checked(String name, Kind kind) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        item.setTargetCheck(kind == Kind.FREE ? TargetCheck.free()
+                : new TargetCheck(kind, tempDir.resolve("nas").resolve(name), "copy of " + name));
+        return item;
+    }
+
+    @Test
+    public void aFileToCopyWhoseTargetExistsSaysSoAndWhatTheCopyWillDo() throws IOException {
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution free = checked("b.jpg", Kind.FREE);
+
+        assertEquals(ResourcesEngine.getString("item.status.PENDING") + " "
+                + ResourcesEngine.getString("item.status.PENDING.exists.SAME_SIZE"), PlanViewModel.statusText(same));
+        assertEquals(Optional.of("copy of a.jpg"), PlanViewModel.statusTooltip(same));
+        assertEquals(ResourcesEngine.getString("item.status.PENDING"), PlanViewModel.statusText(free));
+        assertEquals(Optional.empty(), PlanViewModel.statusTooltip(free));
+        for (Kind kind : List.of(Kind.DIFFERENT_SIZE, Kind.IDENTICAL, Kind.DIFFERENT)) {
+            assertTrue(PlanViewModel.statusText(checked("c.jpg", kind))
+                    .endsWith(ResourcesEngine.getString("item.status.PENDING.exists." + kind.name())), kind.name());
+        }
+    }
+
+    @Test
+    public void theCounterCountsTheSelectedFilesWhoseTargetExists() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution different = checked("b.jpg", Kind.DIFFERENT_SIZE);
+        WorkItemExecution free = checked("c.jpg", Kind.FREE);
+        WorkItemExecution skipped = checked("d.jpg", Kind.SAME_SIZE);
+        skipped.setSkippedByResumePoint("already imported");
+        WorkItemExecution unchecked = item("e.jpg", 1);
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, same, different, free, skipped, unchecked), List.of());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.quick", 2, 1, 1)), model.conflictText(),
+                "the skipped file does not count");
+
+        model.setFilter(Filter.CONFLICTS);
+        assertEquals(List.of(same, different), model.visibleItems());
+    }
+
+    @Test
+    public void theFullCheckCountsIdenticalAndDifferentFiles() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, checked("a.jpg", Kind.IDENTICAL), checked("b.jpg", Kind.IDENTICAL),
+                checked("c.jpg", Kind.DIFFERENT)), List.of());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.full", 3, 2, 1)), model.conflictText());
+    }
+
+    @Test
+    public void theCounterIsHiddenWithoutConflictAndOnceTheCopyStarts() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, checked("a.jpg", Kind.FREE)), List.of());
+        assertEquals(Optional.empty(), model.conflictText());
+
+        WorkItemExecution same = checked("b.jpg", Kind.SAME_SIZE);
+        model.update(state(PipelineStatus.PREPARED, same), List.of());
+        assertTrue(model.conflictText().isPresent(), "told while preparing and once prepared");
+
+        model.startExecuting();
+        model.update(state(PipelineStatus.RUNNING, same), List.of());
+        assertEquals(Optional.empty(), model.conflictText(), "the statuses of the copy tell it then");
     }
 }

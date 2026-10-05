@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
@@ -135,6 +136,27 @@ public class PipelineDocumentTest {
         assertEquals(tree("{\"theme\":\"dark\"}"), tree(document.toJson()).getAsJsonObject("ui"), "the ui block stays as is");
         assertEquals(ExecutionMode.PLAN, PipelineDocument.parse("{\"execution\":\"later\"}").executionMode(),
                 "an unknown mode reads as the default (the engine refuses it)");
+    }
+
+    @Test
+    public void theConflictCheckIsWrittenOnlyWhenNotQuick() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertEquals(ConflictCheck.QUICK, document.conflictCheck());
+
+        document.setConflictCheck(ConflictCheck.QUICK);
+        assertFalse(document.isModified(), "quick is the default");
+
+        document.setConflictCheck(ConflictCheck.FULL);
+        assertTrue(document.isModified());
+        assertEquals(ConflictCheck.FULL, document.conflictCheck());
+        assertEquals("full", tree(document.toJson()).get("conflictCheck").getAsString());
+        document.setConflictCheck(ConflictCheck.NONE);
+        assertEquals("none", tree(document.toJson()).get("conflictCheck").getAsString());
+
+        document.setConflictCheck(ConflictCheck.QUICK);
+        assertFalse(tree(document.toJson()).has("conflictCheck"));
+        assertEquals(ConflictCheck.QUICK, PipelineDocument.parse("{\"conflictCheck\":\"fast\"}").conflictCheck(),
+                "an unknown value reads as the default (the engine refuses it)");
     }
 
     @Test

@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.StepType;
@@ -395,6 +396,33 @@ public final class PipelineDocument {
             return;
         }
         root.addProperty("execution", mode.jsonName());
+        modified = true;
+    }
+
+    /** "conflictCheck" (spec conflict-check §1), quick when absent or unknown (the engine refuses an unknown one). */
+    public ConflictCheck conflictCheck() {
+        JsonElement value = root.get("conflictCheck");
+        String name = value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+        for (ConflictCheck check : ConflictCheck.values()) {
+            if (check.jsonName().equals(name)) {
+                return check;
+            }
+        }
+        return ConflictCheck.QUICK;
+    }
+
+    /** Quick, the default, removes the member; the other levels are written. */
+    public void setConflictCheck(ConflictCheck check) {
+        if (check == ConflictCheck.QUICK) {
+            if (root.remove("conflictCheck") != null) {
+                modified = true;
+            }
+            return;
+        }
+        if (check == conflictCheck()) {
+            return;
+        }
+        root.addProperty("conflictCheck", check.jsonName());
         modified = true;
     }
 

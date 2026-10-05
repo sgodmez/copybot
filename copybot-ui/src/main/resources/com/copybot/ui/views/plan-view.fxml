@@ -71,6 +71,8 @@
          </children>
       </VBox>
       <Label fx:id="warningBanner" managed="false" maxWidth="Infinity" style="-fx-background-color: #fff3cd; -fx-text-fill: #664d03; -fx-padding: 6;" visible="false" wrapText="true" />
+      <!-- the files to copy whose target already exists (spec conflict-check §5) -->
+      <Label fx:id="conflictLabel" managed="false" maxWidth="Infinity" style="-fx-background-color: #fdecd2; -fx-text-fill: #7a4100; -fx-padding: 6;" visible="false" wrapText="true" />
       <HBox alignment="CENTER_LEFT" spacing="6.0">
          <children>
             <ComboBox fx:id="filterCombo" />

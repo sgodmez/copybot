@@ -46,7 +46,11 @@ libraries.
   default) or by a full hash. For an identical target and for a different
   one, you choose what happens: skip, rename (`name (1).ext`), overwrite, or
   report an error. Copybot never overwrites unless the pipeline says so, and
-  never treats a file as a conflict with itself.
+  never treats a file as a conflict with itself. The plan already tells which
+  files to copy have a target that exists, with a counter and a filter:
+  `conflictCheck` is `quick` by default (existence and size, one access per
+  file), `full` (the copy's own comparison, so the plan says exactly what will
+  be skipped, renamed or overwritten) or `none`.
 - **Resume where the last import stopped.** A cursor (capture date and file
   name) is saved next to the pipeline after each run. It marks the end of the
   longest run of successful files. Copybot can also look at what is already

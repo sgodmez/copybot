@@ -1,5 +1,6 @@
 package com.copybot.ui;
 
+import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
@@ -490,8 +491,27 @@ public class EditorController {
             }
         });
 
+        // how far the plan checks the targets that already exist (spec conflict-check §5)
+        ComboBox<ConflictCheck> conflictCheck = new ComboBox<>();
+        conflictCheck.getItems().addAll(ConflictCheck.values());
+        conflictCheck.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(ConflictCheck check) {
+                return check == null ? "" : ResourcesEngine.getString("editor.conflict-check." + check.jsonName());
+            }
+
+            @Override
+            public ConflictCheck fromString(String s) {
+                return null; // not editable
+            }
+        });
+        conflictCheck.setValue(document.conflictCheck());
+        conflictCheck.valueProperty().addListener((obs, old, check) ->
+                document.setConflictCheck(check == null ? ConflictCheck.QUICK : check));
+
         formBox.getChildren().addAll(title(ResourcesEngine.getString("editor.section.PIPELINE")),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.execution")), execution, executionWarning),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.conflict-check")), conflictCheck),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-check")), destinationCheck),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch));

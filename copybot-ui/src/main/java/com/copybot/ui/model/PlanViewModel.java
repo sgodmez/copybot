@@ -13,6 +13,8 @@ import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.TargetCheck;
+import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.resources.ResourcesEngine;
@@ -61,7 +63,8 @@ public final class PlanViewModel {
         FINISHED
     }
 
-    public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS }
+    /** CONFLICTS: the files to copy whose target already exists (spec conflict-check §5). */
+    public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS, CONFLICTS }
 
     /** The steps of a preparation: listing the source (total unknown), analysing the files, computing the resume point. */
     public enum PrepareStage { LISTING, ANALYSING, RESOLVING }
@@ -503,7 +506,44 @@ public final class PlanViewModel {
             case TO_COPY -> executing ? isLeftToCopy(i.getStatus()) : Plan.Counts.isSelected(i.getStatus());
             case SKIPPED -> i.getStatus() == ItemStatus.SKIPPED;
             case ERRORS -> i.getStatus() == ItemStatus.ERROR;
+            case CONFLICTS -> isConflict(i);
         }).toList();
+    }
+
+    /** A file left to copy whose target already exists, as the plan checked it. */
+    private static boolean isConflict(WorkItemExecution item) {
+        TargetCheck check = item.getTargetCheck();
+        return check != null && check.exists() && isLeftToCopy(item.getStatus());
+    }
+
+    /**
+     * "⚠ 42 files already exist at the destination (40 same size, 2 different size)", or identical / different after a
+     * full check (spec conflict-check §5): the files to copy only, until the copy starts; empty without any.
+     */
+    public Optional<String> conflictText() {
+        if (executing || !(phase == Phase.PREPARING || phase == Phase.PREPARED || phase == Phase.ANALYSING
+                || phase == Phase.PREPARE_STOPPED)) {
+            return Optional.empty();
+        }
+        int same = 0;
+        int different = 0;
+        boolean full = false;
+        for (WorkItemExecution item : items) {
+            if (isConflict(item)) {
+                Kind kind = item.getTargetCheck().kind();
+                full |= kind == Kind.IDENTICAL || kind == Kind.DIFFERENT;
+                if (kind == Kind.SAME_SIZE || kind == Kind.IDENTICAL) {
+                    same++;
+                } else {
+                    different++;
+                }
+            }
+        }
+        if (same + different == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(ResourcesEngine.getString(full ? "plan.conflicts.full" : "plan.conflicts.quick",
+                same + different, same, different));
     }
 
     public Plan.Counts counts() {
@@ -731,15 +771,29 @@ public final class PlanViewModel {
         return item.getStatus() != ItemStatus.SKIPPED;
     }
 
-    /** The reason of a file the resume point skips: its status only says "Skipped" (the header tells why). */
+    /**
+     * The reason of a file the resume point skips: its status only says "Skipped" (the header tells why); for a file
+     * to copy whose target exists, what the copy will do with it (spec conflict-check §5).
+     */
     public static Optional<String> statusTooltip(WorkItemExecution item) {
-        return item.isSkippedByResumePoint() ? Optional.ofNullable(item.getSkipReason()) : Optional.empty();
+        if (item.isSkippedByResumePoint()) {
+            return Optional.ofNullable(item.getSkipReason());
+        }
+        TargetCheck check = item.getTargetCheck();
+        return item.getStatus() == ItemStatus.PENDING && check != null && check.exists()
+                ? Optional.ofNullable(check.message()) : Optional.empty();
     }
 
     /** "To copy", "Waiting — resources", "Copying 42 %", "Copied", "Skipped — reason", "Error — message" (spec desktop-ui §2). */
     public static String statusText(WorkItemExecution item) {
         return switch (item.getStatus()) {
-            case PENDING -> ResourcesEngine.getString("item.status.PENDING");
+            case PENDING -> {
+                String pending = ResourcesEngine.getString("item.status.PENDING");
+                TargetCheck check = item.getTargetCheck();
+                yield check != null && check.exists()
+                        ? pending + " " + ResourcesEngine.getString("item.status.PENDING.exists." + check.kind().name())
+                        : pending;
+            }
             case WAITING_RESOURCES -> ResourcesEngine.getString("item.status.WAITING_RESOURCES",
                     String.join(", ", item.getWaitingFor()));
             case RUNNING -> {
