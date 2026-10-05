@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -1116,5 +1117,40 @@ public class PlanViewModelTest {
     public void aSingleTargetHasNoTooltip() {
         assertEquals(Path.of("/nas/2026").toString(), PlanViewModel.targetText(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
         assertNull(PlanViewModel.targetTooltip(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
+    }
+
+    private WorkItemExecution dated(String name, String date) throws IOException {
+        WorkItem wi = new WorkItem(tempDir.resolve(name));
+        if (date != null) {
+            wi.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse(date));
+        }
+        return new WorkItemExecution(wi, List.of());
+    }
+
+    @Test
+    public void theDateColumnSortsByDateNotByItsText() throws IOException {
+        WorkItemExecution august2026 = dated("a.jpg", "2026-08-01T10:00:00Z"); // "01/08/2026"
+        WorkItemExecution january2024 = dated("b.jpg", "2024-01-02T10:00:00Z"); // "02/01/2024"
+        WorkItemExecution sameSecondB = dated("d.jpg", "2024-01-02T10:00:00Z");
+        WorkItemExecution undated = dated("c.jpg", null);
+        List<WorkItemExecution> rows = new ArrayList<>(List.of(undated, august2026, sameSecondB, january2024));
+
+        rows.sort(PlanViewModel.DATE_ORDER);
+
+        assertEquals(List.of(january2024, sameSecondB, august2026, undated), rows,
+                "by date, then name, the files without date last");
+    }
+
+    @Test
+    public void theSizeColumnSortsBySizeNotByItsText() throws IOException {
+        WorkItemExecution tenMb = item("a.jpg", 10_200_000); // "9,73 Mo"
+        WorkItemExecution nineMb = item("b.jpg", 9_500_000); // "9,06 Mo"
+        WorkItemExecution kb = item("c.jpg", 900_000); // "878,91 Ko"
+        WorkItemExecution unknown = new WorkItemExecution(new WorkItem(tempDir.resolve("d.jpg")), List.of());
+        List<WorkItemExecution> rows = new ArrayList<>(List.of(unknown, tenMb, kb, nineMb));
+
+        rows.sort(PlanViewModel.SIZE_ORDER);
+
+        assertEquals(List.of(kb, nineMb, tenMb, unknown), rows, "by bytes, the unknown sizes last");
     }
 }

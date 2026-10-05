@@ -21,9 +21,11 @@ import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.UiPreferences;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
+import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
+import javafx.collections.transformation.SortedList;
 import javafx.fxml.FXML;
 import javafx.scene.Node;
 import javafx.scene.control.Alert;
@@ -68,6 +70,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -101,9 +104,9 @@ public class PlanController {
     @FXML private ComboBox<Filter> filterCombo;
     @FXML private TableView<WorkItemExecution> itemsTable;
     @FXML private TableColumn<WorkItemExecution, String> nameColumn;
-    @FXML private TableColumn<WorkItemExecution, String> dateColumn;
+    @FXML private TableColumn<WorkItemExecution, WorkItemExecution> dateColumn;
     @FXML private TableColumn<WorkItemExecution, String> targetColumn;
-    @FXML private TableColumn<WorkItemExecution, String> sizeColumn;
+    @FXML private TableColumn<WorkItemExecution, WorkItemExecution> sizeColumn;
     @FXML private TableColumn<WorkItemExecution, String> statusColumn;
     @FXML private HBox progressBox;
     @FXML private ProgressBar progressBar;
@@ -148,11 +151,16 @@ public class PlanController {
 
     @FXML
     public void initialize() {
-        itemsTable.setItems(rows);
+        // a header click sorts the view, not the rows: refresh() keeps comparing them with the model order
+        SortedList<WorkItemExecution> sorted = new SortedList<>(rows);
+        sorted.comparatorProperty().bind(itemsTable.comparatorProperty());
+        itemsTable.setItems(sorted);
         itemsTable.setPlaceholder(placeholder);
         nameColumn.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().getWorkItem().getNameDisplay()));
         nameColumn.setCellFactory(column -> new NameCell());
-        dateColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.dateText(c.getValue())));
+        dateColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
+        dateColumn.setCellFactory(column -> textCell(PlanViewModel::dateText));
+        dateColumn.setComparator(PlanViewModel.DATE_ORDER);
         targetColumn.setCellValueFactory(c -> new SimpleStringProperty(targetText(c.getValue())));
         targetColumn.setCellFactory(column -> new TableCell<>() {
             @Override
@@ -166,7 +174,9 @@ public class PlanController {
                 setTooltip(tooltip == null ? null : new Tooltip(tooltip));
             }
         });
-        sizeColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.sizeText(c.getValue())));
+        sizeColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
+        sizeColumn.setCellFactory(column -> textCell(PlanViewModel::sizeText));
+        sizeColumn.setComparator(PlanViewModel.SIZE_ORDER);
         statusColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.statusText(c.getValue())));
         statusColumn.setCellFactory(column -> new TableCell<>() {
             @Override
@@ -542,7 +552,8 @@ public class PlanController {
     /** Shows the resume junction: the last imported files, then the first ones to copy. */
     private void scrollToResume() {
         if (!rows.isEmpty()) {
-            itemsTable.scrollTo(PlanViewModel.resumeScrollIndex(rows, RESUME_CONTEXT_ROWS));
+            // the index is in resume order, the table may be sorted otherwise: scroll to that row
+            itemsTable.scrollTo(rows.get(Math.min(PlanViewModel.resumeScrollIndex(rows, RESUME_CONTEXT_ROWS), rows.size() - 1)));
         }
     }
 
@@ -1210,6 +1221,17 @@ public class PlanController {
             }
         }
         return true;
+    }
+
+    /** A cell of a column whose value is the row itself (sorted by value): shows its text. */
+    private static TableCell<WorkItemExecution, WorkItemExecution> textCell(Function<WorkItemExecution, String> text) {
+        return new TableCell<>() {
+            @Override
+            protected void updateItem(WorkItemExecution item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : text.apply(item));
+            }
+        };
     }
 
     private static void show(Node node, boolean visible) {

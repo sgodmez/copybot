@@ -26,6 +26,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -82,6 +83,15 @@ public final class PlanViewModel {
     private static final DateTimeFormatter ITEM_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
     private static final DateTimeFormatter RESUME_DATE = DateTimeFormatter.ofPattern("dd/MM HH:mm");
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /** The sort of the "Date" column: the date shown (then the name), not its text; the files without date last. */
+    public static final Comparator<WorkItemExecution> DATE_ORDER = Comparator.comparing(
+            PlanViewModel::dateKey, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    /** The sort of the "Size" column: the bytes, not their text; the unknown sizes last. */
+    public static final Comparator<WorkItemExecution> SIZE_ORDER = Comparator.comparing(
+            (WorkItemExecution item) -> item.getWorkItem().getMetadatas().getSize(),
+            Comparator.nullsLast(Comparator.naturalOrder()));
 
     private Phase phase = Phase.NOT_PREPARED;
     private boolean executing;
@@ -756,9 +766,13 @@ public final class PlanViewModel {
 
     /** The "Date" column: the resume key date, the capture or modification date before the preparation. */
     public static String dateText(WorkItemExecution item) {
-        return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem()))
-                .map(key -> ITEM_DATE.format(key.date().atZone(ZoneId.systemDefault())))
-                .orElse("");
+        ItemKey key = dateKey(item);
+        return key == null ? "" : ITEM_DATE.format(key.date().atZone(ZoneId.systemDefault()));
+    }
+
+    /** What the "Date" column shows, null without date. */
+    private static ItemKey dateKey(WorkItemExecution item) {
+        return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).orElse(null);
     }
 
     /** The label of a terminal pipeline status ("Success", "Failed", "Stopped"); the raw name for another one. */
