@@ -69,7 +69,8 @@ public class PipelineState {
 
     /**
      * Every input step of the last preparation listed to its end: no failure, no stop (spec manual-point §2). A
-     * preparation stopped afterwards can be continued; one stopped while listing cannot (files would be missing).
+     * preparation stopped afterwards offers its rows (resume from here, analyse); one stopped while listing cannot
+     * (files would be missing).
      */
     public boolean isListingComplete() {
         return listingComplete;

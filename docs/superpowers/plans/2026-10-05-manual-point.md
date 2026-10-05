@@ -2,6 +2,10 @@
 
 Chaque tâche : test d'abord, puis code, puis les tests du module.
 
+> Note, après coup : la tâche 4 (`continuePreparation`) et la continuation dans l'IHM ont été retirées ensuite.
+> Une préparation arrêtée n'est jamais reprise d'elle-même : « Reprendre d'ici » y choisit le point de la
+> prochaine préparation (spec §2).
+
 ## Moteur
 
 1. `PipelineState.listingComplete` : posé par `runListing` quand la dernière étape IN finit sans échec ni arrêt,

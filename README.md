@@ -76,7 +76,7 @@ libraries.
   physical disk can share one budget.
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
   A stopped run does not move the cursor. A preparation stopped after its
-  listing can be resumed from any listed file, without listing again. In the
+  listing lets you pick where to resume from its rows, then prepare again. In the
   CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
 - **Desktop application.** The home screen lists recent pipelines and how
   their last run went. The plan view has filters and a context menu: resume

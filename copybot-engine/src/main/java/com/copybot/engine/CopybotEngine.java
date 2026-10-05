@@ -162,44 +162,6 @@ public final class CopybotEngine implements AutoCloseable {
         return prepareBegun(mainExecutor, started);
     }
 
-    /**
-     * Continues a stopped preparation ({@link Plan#canContinue()}) from a resume point, without listing again: like
-     * a cursor at that point (spec manual-point §2). Blocking, in the calling thread, the active operation for its
-     * whole duration (close() stops it); its progress goes to the watcher of the preparation. Ends PREPARED (the plan
-     * is then executable), CANCELLED when stopped again ({@link Plan#cancelPreparation()}, still continuable), ERROR
-     * on a failure.
-     *
-     * @throws IllegalStateException another operation is active, the engine is closed, or the plan is not a stopped
-     *                               preparation whose listing is complete
-     */
-    public void continuePreparation(Plan plan, ResumePoint point) {
-        begin();
-        try {
-            MainExecutor mainExecutor = plan.getExecutor();
-            track(mainExecutor);
-            synchronized (lock) {
-                if (closed) { // a stopped plan ignores cancel(): refuse here rather than run while closing
-                    throw new IllegalStateException(ResourcesEngine.getString("engine.closed"));
-                }
-            }
-            mainExecutor.continuePreparation(point);
-            boolean kept = false;
-            if (mainExecutor.getState().getStatus() == PipelineStatus.PREPARED) {
-                synchronized (lock) {
-                    if (!closed) {
-                        preparedPlan = mainExecutor;
-                        kept = true;
-                    }
-                }
-            }
-            if (!kept) {
-                mainExecutor.resume(); // a stopped or failed continuation leaves nothing paused
-            }
-        } finally {
-            end();
-        }
-    }
-
     // visible for tests: prepares a pipeline built from pre-resolved steps
     Plan prepare(MainExecutor mainExecutor, Consumer<Plan> started) {
         begin();
@@ -243,12 +205,12 @@ public final class CopybotEngine implements AutoCloseable {
      * execution (spec deferred-analysis §1). Blocking, runs in the calling thread and counts as the active
      * operation for its whole duration; the plan is RUNNING meanwhile, PREPARED again when it returns, also when
      * it is stopped ({@link Plan#cancelAnalysis()}, {@link #close()}). Its progress goes to the watcher of the
-     * preparation. Nothing to analyse: returns at once, the plan untouched. On a stopped preparation that can be
-     * continued ({@link Plan#canContinue()}), the files asked for ({@link Plan#requestAnalysis}): CANCELLED again
-     * when it returns, still continuable (spec manual-point §2).
+     * preparation. Nothing to analyse: returns at once, the plan untouched. On a preparation stopped after its
+     * listing ({@link Plan#isStoppedAfterTheListing()}), the files asked for ({@link Plan#requestAnalysis}): CANCELLED
+     * again when it returns, still stopped after its listing (spec manual-point §2).
      *
      * @throws IllegalStateException when another operation is active, the engine is closed or the plan is neither
-     *                               PREPARED nor a stopped preparation that can be continued
+     *                               PREPARED nor a preparation stopped after its listing
      */
     public void analyse(Plan plan) {
         begin();

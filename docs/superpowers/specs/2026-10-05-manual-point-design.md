@@ -18,7 +18,8 @@ pas de réponse :
 But : un point choisi se comporte **comme un curseur à cet endroit** : les fichiers d'avant sont écartés sans
 analyse (« avant le point choisi »), ceux d'après sont analysés et vérifiés (conflits), sans sonde de la
 destination. Les trois entrées convergent vers ce même chemin : le choix avant la préparation, « Reprendre d'ici »
-sur une préparation arrêtée, et le choix d'un point sur une préparation arrêtée.
+sur une préparation arrêtée, et le choix d'un point sur une préparation arrêtée ; les deux dernières ne font que
+choisir le point de la prochaine préparation (§2).
 
 Non-régression : sans point choisi, la préparation, l'exécution, le streaming et le CLI sont strictement
 identiques à aujourd'hui.
@@ -62,7 +63,14 @@ avec un point choisi, le contexte de reprise est construit même pour un pipelin
   modification). Il garde le chemin actuel (préparation automatique, puis `Plan.fromFile`, `preview`,
   `analyse`).
 
-## 2. Continuer une préparation arrêtée
+## 2. Une préparation arrêtée
+
+Une préparation arrêtée **n'est jamais reprise d'elle-même** : l'utilisateur a arrêté l'analyse, rien ne la
+relance sans qu'il le demande. Repartir de zéro est acceptable : « Préparer » reliste la source (rapide : noms
+et dates) puis n'analyse que les fichiers à partir du point choisi (§1), ce qui revient à un curseur posé là.
+Une première version continuait la préparation arrêtée sans relister (`continuePreparation`) ; elle a été
+retirée : une machine d'états délicate (arrêts concurrents, `close()` pendant la reprise) pour un gain que le
+listing rapide rend inutile.
 
 ### Listing complet
 
@@ -70,62 +78,28 @@ avec un point choisi, le contexte de reprise est construit même pour un pipelin
   (ni échec, ni arrêt, ni `PhaseStopped` levé vers le plugin). Remis à faux au début de chaque
   préparation. Un plugin qui avalerait `PhaseStopped` et finirait normalement est quand même marqué incomplet
   (le drapeau est posé par `emitItem`).
-- Une préparation arrêtée **pendant** le listing (listing incomplet) ne se continue pas : des fichiers non
-  listés seraient omis sans le dire, et le curseur passerait ensuite au-delà d'eux.
+- `Plan.isStoppedAfterTheListing()` : statut CANCELLED, la dernière phase était une préparation (pas une
+  exécution), listing complet. Ses lignes sont alors fiables : on peut y choisir un point et en analyser.
+- Une préparation arrêtée **pendant** le listing n'offre pas ses lignes : des fichiers non listés seraient
+  omis sans le dire, et le curseur passerait ensuite au-delà d'eux.
 
-### `MainExecutor.continuePreparation(ResumePoint point)`
+### « Reprendre d'ici » et « changer… » sur une préparation arrêtée
 
-Préconditions, vérifiées sous `phaseLock` (sinon `IllegalStateException` `engine.not-continuable`) : statut
-CANCELLED, la dernière phase était une préparation (`prepare()` ou une continuation, pas une exécution), listing
-complet.
-
-Machine d'états :
-
-```
-prepare() ──arrêt (cancelPreparation)──▶ CANCELLED (préparation arrêtée)
-    │                                         │  listing complet ?
-    ▼                                         ├─ non : terminal (on prépare à nouveau)
- PREPARED                                     └─ oui : continuePreparation(point) ─▶ RUNNING
-                                                        │                │
-                                                        ▼                ▼ arrêt
-                                                    PREPARED          CANCELLED (continuable à nouveau)
-                                              (échec : ERROR, terminal)
-```
-
-- Démarrage, dans un même bloc `phaseLock` : préconditions, `cancelRequested` et `cancelInterruptSent` remis à
-  faux, `preparationStoppable` vrai, statut RUNNING (PAUSED si une pause est en cours). Un `cancel()` arrivé
-  avant que la phase ait un thread est donc vu au premier `checkCancelled()` (comme `prepare()`), et un
-  `cancel()` sur le plan arrêté avant la continuation reste sans effet (statut terminal).
-- Travail, sur le phase thread, avec le registre, les tickets et le watcher de la préparation :
-  1. clés figées (`ResumeResolver.order`) ;
-  2. tout fichier PENDING jamais analysé (interrompu par l'arrêt, ou différé par la sonde) est marqué
-     « analyse différée » ;
-  3. `resolver.apply(point, MANUAL, …)` ; les fichiers SKIPPED encore différés sont marqués préparés
-     (`deferAnalysis`, raison « avant le point choisi ») ;
-  4. les fichiers PENDING différés sont analysés (barrière, projection, vérification de cible) ; ceux déjà
-     analysés gardent leur cible et leur vérification ;
-  5. `projectItems()`, puis point de non-retour (`checkCancelled` sous `phaseLock`, `preparationStoppable`
-     faux) et statut PREPARED, proposition `(point, MANUAL)`.
-- Arrêt (`cancelPreparation`, `close()`) pendant la continuation : CANCELLED, de nouveau continuable (le
-  listing reste complet). Échec : ERROR (`preparationFailed`), terminal.
-- Le curseur d'état est lu (comme au §1) pour `nextCursor`.
-
-### `CopybotEngine.continuePreparation(Plan, ResumePoint)` et `Plan`
-
-- Bloquant, dans le thread appelant, opération active (une à la fois, `engine.busy` sinon ; `close()`
-  l'annule) ; PREPARED → le plan redevient le `preparedPlan` de l'engine (comme `prepare`), sinon la pause est
-  levée.
-- `Plan.canContinue()` : statut CANCELLED d'une préparation au listing complet.
-- `Plan.fromFile(Path)` (statique) : FROM la clé d'un fichier choisi sur disque (date de modification à la
-  seconde, nom), la même que celle que le listing lui donnera.
+Ils ne font que **choisir le point** de la prochaine préparation (§1), affiché sur la ligne de reprise. Le plan
+reste arrêté, non copiable ; « Préparer » repart de zéro depuis ce point.
 
 ### « Analyser » sur une préparation arrêtée
 
-Disponible exactement quand la continuation l'est. Les fichiers choisis (pas encore analysés) sont analysés
-comme une analyse différée : `Plan.requestAnalysis(items)` puis `CopybotEngine.analyse(plan)`, phase RUNNING
-puis **retour à CANCELLED** (le plan reste une préparation arrêtée, continuable) ; un fichier écarté par le
-point de listing reste écarté. But : voir la cible et la vérification de fichiers choisis avant de décider d'où
+Disponible exactement quand `isStoppedAfterTheListing()`. Les fichiers choisis (pas encore analysés) sont
+analysés comme une analyse différée : `Plan.requestAnalysis(items)` puis `CopybotEngine.analyse(plan)`, phase
+RUNNING puis **retour à CANCELLED** (le plan reste une préparation arrêtée) ; un fichier écarté par le point
+de listing reste écarté. But : voir la cible et la vérification de fichiers choisis avant de décider d'où
 reprendre. Arrêter cette analyse (Arrêter) : CANCELLED aussi, les fichiers non faits restent « non analysés ».
+
+### `Plan.fromFile(Path)`
+
+Statique : FROM la clé d'un fichier choisi sur disque (date de modification à la seconde, nom), la même que
+celle que le listing lui donnera, pour choisir un fichier avant tout listing.
 
 ## 3. Interface (vue plan)
 
@@ -133,16 +107,14 @@ reprendre. Arrêter cette analyse (Arrêter) : CANCELLED aussi, les fichiers non
   PREPARING) : « Reprise : automatique » ou « Reprise : à partir de X (choisi) », avec « changer… ».
 - « changer… » ouvre le même dialogue, avec en plus « Automatique (selon le pipeline) » :
   - plan préparé : inchangé (`preview`, analyse des resélectionnés) ;
-  - préparation arrêtée au listing complet : le point choisi **continue** la préparation (comme « Reprendre
-    d'ici ») ; « automatique » ne fait que revenir au choix automatique pour la prochaine préparation ;
-  - sinon : le point est **retenu** pour la prochaine préparation (Préparer, Préparer et copier, Copier au fil
+  - sinon, préparation arrêtée comprise : le point est **retenu** pour la prochaine préparation (Préparer, Préparer et copier, Copier au fil
     du listing). Il reste choisi jusqu'à ce qu'on revienne à « automatique ».
   - « à partir d'un fichier » : les fichiers listés quand il y en a, sinon « Choisir un fichier… » (sélecteur de
     fichier, `Plan.fromFile(Path)`).
-- Préparation arrêtée, listing complet : le menu des lignes propose « Reprendre d'ici » et « Analyser » (les
-  fichiers non analysés de la sélection). Pendant la continuation : phase PREPARING (lignes conservées, barre
-  de préparation, Arrêter actif) ; mode auto / exécution automatique : la copie part à la fin, comme après
-  Préparer.
+- Préparation arrêtée, listing complet : le menu des lignes propose « Reprendre d'ici » (choisit le point de la
+  prochaine préparation, rien ne repart) et « Analyser » (les fichiers non analysés de la sélection). La ligne
+  d'état : « Préparation arrêtée : N fichiers listés, M analysés. Choisissez où reprendre (menu de la ligne, ou
+  changer…), puis préparez à nouveau. »
 - Préparation arrêtée pendant le listing : ces deux entrées sont désactivées et la ligne d'état le dit :
   « Préparation arrêtée pendant le listage : N fichiers listés. Les fichiers non listés seraient omis :
   préparez à nouveau. »
@@ -151,9 +123,9 @@ reprendre. Arrêter cette analyse (Arrêter) : CANCELLED aussi, les fichiers non
 
 - Moteur : préparation avec point choisi (fichiers écartés non analysés, raison manuelle, aucune sonde en mode
   destination, proposition MANUAL, curseur lu et jamais reculé, ALL) ; streaming avec point choisi ;
-  `isListingComplete` (listing complet, arrêt pendant le listing, échec de listing) ; continuation (refus
-  listing incomplet / non arrêté / exécution, statuts finaux, fichiers déjà analysés gardés, nouvel arrêt puis
-  nouvelle continuation, `cancel()` concurrent, engine occupé, `close()`), analyse sur plan arrêté (retour
-  CANCELLED). CLI : `--from-date` sans analyse des fichiers écartés, sortie inchangée.
-- IHM : ligne de reprise avant préparation, point retenu, entrées du menu selon le listing, phase pendant la
-  continuation, statuts.
+  `isListingComplete` (listing complet, arrêt pendant le listing, échec de listing) ;
+  `isStoppedAfterTheListing` (jamais préparé, préparé, exécution arrêtée : faux) ; analyse sur plan arrêté
+  (retour CANCELLED ; refusée après un arrêt pendant le listing). CLI : `--from-date` sans analyse des fichiers
+  écartés, sortie inchangée.
+- IHM : ligne de reprise avant préparation, point retenu (aussi sur un plan arrêté, qui le reste), entrées du
+  menu selon le listing, statuts.

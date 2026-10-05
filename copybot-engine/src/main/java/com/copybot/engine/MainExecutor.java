@@ -137,8 +137,8 @@ public class MainExecutor implements Runnable {
      */
     private volatile ResumePoint chosenPoint;
     /**
-     * The last phase was a preparation ({@link #prepare()} or {@link #continuePreparation}): a CANCELLED status is
-     * then a stopped preparation, which can be continued when its listing is complete. Guarded by phaseLock.
+     * The last phase was a preparation ({@link #prepare()}): a CANCELLED status is then a stopped preparation, whose
+     * rows can be used when its listing is complete. Guarded by phaseLock.
      */
     private boolean lastPhaseWasPreparation;
     /** A listing of the current preparation was stopped (cancel, interrupt) before its end. */
@@ -562,7 +562,7 @@ public class MainExecutor implements Runnable {
      * ({@link #requestAnalysis}); empty when the preparation deferred nothing.
      */
     List<WorkItemExecution> toAnalyse() {
-        if (canContinue()) {
+        if (isStoppedAfterTheListing()) {
             // a stopped preparation: only the files asked for, never every file left unanalysed by the stop
             return state.getWorkItems().stream()
                     .filter(item -> item.isAnalysisDeferred() && requestedAnalysis.contains(item))
@@ -576,12 +576,11 @@ public class MainExecutor implements Runnable {
 
     /**
      * Asks {@link #analyseDeferred()} to also analyse these skipped items, so that their planned processing is known:
-     * they stay skipped, for the same reason. The items already analysed (or in error) are left out. On a stopped
-     * preparation that can be continued, the files the stop left unanalysed can be asked for too (spec
-     * manual-point §2).
+     * they stay skipped, for the same reason. The items already analysed (or in error) are left out. On a preparation
+     * stopped after its listing, the files the stop left unanalysed can be asked for too (spec manual-point §2).
      */
     void requestAnalysis(Collection<WorkItemExecution> items) {
-        boolean stopped = canContinue();
+        boolean stopped = isStoppedAfterTheListing();
         for (WorkItemExecution item : items) {
             if (item.isAnalysisDeferred() && item.getStatus() == ItemStatus.SKIPPED) {
                 requestedAnalysis.add(item);
@@ -600,90 +599,20 @@ public class MainExecutor implements Runnable {
         chosenPoint = point;
     }
 
-    /** A stopped preparation whose listing is complete: {@link #continuePreparation} can continue it. */
-    boolean canContinue() {
+    /**
+     * A preparation stopped after its listing was complete (spec manual-point §2): a resume point can be chosen
+     * from its rows and some of them analysed ({@link #analyseDeferred()}); Prepare starts again from the point.
+     */
+    boolean isStoppedAfterTheListing() {
         synchronized (phaseLock) {
-            return isContinuable();
+            return stoppedAfterTheListing();
         }
     }
 
     /** Caller holds phaseLock. */
-    private boolean isContinuable() {
+    private boolean stoppedAfterTheListing() {
         return state.getStatus() == PipelineStatus.CANCELLED && lastPhaseWasPreparation && state.isListingComplete()
                 && phaseThread == null && !preparing;
-    }
-
-    /**
-     * Continues a stopped preparation from a resume point, without listing again: like a cursor at that point (spec
-     * manual-point §2). The files before it are skipped (not analysed when they were not yet), the files from it not
-     * analysed yet are analysed and checked, the ones already analysed keep their target and check; the proposal is
-     * the point, MANUAL. Ends PREPARED; stopped again ({@link #cancelPreparation()}, {@link #cancel()}): CANCELLED,
-     * still continuable; a failure: ERROR. Blocking, in the caller's thread, with the watcher of the preparation.
-     *
-     * @throws IllegalStateException not a stopped preparation whose listing is complete (engine.not-continuable)
-     */
-    void continuePreparation(ResumePoint point) {
-        java.util.Objects.requireNonNull(point, "point");
-        synchronized (phaseLock) {
-            if (!isContinuable()) {
-                throw new IllegalStateException(ResourcesEngine.getString("engine.not-continuable", state.getStatus()));
-            }
-            // the stop that ended the preparation is over; a stop from now on stops this continuation
-            cancelRequested = false;
-            cancelInterruptSent = false;
-            preparationStoppable = true;
-            preparing = true;
-            markRunning(); // under the same lock: a cancel() is never lost on a still terminal status
-        }
-        startPhase();
-        try {
-            checkCancelled();
-            phaseEnd = barrierIndex;
-            finalPhase = false;
-            dryRunSteps = processSteps();
-            listingPoint = null;
-            analysisOnDemand = false;
-            resolver.readCursor(); // never moved back by nextCursor
-            orderedItems = ResumeResolver.order(state.getWorkItems());
-            for (WorkItemExecution exec : orderedItems) {
-                if (exec.getStatus() == ItemStatus.PENDING && !exec.isPrepared()) {
-                    exec.markAnalysisDeferred(); // never analysed (the stop interrupted it, or the probe was to)
-                }
-            }
-            proposal = new ResumeProposal(point, ResumeSource.MANUAL, List.of());
-            state.setResumeProposal(proposal);
-            resolver.apply(point, ResumeSource.MANUAL, orderedItems);
-            analyseTheSelectedItems();
-            checkTheUncheckedTargets();
-            projectItems();
-            synchronized (phaseLock) {
-                checkCancelled(); // a stop until now stops it; later, it has no effect
-                preparationStoppable = false;
-            }
-            state.setStatus(PipelineStatus.PREPARED);
-        } catch (InterruptedException e) {
-            onPhaseInterrupted();
-        } catch (RuntimeException | Error e) {
-            onPhaseFailed(e, true);
-        } finally {
-            dryRunSteps = null;
-            synchronized (phaseLock) {
-                preparationStoppable = false;
-            }
-            endPhase();
-            preparing = false;
-        }
-    }
-
-    /** The files to copy analysed before a stop whose target check the stop interrupted. */
-    private void checkTheUncheckedTargets() throws InterruptedException {
-        for (WorkItemExecution exec : orderedItems) {
-            checkCancelled();
-            if (exec.getStatus() == ItemStatus.PENDING && exec.isPrepared() && !exec.isAnalysisDeferred()
-                    && exec.getProjection() != null && exec.getTargetCheck() == null) {
-                checkTarget(exec, registry.ticket());
-            }
-        }
     }
 
     /**
@@ -704,7 +633,7 @@ public class MainExecutor implements Runnable {
         List<WorkItemExecution> items;
         PipelineStatus endStatus;
         synchronized (phaseLock) {
-            boolean stopped = isContinuable();
+            boolean stopped = stoppedAfterTheListing();
             if (state.getStatus() != PipelineStatus.PREPARED && !stopped) {
                 throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
             }
@@ -930,7 +859,7 @@ public class MainExecutor implements Runnable {
         ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
         applyOverride(override);
         synchronized (phaseLock) {
-            lastPhaseWasPreparation = false; // a stopped execution is not a preparation to continue
+            lastPhaseWasPreparation = false; // a stopped execution is not a stopped preparation
         }
         markRunning();
         startPhase();

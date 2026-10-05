@@ -1018,67 +1018,26 @@ public class PlanController {
         if (plan != null && model.canChangeResumePoint()) {
             resumeDialog(false).showAndWait().ifPresent(choice -> applyResumePoint(choice.point()));
         } else if (model.canChooseResumePoint()) {
-            // before a prepared plan (spec manual-point §3): continues a stopped preparation, or is kept for the next one
+            // before a prepared plan (spec manual-point §3): the point of the next preparation, nothing more; a
+            // stopped preparation is not resumed by itself (Prepare starts again from the point)
             resumeDialog(true).showAndWait().ifPresent(choice -> {
-                if (choice.point() != null && model.canContinue()) {
-                    continuePreparation(choice.point());
-                } else {
-                    model.setChosenPoint(choice.point());
-                    refresh();
-                }
+                model.setChosenPoint(choice.point());
+                refresh();
             });
-        }
-    }
-
-    /** "Resume from here": on a prepared plan, a manual point; on a stopped preparation, its continuation. */
-    private void resumeFrom(ResumePoint point) {
-        if (model.canContinue()) {
-            continuePreparation(point);
-        } else {
-            applyResumePoint(point);
         }
     }
 
     /**
-     * Continues the stopped preparation from this point, without listing again (spec manual-point §2): like Prepare,
-     * in the background, the watcher of the preparation feeding the rows (same operation token), Stop stopping it;
-     * the point becomes the chosen one. Its end is handled like the end of a preparation.
+     * "Resume from here": on a prepared plan, a manual point; on a preparation stopped after its listing, the point of
+     * the next preparation only: the analysis the user stopped does not start again by itself.
      */
-    private void continuePreparation(ResumePoint point) {
-        if (plan == null || busy() || !model.canContinue()) {
-            return;
+    private void resumeFrom(ResumePoint point) {
+        if (model.isStoppedAfterTheListing()) {
+            model.setChosenPoint(point);
+            refresh();
+        } else {
+            applyResumePoint(point);
         }
-        Object op = operation;
-        Object hold = hold();
-        Plan stopped = plan;
-        preparingPlan = stopped;
-        model.setChosenPoint(point);
-        model.startContinuing();
-        refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                try {
-                    CopybotMainUi.ENGINE.continuePreparation(stopped, point);
-                } catch (Throwable t) { // refused (engine busy or closed, not continuable), or an Error
-                    Platform.runLater(() -> onContinueRefused(op, hold, stopped, t));
-                    return;
-                }
-                Platform.runLater(() -> onPrepared(op, hold, stopped));
-            });
-        } catch (RejectedExecutionException e) {
-            onContinueRefused(op, hold, stopped, e); // the application is closing
-        }
-    }
-
-    /** The continuation was refused or failed unexpectedly: the view goes back to the stopped preparation. */
-    private void onContinueRefused(Object op, Object hold, Plan stopped, Throwable failure) {
-        release(hold);
-        if (op == operation && plan == stopped) {
-            preparingPlan = null;
-            model.update(stopped.getState(), stopped.getOrderedItems());
-        }
-        refresh();
-        PopinUtil.showError(asException(failure));
     }
 
     /** A choice of the resume dialog: a point, or null for the automatic one. */

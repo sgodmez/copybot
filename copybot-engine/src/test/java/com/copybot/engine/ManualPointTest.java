@@ -299,8 +299,8 @@ public class ManualPointTest {
 
         assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
         assertFalse(exec.getState().isListingComplete(), "the files after IMG_03 were never listed");
-        assertFalse(exec.canContinue());
-        assertThrows(IllegalStateException.class, () -> exec.continuePreparation(ResumePoint.from(day(2))));
+        assertFalse(exec.isStoppedAfterTheListing());
+        assertThrows(IllegalStateException.class, exec::analyseDeferred, "its rows are not offered: files are missing");
         assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
     }
 
@@ -312,7 +312,7 @@ public class ManualPointTest {
 
         assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
         assertFalse(exec.getState().isListingComplete());
-        assertFalse(exec.canContinue());
+        assertFalse(exec.isStoppedAfterTheListing());
     }
 
     static final class FailingIn extends FakeAction implements IInAction {
@@ -322,7 +322,7 @@ public class ManualPointTest {
         }
     }
 
-    // ---- continuing a stopped preparation (spec §2) ----
+    // ---- a preparation stopped after its listing (spec §2) ----
 
     /** Prepares 8 files, the analysis of IMG_05 hanging, then stops: listed everything, analysed all but IMG_05. */
     private MainExecutor stoppedAfterTheListing(CountingAnalyze analyze, RecordingOut out) throws Exception {
@@ -346,85 +346,17 @@ public class ManualPointTest {
     }
 
     @Test
-    public void aStoppedPreparationContinuesFromAChosenPointWithoutListingAgain() throws Exception {
-        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 1);
-        RecordingOut out = new RecordingOut(null, nas());
-        MainExecutor exec = stoppedAfterTheListing(analyze, out);
-        assertTrue(exec.getState().isListingComplete());
-        assertTrue(exec.canContinue());
-        assertEquals(ItemStatus.PENDING, named(exec, "IMG_05.JPG").getStatus());
-        assertFalse(named(exec, "IMG_05.JPG").isPrepared(), "interrupted: not analysed");
-
-        ResumePoint point = ResumePoint.from(day(3));
-        exec.continuePreparation(point);
-
-        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
-        assertEquals(new ResumeProposal(point, ResumeSource.MANUAL, List.of()), exec.getState().getResumeProposal());
-        assertEquals(8, exec.getState().getWorkItems().size(), "not listed again");
-        assertEquals(1, analyze.times("IMG_05.JPG"), "the interrupted file is analysed now");
-        assertEquals(1, analyze.times("IMG_04.JPG"), "an analysed file keeps its analysis");
-        assertNotNull(named(exec, "IMG_04.JPG").getProjection());
-        assertNotNull(named(exec, "IMG_05.JPG").getProjection());
-        assertEquals(ItemStatus.SKIPPED, named(exec, "IMG_02.JPG").getStatus());
-        assertEquals(ResumeResolver.skipReason(point, ResumeSource.MANUAL), named(exec, "IMG_02.JPG").getSkipReason());
-        days(3, 8).forEach(name -> assertEquals(ItemStatus.PENDING, named(exec, name).getStatus(), name));
-        assertFalse(exec.canContinue(), "prepared: nothing to continue");
-
-        exec.execute(null);
-
-        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
-        assertEquals(days(3, 8), out.written);
-    }
-
-    @Test
-    public void aContinuationStoppedAgainCanBeContinuedAgain() throws Exception {
-        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 2);
-        MainExecutor exec = stoppedAfterTheListing(analyze, new RecordingOut(null, nas()));
-        analyze.blockedAgain = new CountDownLatch(1);
-
-        Thread continuing = Thread.ofVirtual().start(() -> exec.continuePreparation(ResumePoint.from(day(4))));
-        assertTrue(analyze.blockedAgain.await(5, TimeUnit.SECONDS));
-        exec.cancelPreparation();
-        continuing.join(TimeUnit.SECONDS.toMillis(20));
-
-        assertFalse(continuing.isAlive());
-        assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
-        assertTrue(exec.canContinue(), "the listing is still complete");
-
-        exec.continuePreparation(ResumePoint.from(day(4)));
-
-        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
-        assertEquals(1, analyze.times("IMG_05.JPG"));
-    }
-
-    @Test
-    public void aCancelBeforeTheContinuationHasNoEffectAndALateStopDoesNotCancelThePreparedPlan() throws Exception {
-        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 1);
-        MainExecutor exec = stoppedAfterTheListing(analyze, new RecordingOut(null, nas()));
-
-        exec.cancel(); // the plan is already stopped: nothing more
-        exec.cancelPreparation();
-        exec.continuePreparation(ResumePoint.all());
-        exec.cancelPreparation(); // too late: the plan is prepared
-
-        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
-        exec.execute(null);
-        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
-    }
-
-    @Test
-    public void onlyAStoppedPreparationCanBeContinued() {
+    public void onlyAPreparationStoppedAfterItsListingIsStoppedAfterTheListing() {
         MainExecutor exec = executor(3, new CountingAnalyze(), new RecordingOut(null, nas()), ResumeMode.STATE);
-        assertThrows(IllegalStateException.class, () -> exec.continuePreparation(ResumePoint.all()), "never prepared");
+        assertFalse(exec.isStoppedAfterTheListing(), "never prepared");
         exec.prepare();
 
-        assertFalse(exec.canContinue());
-        assertThrows(IllegalStateException.class, () -> exec.continuePreparation(ResumePoint.all()), "prepared");
+        assertFalse(exec.isStoppedAfterTheListing(), "prepared");
         assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
     }
 
     @Test
-    public void anExecutionStoppedIsNotAPreparationToContinue() throws Exception {
+    public void anExecutionStoppedIsNotAStoppedPreparation() throws Exception {
         CountDownLatch gate = new CountDownLatch(1);
         IOutAction hanging = new BlockingOut(gate);
         MainExecutor exec = new MainExecutor(
@@ -438,8 +370,7 @@ public class ManualPointTest {
         running.join(TimeUnit.SECONDS.toMillis(20));
 
         assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus());
-        assertFalse(exec.canContinue());
-        assertThrows(IllegalStateException.class, () -> exec.continuePreparation(ResumePoint.all()));
+        assertFalse(exec.isStoppedAfterTheListing());
     }
 
     static final class BlockingOut extends FakeAction implements IOutAction {
@@ -475,77 +406,10 @@ public class ManualPointTest {
         exec.analyseDeferred();
 
         assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus(), "still a stopped preparation");
-        assertTrue(exec.canContinue());
+        assertTrue(exec.isStoppedAfterTheListing());
         assertTrue(file.isPrepared());
         assertNotNull(file.getProjection());
         assertEquals(1, analyze.times("IMG_05.JPG"));
-
-        exec.continuePreparation(ResumePoint.all());
-        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
-        assertEquals(1, analyze.times("IMG_05.JPG"), "not analysed twice");
-    }
-
-    // ---- the engine (spec §2) ----
-
-    @Test
-    public void theEngineContinuesAStoppedPlanAsItsActiveOperationAndKeepsItPrepared() throws Exception {
-        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 1);
-        RecordingOut out = new RecordingOut(null, nas());
-        try (CopybotEngine engine = new CopybotEngine(ControlFakes.config())) {
-            MainExecutor exec = executor(8, analyze, out, ResumeMode.STATE);
-            AtomicReference<Plan> plan = new AtomicReference<>();
-            Thread caller = Thread.ofVirtual().start(() -> plan.set(engine.prepare(exec, null)));
-            assertTrue(analyze.blocked.await(5, TimeUnit.SECONDS));
-            awaitAnalysed(analyze, 7);
-            exec.cancelPreparation();
-            caller.join(TimeUnit.SECONDS.toMillis(20));
-            assertTrue(plan.get().canContinue());
-
-            engine.continuePreparation(plan.get(), ResumePoint.from(day(6)));
-
-            assertEquals(PipelineStatus.PREPARED, plan.get().getState().getStatus());
-            assertEquals(PipelineStatus.SUCCESS, ControlFakes.awaitStatus(engine.execute(plan.get(), null)));
-            assertEquals(days(6, 8), out.written);
-        }
-    }
-
-    @Test
-    public void theEngineRefusesToContinueAPlanThatCannotBe() {
-        try (CopybotEngine engine = new CopybotEngine(ControlFakes.config())) {
-            Plan plan = engine.prepare(executor(3, new CountingAnalyze(), new RecordingOut(null, nas()), ResumeMode.STATE));
-
-            assertThrows(IllegalStateException.class, () -> engine.continuePreparation(plan, ResumePoint.all()));
-            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus());
-            assertDoesNotThrow(() -> engine.execute(plan, null).await(), "the engine is free again");
-        }
-    }
-
-    @Test
-    public void closingTheEngineStopsAContinuation() throws Exception {
-        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 2);
-        CopybotEngine engine = new CopybotEngine(ControlFakes.config());
-        try {
-            MainExecutor exec = executor(8, analyze, new RecordingOut(null, nas()), ResumeMode.STATE);
-            AtomicReference<Plan> plan = new AtomicReference<>();
-            Thread caller = Thread.ofVirtual().start(() -> plan.set(engine.prepare(exec, null)));
-            assertTrue(analyze.blocked.await(5, TimeUnit.SECONDS));
-            awaitAnalysed(analyze, 7);
-            exec.cancelPreparation();
-            caller.join(TimeUnit.SECONDS.toMillis(20));
-            analyze.blockedAgain = new CountDownLatch(1);
-            Thread continuing = Thread.ofVirtual().start(() -> engine.continuePreparation(plan.get(), ResumePoint.all()));
-            assertTrue(analyze.blockedAgain.await(5, TimeUnit.SECONDS));
-
-            assertThrows(IllegalStateException.class, () -> engine.run(tempDir.resolve("any.json"), null),
-                    "the continuation is the active operation");
-            engine.close();
-            continuing.join(TimeUnit.SECONDS.toMillis(20));
-
-            assertFalse(continuing.isAlive());
-            assertEquals(PipelineStatus.CANCELLED, plan.get().getState().getStatus());
-        } finally {
-            engine.close();
-        }
     }
 
     // ---- a file chosen on disk (spec §2) ----

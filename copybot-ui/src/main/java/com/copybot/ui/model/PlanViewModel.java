@@ -127,7 +127,7 @@ public final class PlanViewModel {
      * choice of the user, kept by {@link #reset()} and {@link #startPreparing()}.
      */
     private ResumePoint chosenPoint;
-    /** The last preparation listed every input to its end (a stopped one can then be continued). */
+    /** The last preparation listed every input to its end (a stopped one then offers its rows). */
     private boolean listingComplete;
 
     /** The "execution" of the pipeline (spec execution-mode §5): what the button does. */
@@ -182,18 +182,6 @@ public final class PlanViewModel {
         clear();
         phase = Phase.PREPARING;
         listing = true; // until the engine says otherwise
-        autoExecuteArmed = true;
-    }
-
-    /**
-     * A stopped preparation continues from a resume point (spec manual-point §2): the rows stay (nothing is listed
-     * again), the view is locked as for a preparation, the automatic execution armed if checked.
-     */
-    public void startContinuing() {
-        phase = Phase.PREPARING;
-        listing = false;
-        analysing = List.of();
-        override = null;
         autoExecuteArmed = true;
     }
 
@@ -454,15 +442,18 @@ public final class PlanViewModel {
     }
 
     /**
-     * "change…" outside a prepared plan (spec manual-point §3): the point of the next preparation, or the point a
-     * stopped preparation continues from; not while the engine is busy.
+     * "change…" outside a prepared plan (spec manual-point §3): the point of the next preparation; not while the
+     * engine is busy.
      */
     public boolean canChooseResumePoint() {
         return !isActive() && phase != Phase.PREPARED;
     }
 
-    /** A preparation stopped after its listing: "Resume from here", "Analyse" and a chosen point continue it. */
-    public boolean canContinue() {
+    /**
+     * A preparation stopped after its listing: "Resume from here" chooses the point of the next preparation,
+     * "Analyse" analyses some rows; nothing starts the stopped analysis again by itself.
+     */
+    public boolean isStoppedAfterTheListing() {
         return phase == Phase.PREPARE_STOPPED && listingComplete;
     }
 
@@ -474,7 +465,7 @@ public final class PlanViewModel {
         if (canChangeResumePoint()) {
             return item.getResumeKey().map(ResumePoint::from); // the key the resume order froze (none: no date)
         }
-        if (canContinue()) {
+        if (isStoppedAfterTheListing()) {
             return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).map(ResumePoint::from);
         }
         return Optional.empty();
@@ -492,7 +483,7 @@ public final class PlanViewModel {
 
     /** Among these rows, those "Analyse" analyses: a prepared plan, skipped rows not analysed (skipped at the listing). */
     public List<WorkItemExecution> analysable(List<WorkItemExecution> rows) {
-        if (canContinue()) {
+        if (isStoppedAfterTheListing()) {
             // a stopped preparation (spec manual-point §2): the rows the stop left unanalysed, or skipped unanalysed
             return rows.stream().filter(i -> i.getStatus() == ItemStatus.PENDING && (!i.isPrepared() || i.isAnalysisDeferred())
                     || i.isAnalysisDeferred() && i.getStatus() == ItemStatus.SKIPPED).toList();
@@ -782,7 +773,7 @@ public final class PlanViewModel {
     public String statusLine() {
         return switch (phase) {
             case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
-            // stopped while listing: files may be missing, it cannot be continued (spec manual-point §2)
+            // stopped while listing: files may be missing, its rows are not offered (spec manual-point §2)
             case PREPARE_STOPPED -> listingComplete
                     ? ResourcesEngine.getString("plan.prepare-stopped", items.size(), analysedOfListed())
                     : ResourcesEngine.getString("plan.prepare-stopped.listing", items.size());
