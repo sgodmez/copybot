@@ -235,6 +235,212 @@ public class MainExecutorResumeTest {
         assertEquals(day(4), store().readCursor().orElseThrow());
     }
 
+    // ---- analysis of the items a manual resume point selects again (spec deferred-analysis §1) ----
+
+    /** Fails on one item, records the others. */
+    static final class FailingAnalyze extends FakeAction implements IAnalyzeAction {
+        final Set<String> seen = ConcurrentHashMap.newKeySet();
+        final String failOn;
+
+        FailingAnalyze(String failOn) {
+            this.failOn = failOn;
+        }
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+            if (item.getNameDisplay().equals(failOn)) {
+                throw new IllegalStateException("analysis failed");
+            }
+            seen.add(item.getNameDisplay());
+        }
+    }
+
+    /** Blocks the first analysis of one item until interrupted (signalling it is entered), then lets it through. */
+    static final class BlockOnceAnalyze extends FakeAction implements IAnalyzeAction {
+        final Set<String> seen = ConcurrentHashMap.newKeySet();
+        final String blockOn;
+        final CountDownLatch entered = new CountDownLatch(1);
+        final AtomicInteger calls = new AtomicInteger();
+
+        BlockOnceAnalyze(String blockOn) {
+            this.blockOn = blockOn;
+        }
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+            if (item.getNameDisplay().equals(blockOn) && calls.getAndIncrement() == 0) {
+                entered.countDown();
+                try {
+                    new CountDownLatch(1).await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted");
+                }
+            }
+            seen.add(item.getNameDisplay());
+        }
+    }
+
+    /** The statuses seen by the watcher, in order. */
+    static final class StatusWatcher implements Consumer<PipelineState> {
+        final List<PipelineStatus> statuses = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void accept(PipelineState state) {
+            statuses.add(state.getStatus());
+        }
+    }
+
+    private MainExecutor analysedExecutor(int days, IAnalyzeAction analyze, RecordingOut out,
+                                          Consumer<PipelineState> watcher) {
+        return new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(days), emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, emptyConfig()), new PipelineStep<>(null, out, emptyConfig())),
+                1, false, watcher, registry(), new ResumeContext(ResumeMode.STATE, store()));
+    }
+
+    @Test
+    public void aManualPointSelectingDeferredItemsAnalysesThemBeforeTheExecution() {
+        store().writeCursor(day(3));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        RecordingOut out = new RecordingOut(null);
+        StatusWatcher watcher = new StatusWatcher();
+        MainExecutor exec = analysedExecutor(4, analyze, out, watcher);
+        exec.prepare();
+        exec.applyOverride(ResumePoint.from(day(2)));
+        watcher.statuses.clear();
+
+        exec.analyseDeferred();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_02.JPG", "IMG_03.JPG", "IMG_04.JPG"), analyze.seen, "only the items selected again");
+        WorkItemExecution first = named(exec, "IMG_01.JPG");
+        assertEquals(ItemStatus.SKIPPED, first.getStatus(), "still before the resume point");
+        assertTrue(first.isAnalysisDeferred(), "not selected: not analysed");
+        for (String name : List.of("IMG_02.JPG", "IMG_03.JPG")) {
+            WorkItemExecution item = named(exec, name);
+            assertEquals(ItemStatus.PENDING, item.getStatus(), "stopped at the barrier: " + name);
+            assertFalse(item.isAnalysisDeferred(), name);
+            assertNotNull(item.getProjection(), "dry run done: " + name);
+        }
+        assertTrue(out.written.isEmpty(), "nothing after the barrier");
+        assertFalse(watcher.statuses.isEmpty(), "the analysis is notified");
+        assertEquals(PipelineStatus.PREPARED, watcher.statuses.getLast(), "terminal notification");
+        assertTrue(watcher.statuses.stream().allMatch(s -> s == PipelineStatus.RUNNING || s == PipelineStatus.PREPARED),
+                watcher.statuses.toString());
+
+        exec.execute(ResumePoint.from(day(2)));
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_02.JPG", "IMG_03.JPG", "IMG_04.JPG"), out.written);
+        assertEquals(day(4), store().readCursor().orElseThrow());
+    }
+
+    @Test
+    public void anItemFailingItsDeferredAnalysisEndsInError() {
+        store().writeCursor(day(3));
+        MainExecutor exec = analysedExecutor(3, new FailingAnalyze("IMG_02.JPG"), new RecordingOut(null), null);
+        exec.prepare();
+        exec.applyOverride(ResumePoint.all());
+
+        exec.analyseDeferred();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        WorkItemExecution failed = named(exec, "IMG_02.JPG");
+        assertEquals(ItemStatus.ERROR, failed.getStatus());
+        assertFalse(failed.isAnalysisDeferred());
+        assertEquals(ItemStatus.PENDING, named(exec, "IMG_01.JPG").getStatus());
+    }
+
+    @Test
+    public void aCancelledAnalysisLeavesThePlanPreparedAndExecuteAnalysesTheRestFromStepZero() throws Exception {
+        store().writeCursor(day(3));
+        BlockOnceAnalyze analyze = new BlockOnceAnalyze("IMG_02.JPG");
+        RecordingOut out = new RecordingOut(null);
+        StatusWatcher watcher = new StatusWatcher();
+        MainExecutor exec = analysedExecutor(4, analyze, out, watcher);
+        exec.prepare();
+        exec.applyOverride(ResumePoint.all());
+
+        Thread runner = Thread.ofVirtual().start(exec::analyseDeferred);
+        assertTrue(analyze.entered.await(10, TimeUnit.SECONDS), "the analysis started");
+        exec.cancelAnalysis();
+        runner.join(TimeUnit.SECONDS.toMillis(20));
+
+        assertFalse(runner.isAlive());
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus(), "the plan is kept");
+        assertEquals(PipelineStatus.PREPARED, watcher.statuses.getLast());
+        WorkItemExecution interrupted = named(exec, "IMG_02.JPG");
+        assertEquals(ItemStatus.PENDING, interrupted.getStatus(), "still selected");
+        assertTrue(interrupted.isAnalysisDeferred(), "still to analyse");
+        assertNull(interrupted.getProjection());
+        assertFalse(exec.isCancelRequested(), "the cancel of the analysis is forgotten");
+
+        exec.cancelAnalysis(); // too late: no analysis runs, the plan must not be cancelled
+        exec.execute(ResumePoint.all());
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertTrue(analyze.seen.contains("IMG_02.JPG"), "analysed at the execution");
+        assertEquals(Set.of("IMG_01.JPG", "IMG_02.JPG", "IMG_03.JPG", "IMG_04.JPG"), out.written);
+    }
+
+    @Test
+    public void aCancelRequestedBeforeTheAnalysisIsKeptForTheExecution() {
+        store().writeCursor(day(2));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = analysedExecutor(3, analyze, new RecordingOut(null), null);
+        exec.prepare();
+        exec.applyOverride(ResumePoint.all());
+        exec.cancel();
+
+        exec.analyseDeferred();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_03.JPG"), analyze.seen, "nothing analysed");
+        exec.execute(ResumePoint.all());
+        assertEquals(PipelineStatus.CANCELLED, exec.getState().getStatus(), "as before: the execution is cancelled");
+    }
+
+    @Test
+    public void withoutDeferredItemTheAnalysisIsNoPhase() {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        StatusWatcher watcher = new StatusWatcher();
+        MainExecutor exec = analysedExecutor(3, analyze, new RecordingOut(null), watcher);
+        exec.prepare(); // no cursor: everything analysed at the preparation
+        exec.applyOverride(ResumePoint.all());
+        watcher.statuses.clear();
+
+        exec.analyseDeferred();
+
+        assertTrue(watcher.statuses.isEmpty(), "no notification: " + watcher.statuses);
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(3, analyze.seen.size(), "analysed once, at the preparation");
+    }
+
+    @Test
+    public void aPointSelectingNoDeferredItemAnalysesNothing() {
+        store().writeCursor(day(2));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        StatusWatcher watcher = new StatusWatcher();
+        MainExecutor exec = analysedExecutor(4, analyze, new RecordingOut(null), watcher);
+        exec.prepare();
+        exec.applyOverride(ResumePoint.from(day(4))); // later than the cursor
+        watcher.statuses.clear();
+
+        exec.analyseDeferred();
+
+        assertTrue(watcher.statuses.isEmpty(), "no notification: " + watcher.statuses);
+        assertEquals(Set.of("IMG_03.JPG", "IMG_04.JPG"), analyze.seen);
+        assertTrue(named(exec, "IMG_01.JPG").isAnalysisDeferred());
+    }
+
+    @Test
+    public void analyseDeferredRequiresAPreparedPlan() {
+        MainExecutor exec = analysedExecutor(1, new RecordingAnalyze(), new RecordingOut(null), null);
+
+        assertThrows(IllegalStateException.class, exec::analyseDeferred);
+    }
+
     @Test
     public void modeNoneNeverWritesAStateFile() {
         RecordingOut out = new RecordingOut(null);

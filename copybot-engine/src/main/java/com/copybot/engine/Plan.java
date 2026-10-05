@@ -177,6 +177,23 @@ public final class Plan {
     }
 
     /**
+     * The items to copy whose analysis was deferred at the listing (before the state cursor), selected again by a
+     * manual resume point: {@link CopybotEngine#analyse} analyses them so that they get their target. Empty in
+     * every other case (spec deferred-analysis §1).
+     */
+    public List<WorkItemExecution> toAnalyse() {
+        return executor.toAnalyse();
+    }
+
+    /**
+     * Stops a running {@link CopybotEngine#analyse}: the plan stays PREPARED, the items not analysed yet are
+     * analysed by the execution. No effect when no analysis runs. Callable from any thread.
+     */
+    public void cancelAnalysis() {
+        executor.cancelAnalysis();
+    }
+
+    /**
      * Leaves these items out of the run, whatever the resume point (SKIPPED, "ignored by the user"); a failed
      * item stays as it is. An ignored item counts as passed for the resume cursor: it is not proposed again.
      *

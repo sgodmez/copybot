@@ -185,6 +185,27 @@ public final class CopybotEngine implements AutoCloseable {
     }
 
     /**
+     * Analyses the items of a prepared plan that a manual resume point selected again although their analysis was
+     * deferred at the listing ({@link Plan#toAnalyse()}): their target and detail are then known before the
+     * execution (spec deferred-analysis §1). Blocking, runs in the calling thread and counts as the active
+     * operation for its whole duration; the plan is RUNNING meanwhile, PREPARED again when it returns, also when
+     * it is stopped ({@link Plan#cancelAnalysis()}, {@link #close()}). Its progress goes to the watcher of the
+     * preparation. Nothing to analyse: returns at once, the plan untouched.
+     *
+     * @throws IllegalStateException when another operation is active, the engine is closed or the plan is not PREPARED
+     */
+    public void analyse(Plan plan) {
+        begin();
+        try {
+            MainExecutor mainExecutor = plan.getExecutor();
+            track(mainExecutor);
+            mainExecutor.analyseDeferred();
+        } finally {
+            end();
+        }
+    }
+
+    /**
      * Prepares then executes the pipeline on a background thread (a single phase when the pipeline has
      * no resume block). Failures end in the final state, never as an exception of the background thread.
      *

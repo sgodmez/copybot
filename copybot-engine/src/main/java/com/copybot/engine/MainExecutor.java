@@ -96,8 +96,10 @@ public class MainExecutor implements Runnable {
      * the targets show up during the preparation, not only at its end.
      */
     private volatile List<PipelineStep<IProcessAction>> dryRunSteps;
-    /** From the start of {@link #prepare()} until it returns. */
+    /** From the start of {@link #prepare()} until it returns, and during {@link #analyseDeferred()}. */
     private volatile boolean preparing;
+    /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
+    private boolean analysing;
 
     /**
      * While preparing, the resume point known before the listing (see {@link ResumeResolver#listingPoint}): the
@@ -403,7 +405,99 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    /** True while {@link #prepare()} runs: an item without projection is then not analysed yet. */
+    /**
+     * The items to copy whose analysis was deferred at the listing: a manual resume point selected them again
+     * (empty when the preparation deferred nothing, or the point in force selects none of them).
+     */
+    List<WorkItemExecution> toAnalyse() {
+        return orderedItems.stream()
+                .filter(item -> item.getStatus() == ItemStatus.PENDING && item.isAnalysisDeferred())
+                .toList();
+    }
+
+    /**
+     * Analyses the items a manual resume point selected again although their analysis was deferred at the listing
+     * ({@link #toAnalyse()}), like the preparation: the steps before the barrier, then the dry run of the process
+     * steps (spec deferred-analysis §1). They stop at the barrier PENDING (the analysis never escapes the resume
+     * point), an item failing its analysis ends ERROR. Status RUNNING meanwhile, PREPARED again afterwards, also
+     * when the analysis is cancelled ({@link #cancelAnalysis()}): the items not analysed then stay deferred and
+     * {@link #execute} analyses them first, as without this analysis.
+     * <p>
+     * Nothing to analyse, or a {@link #cancel()} of the plan already pending: returns at once, without any phase
+     * (no status change, no notification); a pending cancel is kept for the execution.
+     *
+     * @throws IllegalStateException the plan is not PREPARED
+     */
+    void analyseDeferred() {
+        List<WorkItemExecution> items;
+        synchronized (phaseLock) {
+            if (state.getStatus() != PipelineStatus.PREPARED) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
+            }
+            items = toAnalyse();
+            if (cancelRequested || items.isEmpty()) {
+                return;
+            }
+            analysing = true;
+        }
+        preparing = true;
+        markRunning();
+        startPhase();
+        try {
+            checkCancelled();
+            phaseEnd = barrierIndex;
+            finalPhase = false;
+            dryRunSteps = processSteps();
+            for (WorkItemExecution exec : items) {
+                submitItem(exec, 0, barrierIndex);
+            }
+            awaitCompletion();
+            projectItems();
+        } catch (InterruptedException e) {
+            onAnalysisInterrupted();
+        } finally {
+            dryRunSteps = null;
+            shutdownTasks(); // every task is over before the cancel request is forgotten (runItem reads it)
+            synchronized (phaseLock) {
+                analysing = false;
+                cancelRequested = false; // requested during this analysis (checked above): it only stopped it
+                phaseThread = null; // a later cancel() cancels the plan, not this phase
+                state.setStatus(PipelineStatus.PREPARED); // before the terminal notification of endPhase
+            }
+            endPhase();
+            preparing = false;
+        }
+    }
+
+    /** Like {@link #onPhaseInterrupted()}, the plan staying PREPARED. */
+    private void onAnalysisInterrupted() {
+        boolean byCancel;
+        synchronized (phaseLock) {
+            byCancel = cancelRequested;
+            phaseThread = null;
+        }
+        if (byCancel) {
+            Thread.interrupted();
+        }
+        shutdownTasks();
+        if (!byCancel) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Stops {@link #analyseDeferred()}, the plan staying PREPARED; no effect when no analysis runs (a late request
+     * must not cancel the plan). Callable from any thread.
+     */
+    void cancelAnalysis() {
+        synchronized (phaseLock) {
+            if (analysing) {
+                cancel();
+            }
+        }
+    }
+
+    /** True while {@link #prepare()} or {@link #analyseDeferred()} runs: an item without projection is then not analysed yet. */
     boolean isPreparing() {
         return preparing;
     }

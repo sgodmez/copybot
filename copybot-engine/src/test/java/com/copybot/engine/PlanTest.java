@@ -155,6 +155,30 @@ public class PlanTest {
     }
 
     @Test
+    public void anItemSkippedAtTheListingAndSelectedAgainGetsItsTargetOnceAnalysed() {
+        Plan plan = prepared(new TargetOut(null), 1);
+        WorkItemExecution old = named(plan, "IMG_01.JPG");
+        assertTrue(plan.toAnalyse().isEmpty(), "not selected: nothing to analyse");
+
+        plan.preview(ResumePoint.all());
+        assertEquals(List.of(old), plan.toAnalyse());
+        plan.getExecutor().analyseDeferred();
+
+        assertTrue(plan.toAnalyse().isEmpty());
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas").resolve("IMG_01"))), plan.projectionOf(old));
+        assertTrue(plan.detailOf(old).isPresent());
+    }
+
+    @Test
+    public void withoutCursorThereIsNothingToAnalyse() {
+        Plan plan = prepared(new TargetOut(null), null);
+
+        plan.preview(ResumePoint.all());
+
+        assertTrue(plan.toAnalyse().isEmpty());
+    }
+
+    @Test
     public void theCountersFollowTheResumePoint() {
         Plan plan = prepared(new TargetOut(null), 1);
 

@@ -120,6 +120,9 @@ public class Copybot implements Callable<Integer> {
             ResumePoint override = resolveOverride(plan);
             if (isDryRun) {
                 plan.preview(override);
+                // the files the override selects again although the cursor skipped them at the listing: analysed
+                // like the others before being printed (nothing to do otherwise)
+                engine.analyse(plan);
                 PlanPrinter.print(plan, override, System.out);
                 return EXIT_SUCCESS;
             }

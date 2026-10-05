@@ -142,6 +142,24 @@ public class ResumeEndToEndTest {
     }
 
     @Test
+    public void dryRunWithAllAfterACursorPrintsTheFilesSelectedAgainAndWritesNothing() throws IOException {
+        Path pipeline = pipeline("state", "{name}");
+        assertEquals(0, cli(pipeline));
+        Files.delete(nas.resolve("IMG_01.JPG"));
+        Files.delete(nas.resolve("IMG_02.JPG"));
+        Path state = tempDir.resolve("sd.state.json");
+        String before = Files.readString(state);
+
+        String[] result = capture(pipeline, "--dry-run", "--all");
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_01.JPG")), result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_02.JPG")), result[1]);
+        assertFalse(Files.exists(nas.resolve("IMG_01.JPG")), "a dry run writes nothing");
+        assertEquals(before, Files.readString(state), "nor moves the cursor");
+    }
+
+    @Test
     public void unknownFromFileFailsWithNonZeroExitAndCopiesNothingNorWritesState() throws IOException {
         Path pipeline = pipeline("state", "{name}");
 

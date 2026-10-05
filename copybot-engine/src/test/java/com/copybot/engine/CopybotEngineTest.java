@@ -100,6 +100,71 @@ public class CopybotEngineTest {
         }
     }
 
+    /** Blocks every analysis until interrupted, signalling the first one. */
+    static final class BlockingAnalyze extends FakeAction implements com.copybot.plugin.api.action.IAnalyzeAction {
+        final CountDownLatch started = new CountDownLatch(1);
+        volatile boolean block;
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+            if (!block) {
+                return;
+            }
+            started.countDown();
+            try {
+                new CountDownLatch(1).await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("interrupted");
+            }
+        }
+    }
+
+    @Test
+    public void theAnalysisOfTheItemsSelectedAgainIsTheActiveOperationAndCloseStopsIt() throws Exception {
+        ResumeStateStore store = new ResumeStateStore(tempDir.resolve("a.state.json"));
+        store.writeCursor(day(2));
+        BlockingAnalyze analyze = new BlockingAnalyze();
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(dir("a"), 3, null), emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, emptyConfig()),
+                        new PipelineStep<>(null, new GatedOut(Set.of(), null), emptyConfig())),
+                1, false, null, registry(Map.of("disk:*", 1000)), new ResumeContext(ResumeMode.STATE, store));
+        CopybotEngine engine = new CopybotEngine(config());
+        try {
+            Plan plan = engine.prepare(executor);
+            plan.preview(com.copybot.engine.resume.ResumePoint.all());
+            analyze.block = true;
+            Thread caller = Thread.ofVirtual().start(() -> engine.analyse(plan));
+            assertTrue(analyze.started.await(5, TimeUnit.SECONDS));
+
+            assertThrows(IllegalStateException.class, () -> engine.execute(plan, null),
+                    "analyse() counts as the active operation for its whole duration");
+
+            engine.close();
+            caller.join(TimeUnit.SECONDS.toMillis(20));
+
+            assertFalse(caller.isAlive());
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus(), "stopping the analysis keeps the plan");
+            assertFalse(plan.toAnalyse().isEmpty(), "the items not analysed are still to analyse");
+        } finally {
+            engine.close();
+        }
+    }
+
+    @Test
+    public void analyseWithNothingToAnalyseReleasesTheEngine() throws Exception {
+        try (CopybotEngine engine = new CopybotEngine(config())) {
+            Plan plan = engine.prepare(withResume(new DatedIn(dir("a"), 1, null), new GatedOut(Set.of(), null),
+                    registry(Map.of("disk:*", 1000)), new ResumeStateStore(tempDir.resolve("a.state.json"))));
+
+            engine.analyse(plan);
+
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus());
+            assertEquals(PipelineStatus.SUCCESS, awaitStatus(engine.execute(plan, null)));
+        }
+    }
+
     @Test
     public void aBlockingPrepareIsTheActiveOperationAndCloseCancelsIt() throws Exception {
         CopybotEngine engine = new CopybotEngine(config());

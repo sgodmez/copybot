@@ -177,6 +177,56 @@ public class PlanViewModelTest {
         assertEquals(Phase.NOT_PREPARED, model.phase());
     }
 
+    /** An item the preparation skipped at the listing without analysing it, selected again by a manual point. */
+    private WorkItemExecution deferredSelected(String name) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        item.deferAnalysis("before the cursor");
+        item.setReady();
+        return item;
+    }
+
+    @Test
+    public void theFilesSelectedAgainAreAnalysedWithTheViewLocked() throws IOException {
+        WorkItemExecution old1 = deferredSelected("old1.jpg");
+        WorkItemExecution old2 = deferredSelected("old2.jpg");
+        WorkItemExecution recent = item("recent.jpg", 1);
+        PlanViewModel model = prepared(true, old1, old2, recent);
+        model.setOverride(ResumePoint.all());
+
+        model.startAnalysing(List.of(old1, old2));
+
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertTrue(model.isActive(), "the engine is held");
+        assertFalse(model.isExecutionActive());
+        assertFalse(model.canCopy());
+        assertFalse(model.canPrepare());
+        assertFalse(model.canGoBack());
+        assertFalse(model.canChangeResumePoint(), "the point is not changed while the files are analysed");
+        assertTrue(model.resumePointFrom(recent).isEmpty());
+        assertTrue(model.ignorable(List.of(recent)).isEmpty());
+        assertTrue(model.canStop(), "the analysis can be stopped");
+        assertFalse(model.canPause());
+        assertTrue(model.resumeText().isPresent(), "the resume line stays");
+        assertEquals("", model.statusLine());
+        assertEquals(ResourcesEngine.getString("plan.analysing-again", 0, 2), model.progressText());
+        assertEquals(0.0, model.prepareFraction());
+
+        old1.markPrepared(); // analysed: no longer deferred
+        model.update(state(PipelineStatus.RUNNING, old1, old2, recent), List.of(old1, old2, recent));
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.analysing-again", 1, 2), model.progressText());
+        assertEquals(0.5, model.prepareFraction());
+
+        PipelineState done = state(PipelineStatus.PREPARED, old1, old2, recent);
+        done.setResumeProposal(proposal(ResumePoint.all(), ResumeSource.NONE));
+        model.update(done, List.of(old1, old2, recent));
+        assertEquals(Phase.PREPARED, model.phase(), "the plan is ready again, even when stopped before the end");
+        assertTrue(model.canCopy());
+        assertTrue(model.canChangeResumePoint());
+        assertEquals(ResumePoint.all(), model.override(), "the manual point is kept");
+        assertFalse(model.consumeAutoExecute(), "never an automatic execution after an analysis");
+    }
+
     @Test
     public void theExecutionCanBePausedResumedAndStopped() throws IOException {
         WorkItemExecution a = item("a.jpg", 1);

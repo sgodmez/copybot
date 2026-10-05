@@ -194,9 +194,13 @@ public class WorkItemExecution {
         this.status = ItemStatus.PENDING;
     }
 
-    /** Called by the preparation once this item reached the barrier (analysed) or failed before it. */
+    /**
+     * Called by the preparation once this item reached the barrier (analysed) or failed before it; an item whose
+     * analysis was deferred is no longer (spec deferred-analysis §1).
+     */
     public void markPrepared() {
         this.prepared = true;
+        this.analysisDeferred = false;
     }
 
     /** True once the preparation is over for this item: the progress of the analyses. */

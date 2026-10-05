@@ -45,6 +45,11 @@ public final class PlanViewModel {
         PREPARING,
         PREPARED,
         PREPARE_FAILED,
+        /**
+         * a manual resume point selected again files whose analysis was deferred at the listing: they are being
+         * analysed (spec deferred-analysis §2), the plan is PREPARED again afterwards
+         */
+        ANALYSING,
         RUNNING,
         PAUSED,
         /** the execution ended: SUCCESS, ERROR or CANCELLED */
@@ -96,6 +101,8 @@ public final class PlanViewModel {
      */
     private String preparationRefusal;
     private Set<WorkItemExecution> selectedAtStart = Set.of();
+    /** The files being analysed in {@link Phase#ANALYSING}, empty otherwise. */
+    private List<WorkItemExecution> analysing = List.of();
 
     /** @param autoExecute "ui.autoExecute" of the pipeline: copy as soon as the plan is ready */
     public PlanViewModel(boolean autoExecute) {
@@ -123,6 +130,16 @@ public final class PlanViewModel {
         selectedAtStart = selected;
     }
 
+    /**
+     * The files a manual resume point selected again are analysed ({@code Plan.toAnalyse}): the view is locked
+     * until the plan is PREPARED again. Only from PREPARED.
+     */
+    public void startAnalysing(List<WorkItemExecution> toAnalyse) {
+        analysing = List.copyOf(toAnalyse);
+        autoExecuteArmed = false;
+        phase = Phase.ANALYSING;
+    }
+
     /** Back to "not prepared" (pipeline reloaded, preparation refused before it started). */
     public void reset() {
         clear();
@@ -142,6 +159,7 @@ public final class PlanViewModel {
         executionRefusal = null;
         failure = null;
         selectedAtStart = Set.of();
+        analysing = List.of();
     }
 
     /**
@@ -179,7 +197,10 @@ public final class PlanViewModel {
                 case SUCCESS, ERROR, CANCELLED -> Phase.FINISHED;
                 default -> Phase.RUNNING;
             };
+        } else if (!analysing.isEmpty() && (status == PipelineStatus.RUNNING || status == PipelineStatus.PAUSED)) {
+            phase = Phase.ANALYSING;
         } else {
+            analysing = List.of(); // the analysis is over: the plan is PREPARED again
             phase = switch (status) {
                 case PREPARED -> Phase.PREPARED;
                 case ERROR -> Phase.PREPARE_FAILED;
@@ -250,9 +271,9 @@ public final class PlanViewModel {
         return phase;
     }
 
-    /** A preparation or an execution holds the engine. */
+    /** A preparation, an analysis or an execution holds the engine. */
     public boolean isActive() {
-        return phase == Phase.PREPARING || phase == Phase.RUNNING || phase == Phase.PAUSED;
+        return phase == Phase.PREPARING || phase == Phase.ANALYSING || phase == Phase.RUNNING || phase == Phase.PAUSED;
     }
 
     public boolean isExecutionActive() {
@@ -311,9 +332,9 @@ public final class PlanViewModel {
         return phase == Phase.PAUSED;
     }
 
-    /** "Stop": during an execution only (a preparation is not stopped from the view). */
+    /** "Stop": during an execution or an analysis of the files selected again (a preparation is not stopped from the view). */
     public boolean canStop() {
-        return isExecutionActive();
+        return isExecutionActive() || phase == Phase.ANALYSING;
     }
 
     /** "change…" and "Resume from here": a prepared plan, before its execution. */
@@ -416,9 +437,20 @@ public final class PlanViewModel {
         return preparedCount() < items.size() ? PrepareStage.ANALYSING : PrepareStage.RESOLVING;
     }
 
-    /** The bar of the preparation: the analysed share of the listed files, {@link #INDETERMINATE} otherwise. */
+    /**
+     * The bar of the preparation: the analysed share of the listed files, {@link #INDETERMINATE} otherwise; in
+     * {@link Phase#ANALYSING}, the analysed share of the files selected again.
+     */
     public double prepareFraction() {
+        if (phase == Phase.ANALYSING) {
+            return (double) analysedCount() / analysing.size();
+        }
         return prepareStage() == PrepareStage.ANALYSING ? (double) preparedCount() / items.size() : INDETERMINATE;
+    }
+
+    /** Among the files being analysed, those no longer deferred (analysed, or failed). */
+    private int analysedCount() {
+        return (int) analysing.stream().filter(i -> !i.isAnalysisDeferred()).count();
     }
 
     private int preparedCount() {
@@ -516,6 +548,9 @@ public final class PlanViewModel {
                 case ANALYSING -> ResourcesEngine.getString("plan.analysing", preparedCount(), items.size());
                 case RESOLVING -> ResourcesEngine.getString("plan.resolving");
             };
+        }
+        if (phase == Phase.ANALYSING) {
+            return ResourcesEngine.getString("plan.analysing-again", analysedCount(), analysing.size());
         }
         Progress p = progress();
         return ResourcesEngine.getString("plan.progress", p.doneFiles(), p.totalFiles(),

@@ -585,6 +585,10 @@ public class PlanController {
 
     @FXML
     protected void onStopClick() {
+        if (model.phase() == Phase.ANALYSING && plan != null) {
+            plan.cancelAnalysis(); // non-blocking: the end of analyse() brings the view back to the plan
+            return;
+        }
         control(Execution::cancel);
     }
 
@@ -852,6 +856,53 @@ public class PlanController {
         }
         refresh();
         scrollToResume(); // the junction moved
+        List<WorkItemExecution> toAnalyse = plan.toAnalyse();
+        if (!toAnalyse.isEmpty()) {
+            startAnalysis(toAnalyse);
+        }
+    }
+
+    /**
+     * The files the resume point selected again although the preparation skipped them at the listing are analysed
+     * in the background, like a preparation (spec deferred-analysis §2): their targets fill in, Copy waits for the
+     * end, Stop ends it early (the files left are then analysed by the copy). The resume point cannot be changed
+     * meanwhile: stop the analysis first.
+     */
+    private void startAnalysis(List<WorkItemExecution> toAnalyse) {
+        if (engineHeld) {
+            return; // not expected: the plan is prepared and idle; the copy analyses them anyway
+        }
+        Object op = operation;
+        Object hold = hold();
+        Plan analysed = plan;
+        model.startAnalysing(toAnalyse);
+        refresh();
+        try {
+            CopybotMainUi.executor.submit(() -> {
+                Throwable failure = null;
+                try {
+                    CopybotMainUi.ENGINE.analyse(analysed); // the preparation's watcher reports its progress
+                } catch (Throwable t) { // refused (engine busy or closed), or an unexpected failure
+                    failure = t;
+                }
+                Throwable refused = failure;
+                Platform.runLater(() -> onAnalysed(op, hold, analysed, refused));
+            });
+        } catch (RejectedExecutionException e) {
+            onAnalysed(op, hold, analysed, e); // the application is closing
+        }
+    }
+
+    /** analyse() has returned: the plan is PREPARED again, the view follows it. */
+    private void onAnalysed(Object op, Object hold, Plan analysed, Throwable failure) {
+        release(hold);
+        if (op == operation && plan == analysed) {
+            model.update(analysed.getState(), analysed.getOrderedItems());
+        }
+        refresh();
+        if (failure != null) {
+            PopinUtil.showError(asException(failure));
+        }
     }
 
     /** Everything / from a date / from a file of the plan. */
@@ -918,7 +969,7 @@ public class PlanController {
         editButton.setDisable(busy || !model.canGoBack());
         prepareButton.setDisable(loading || busy || !model.canPrepare());
 
-        show(copyButton, phase == Phase.PREPARED);
+        show(copyButton, phase == Phase.PREPARED || phase == Phase.ANALYSING); // disabled while analysing
         copyButton.setText(model.copyLabel());
         copyButton.setDisable(busy || !model.canCopy());
         show(autoExecuteBox, !model.isExecutionActive());
@@ -928,11 +979,11 @@ public class PlanController {
         show(warningLabel, warning.isPresent());
         show(pauseButton, model.isExecutionActive() && !model.canResume());
         show(resumeButton, model.canResume());
-        show(stopButton, model.isExecutionActive());
+        show(stopButton, model.isExecutionActive() || phase == Phase.ANALYSING);
         pauseButton.setDisable(!model.canPause());
         stopButton.setDisable(!model.canStop());
 
-        boolean preparing = phase == Phase.PREPARING;
+        boolean preparing = phase == Phase.PREPARING || phase == Phase.ANALYSING; // the same bar
         show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);
         progressBar.setProgress(preparing ? model.prepareFraction() : model.progress().fraction());
         progressLabel.setText(model.progressText());
