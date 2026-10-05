@@ -347,6 +347,16 @@ public final class PlanViewModel {
         return canChangeResumePoint() ? item.getResumeKey().map(ResumePoint::from) : Optional.empty();
     }
 
+    /** Among these rows, those with a planned processing: the analysed ones (any phase). */
+    public static List<WorkItemExecution> detailable(List<WorkItemExecution> rows) {
+        return rows.stream().filter(i -> i.getProjection() != null).toList();
+    }
+
+    /** Where the planned processing of these rows opens: on the clicked row when it is one of them, else the first. */
+    public static int detailStart(List<WorkItemExecution> detailable, WorkItemExecution clicked) {
+        return Math.max(0, detailable.indexOf(clicked));
+    }
+
     /** Among these rows, those "Analyse" analyses: a prepared plan, skipped rows not analysed (skipped at the listing). */
     public List<WorkItemExecution> analysable(List<WorkItemExecution> rows) {
         if (phase != Phase.PREPARED) {

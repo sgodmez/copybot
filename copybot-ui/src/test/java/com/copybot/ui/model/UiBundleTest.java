@@ -61,7 +61,7 @@ public class UiBundleTest {
             "editor.invalid-fields",
             "item.status.SKIPPED.no-reason", "editor.save.tooltip", "editor.save-as.tooltip", "editor.show-json.tooltip",
             "editor.lenient", "editor.overwrite", "home.state-file", "editor.incomplete", "editor.save-anyway",
-            "plan.menu.detail", "plan.menu.analyse", "plan.detail.title", "plan.detail.status", "plan.detail.filtered",
+            "plan.menu.detail", "plan.menu.details", "plan.menu.analyse", "plan.detail.title", "plan.detail.position", "plan.detail.status", "plan.detail.filtered",
             "plan.detail.unsupported", "plan.detail.no-target");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");

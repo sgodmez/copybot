@@ -699,36 +699,24 @@ public class PlanController {
                 model.resumePointFrom(row.getItem()).ifPresent(this::applyResumePoint);
             }
         });
-        MenuItem detail = new MenuItem(ResourcesEngine.getString("plan.menu.detail"));
-        detail.setOnAction(e -> {
-            if (row.getItem() == null) {
-                return;
-            }
-            if (row.getItem().getProjection() != null) {
-                showDetail(row.getItem());
-            } else {
-                analyse(model.analysable(selectedRows()));
-            }
-        });
+        MenuItem detail = new MenuItem();
+        detail.setOnAction(e -> showDetails(PlanViewModel.detailable(selectedRows()), row.getItem()));
+        MenuItem analyse = new MenuItem();
+        analyse.setOnAction(e -> analyse(model.analysable(selectedRows())));
         MenuItem ignore = new MenuItem();
         ignore.setOnAction(e -> ignoreForThisRun(model.ignorable(selectedRows()), true));
         MenuItem unignore = new MenuItem();
         unignore.setOnAction(e -> ignoreForThisRun(model.unignorable(selectedRows()), false));
         MenuItem exclude = new MenuItem();
         exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
-        ContextMenu menu = new ContextMenu(fromHere, detail, new SeparatorMenuItem(), ignore, unignore, exclude);
+        ContextMenu menu = new ContextMenu(fromHere, detail, analyse, new SeparatorMenuItem(), ignore, unignore, exclude);
         menu.setOnShowing(e -> {
             fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty());
             List<WorkItemExecution> selected = selectedRows();
             boolean busy = busy();
-            if (row.getItem() != null && row.getItem().getProjection() == null) {
-                // not analysed: "Analyse" instead of a disabled "Planned processing"
-                setCountedItem(detail, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
-            } else {
-                Plan shown = targetsPlan();
-                detail.setText(ResourcesEngine.getString("plan.menu.detail"));
-                detail.setDisable(row.getItem() == null || shown == null || shown.detailOf(row.getItem()).isEmpty());
-            }
+            // both apply to the selection, whatever the clicked row
+            setCountedItem(detail, "plan.menu.details", PlanViewModel.detailable(selected).size());
+            setCountedItem(analyse, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
             setCountedItem(exclude, "plan.menu.exclude", busy ? 0 : model.excludable(selected).size());
@@ -789,22 +777,57 @@ public class PlanController {
 
     /** The planned processing of this item, read only: available as soon as it is analysed, and after the copy. */
     private void showDetail(WorkItemExecution item) {
+        showDetails(List.of(item), item);
+    }
+
+    /**
+     * The planned processing of these analysed items, from the clicked one when it is among them: with several, a
+     * counter and previous / next buttons go through them.
+     */
+    private void showDetails(List<WorkItemExecution> items, WorkItemExecution clicked) {
         Plan shown = targetsPlan();
-        Optional<ItemDetail> detail = shown == null ? Optional.empty() : shown.detailOf(item);
-        if (detail.isEmpty()) {
+        if (shown == null || items.isEmpty()) {
             return;
         }
-        TextArea text = new TextArea(PlanViewModel.detailText(item, detail.get()));
+        TextArea text = new TextArea();
         text.setEditable(false);
         text.setWrapText(false);
         text.setStyle("-fx-font-family: 'Consolas', 'monospace';");
         Dialog<Void> dialog = new Dialog<>();
         dialog.initOwner(CopybotMainUi.STAGE);
-        dialog.setTitle(ResourcesEngine.getString("plan.detail.title", item.getWorkItem().getNameDisplay()));
         dialog.setResizable(true);
         dialog.getDialogPane().setPrefSize(950, 560); // long target paths fit without scrolling
-        dialog.getDialogPane().setContent(text);
         dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
+        int[] index = {PlanViewModel.detailStart(items, clicked)};
+        Button previous = new Button("◀");
+        Button next = new Button("▶");
+        Label position = new Label();
+        Runnable display = () -> {
+            WorkItemExecution item = items.get(index[0]);
+            text.setText(shown.detailOf(item).map(detail -> PlanViewModel.detailText(item, detail)).orElse(""));
+            dialog.setTitle(ResourcesEngine.getString("plan.detail.title", item.getWorkItem().getNameDisplay()));
+            position.setText(ResourcesEngine.getString("plan.detail.position", index[0] + 1, items.size()));
+            previous.setDisable(index[0] == 0);
+            next.setDisable(index[0] == items.size() - 1);
+        };
+        previous.setOnAction(e -> {
+            index[0]--;
+            display.run();
+        });
+        next.setOnAction(e -> {
+            index[0]++;
+            display.run();
+        });
+        display.run();
+        if (items.size() > 1) {
+            HBox navigation = new HBox(8.0, previous, position, next);
+            navigation.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+            VBox content = new VBox(8.0, navigation, text);
+            VBox.setVgrow(text, javafx.scene.layout.Priority.ALWAYS);
+            dialog.getDialogPane().setContent(content);
+        } else {
+            dialog.getDialogPane().setContent(text);
+        }
         dialog.show();
     }
 

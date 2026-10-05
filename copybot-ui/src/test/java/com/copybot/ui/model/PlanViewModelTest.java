@@ -541,6 +541,23 @@ public class PlanViewModelTest {
     // ---- files ignored by the user ----
 
     @Test
+    public void thePlannedProcessingShowsTheAnalysedRowsOfTheSelectionFromTheClickedOne() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setProjection(new Projection.Projected(List.of(a.getWorkItem())));
+        WorkItemExecution notAnalysed = item("b.jpg", 1);
+        WorkItemExecution c = item("c.jpg", 1);
+        c.setProjection(new Projection.Projected(List.of(c.getWorkItem())));
+        List<WorkItemExecution> selection = List.of(a, notAnalysed, c);
+
+        List<WorkItemExecution> shown = PlanViewModel.detailable(selection);
+
+        assertEquals(List.of(a, c), shown, "whatever the clicked row");
+        assertEquals(1, PlanViewModel.detailStart(shown, c), "from the clicked row");
+        assertEquals(0, PlanViewModel.detailStart(shown, notAnalysed), "the first one when the clicked row has none");
+        assertEquals("2 / 2", ResourcesEngine.getString("plan.detail.position", 2, 2));
+    }
+
+    @Test
     public void onlyTheSkippedRowsNotAnalysedCanBeAnalysed() throws IOException {
         WorkItemExecution deferred = item("a.jpg", 1);
         deferred.deferAnalysis("before the cursor");
