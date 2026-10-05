@@ -93,8 +93,9 @@ public class PlanController {
     @FXML private FlowPane stepsFlow;
     @FXML private Label resumeModeLabel;
     @FXML private Label warningBanner;
-    @FXML private HBox resumeBox;
+    @FXML private VBox resumeBox;
     @FXML private Label resumeLabel;
+    @FXML private Label resumeCountLabel;
     @FXML private Hyperlink changeResumeLink;
     @FXML private ComboBox<Filter> filterCombo;
     @FXML private TableView<WorkItemExecution> itemsTable;
@@ -149,6 +150,7 @@ public class PlanController {
         itemsTable.setItems(rows);
         itemsTable.setPlaceholder(placeholder);
         nameColumn.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().getWorkItem().getNameDisplay()));
+        nameColumn.setCellFactory(column -> new NameCell());
         dateColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.dateText(c.getValue())));
         targetColumn.setCellValueFactory(c -> new SimpleStringProperty(targetText(c.getValue())));
         targetColumn.setCellFactory(column -> new TableCell<>() {
@@ -158,12 +160,23 @@ public class PlanController {
                 setText(empty ? null : text);
                 WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
                 Plan shown = targetsPlan();
-                String tooltip = item == null || shown == null ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
+                String tooltip = item == null || shown == null || !PlanViewModel.showsTarget(item)
+                        ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
                 setTooltip(tooltip == null ? null : new Tooltip(tooltip));
             }
         });
         sizeColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.sizeText(c.getValue())));
         statusColumn.setCellValueFactory(c -> new SimpleStringProperty(PlanViewModel.statusText(c.getValue())));
+        statusColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(String text, boolean empty) {
+                super.updateItem(text, empty);
+                setText(empty ? null : text);
+                WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
+                Optional<String> reason = item == null ? Optional.empty() : PlanViewModel.statusTooltip(item);
+                setTooltip(reason.map(Tooltip::new).orElse(null));
+            }
+        });
         itemsTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
         itemsTable.setRowFactory(table -> rowWithMenu());
 
@@ -364,7 +377,7 @@ public class PlanController {
 
     private String targetText(WorkItemExecution item) {
         Plan shown = targetsPlan();
-        return shown == null ? "" : PlanViewModel.targetText(shown.projectionOf(item));
+        return shown == null || !PlanViewModel.showsTarget(item) ? "" : PlanViewModel.targetText(shown.projectionOf(item));
     }
 
     /** The prepared plan, or while preparing the plan being prepared (its targets fill in as items are analysed). */
@@ -714,6 +727,55 @@ public class PlanController {
         return row;
     }
 
+    /** A magnifier, drawn (an emoji depends on the fonts of the system). */
+    private static final String MAGNIFIER = "M5 0a5 5 0 0 1 4.03 7.96l2.97 2.97-1.06 1.06-2.97-2.97A5 5 0 1 1 5 0zm0 1.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z";
+
+    /**
+     * The name, then on the right a magnifier opening the planned processing: shown only for the files analysed,
+     * so that it also tells which ones were (the files skipped at the listing have none).
+     */
+    private final class NameCell extends TableCell<WorkItemExecution, String> {
+        private final Label name = new Label();
+        private final Label magnifier = new Label();
+        private final HBox box = new HBox(4.0, name, magnifier);
+
+        NameCell() {
+            name.setMaxWidth(Double.MAX_VALUE);
+            HBox.setHgrow(name, javafx.scene.layout.Priority.ALWAYS);
+            javafx.scene.shape.SVGPath icon = new javafx.scene.shape.SVGPath();
+            icon.setContent(MAGNIFIER);
+            icon.setStyle("-fx-fill: #6b7280;");
+            magnifier.setGraphic(icon);
+            magnifier.setMinWidth(javafx.scene.layout.Region.USE_PREF_SIZE);
+            magnifier.setCursor(javafx.scene.Cursor.HAND);
+            magnifier.setTooltip(new Tooltip(ResourcesEngine.getString("plan.menu.detail")));
+            magnifier.setOnMouseClicked(e -> {
+                WorkItemExecution item = getTableRow() == null ? null : getTableRow().getItem();
+                if (item != null) {
+                    showDetail(item);
+                }
+                e.consume();
+            });
+            box.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
+        }
+
+        @Override
+        protected void updateItem(String text, boolean empty) {
+            super.updateItem(text, empty);
+            setText(null);
+            WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
+            if (item == null) {
+                setGraphic(null);
+                return;
+            }
+            name.setText(text);
+            boolean analysed = item.getProjection() != null; // detailOf is empty exactly without projection
+            magnifier.setVisible(analysed);
+            magnifier.setManaged(analysed);
+            setGraphic(box);
+        }
+    }
+
     /** The planned processing of this item, read only: available as soon as it is analysed, and after the copy. */
     private void showDetail(WorkItemExecution item) {
         Plan shown = targetsPlan();
@@ -995,6 +1057,8 @@ public class PlanController {
         Optional<String> resume = model.resumeText();
         resumeLabel.setText(resume.orElse(""));
         show(resumeBox, resume.isPresent());
+        resumeCountLabel.setText(model.resumeCountText().orElse(""));
+        show(resumeCountLabel, model.resumeCountText().isPresent());
         changeResumeLink.setDisable(!model.canChangeResumePoint());
 
         placeholder.setText(phase == Phase.NOT_PREPARED ? ResourcesEngine.getString("plan.placeholder") : "");

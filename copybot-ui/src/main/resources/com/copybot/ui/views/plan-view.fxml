@@ -46,13 +46,6 @@
                   <Label minWidth="130.0" style="-fx-text-fill: #6b7280;" text="%plan.card.last-run" />
                </children>
             </HBox>
-            <HBox fx:id="resumeBox" alignment="CENTER_LEFT" managed="false" spacing="6.0" visible="false">
-               <children>
-                  <Label minWidth="130.0" style="-fx-text-fill: #6b7280;" text="%plan.card.resume" />
-                  <Label fx:id="resumeLabel" />
-                  <Hyperlink fx:id="changeResumeLink" onAction="#onChangeResumeClick" text="%plan.resume.change" />
-               </children>
-            </HBox>
             <VBox fx:id="detailsBox" managed="false" spacing="8.0" visible="false">
                <children>
                   <Separator />
@@ -60,6 +53,21 @@
                   <Label fx:id="resumeModeLabel" style="-fx-text-fill: #6b7280;" />
                </children>
             </VBox>
+         </children>
+      </VBox>
+      <!-- the resume point decides what is copied: a banner of its own, outside the card -->
+      <VBox fx:id="resumeBox" managed="false" spacing="2.0" visible="false" style="-fx-background-color: #e8f1fb; -fx-border-color: #b6d4f2; -fx-border-radius: 6; -fx-background-radius: 6; -fx-padding: 6 10 6 10;">
+         <children>
+            <HBox alignment="CENTER_LEFT" spacing="6.0">
+               <children>
+                  <Label style="-fx-font-weight: bold; -fx-text-fill: #0b4a8b;" text="&#x21BB;" />
+                  <Label style="-fx-font-weight: bold; -fx-text-fill: #0b4a8b;" text="%plan.card.resume" />
+                  <Label fx:id="resumeLabel" style="-fx-font-weight: bold; -fx-text-fill: #0b4a8b;" />
+                  <Region HBox.hgrow="ALWAYS" />
+                  <Hyperlink fx:id="changeResumeLink" minWidth="-Infinity" onAction="#onChangeResumeClick" text="%plan.resume.change" />
+               </children>
+            </HBox>
+            <Label fx:id="resumeCountLabel" style="-fx-text-fill: #35597f;" />
          </children>
       </VBox>
       <Label fx:id="warningBanner" managed="false" maxWidth="Infinity" style="-fx-background-color: #fff3cd; -fx-text-fill: #664d03; -fx-padding: 6;" visible="false" wrapText="true" />

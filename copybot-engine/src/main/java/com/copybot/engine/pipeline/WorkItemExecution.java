@@ -22,6 +22,8 @@ public class WorkItemExecution {
     private volatile Set<String> waitingFor = Set.of();
     private volatile Throwable error;
     private volatile String skipReason;
+    /** SKIPPED because the resume point does not select it (its reason is the resume point, shown once by the UI). */
+    private volatile boolean skippedByResumePoint;
     /** What the process steps would produce, by their dry run; set at the end of the preparation (spec pattern-helper §4.3). */
     private volatile Projection projection;
 
@@ -152,8 +154,19 @@ public class WorkItemExecution {
     /** Not selected by the resume point, or skipped by the out step (e.g. already at the destination); the reason is shown to the user. */
     public void setSkipped(String reason) {
         this.skipReason = reason;
+        this.skippedByResumePoint = false;
         this.waitingFor = Set.of();
         this.status = ItemStatus.SKIPPED;
+    }
+
+    /** SKIPPED because the resume point in force does not select it (not by the out step nor by the user). */
+    public void setSkippedByResumePoint(String reason) {
+        setSkipped(reason);
+        this.skippedByResumePoint = true;
+    }
+
+    public boolean isSkippedByResumePoint() {
+        return status == ItemStatus.SKIPPED && skippedByResumePoint;
     }
 
     public String getSkipReason() {
@@ -190,6 +203,7 @@ public class WorkItemExecution {
      */
     public void setReady() {
         this.skipReason = null;
+        this.skippedByResumePoint = false;
         this.waitingFor = Set.of();
         this.status = ItemStatus.PENDING;
     }
@@ -215,7 +229,7 @@ public class WorkItemExecution {
     public void deferAnalysis(String skipReason) {
         markAnalysisDeferred();
         this.prepared = true;
-        setSkipped(skipReason);
+        setSkippedByResumePoint(skipReason);
     }
 
     /**

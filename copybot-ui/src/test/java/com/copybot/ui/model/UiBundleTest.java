@@ -30,7 +30,8 @@ public class UiBundleTest {
             "plan.resume-mode.destination", "plan.resume-mode.stateThenDestination",
             "plan.resume.all", "plan.resume.after", "plan.resume.from", "plan.resume.from-date",
             "plan.resume.source.NONE", "plan.resume.source.STATE", "plan.resume.source.DESTINATION",
-            "plan.resume.source.MANUAL", "plan.resume.change", "plan.placeholder",
+            "plan.resume.source.MANUAL", "plan.resume.change", "plan.resume.count.imported", "plan.resume.count.before",
+            "plan.placeholder",
             "plan.filter.ALL", "plan.filter.TO_COPY", "plan.filter.SKIPPED", "plan.filter.ERRORS",
             "plan.column.date", "plan.column.target", "plan.menu.resume-from-here", "plan.prepare", "plan.copy",
             "plan.menu.ignore", "plan.menu.unignore", "plan.menu.exclude", "plan.exclude.title",
@@ -114,10 +115,35 @@ public class UiBundleTest {
         }
     }
 
+    /** A \\u escape written without its backslash leaves its hex digits in the text ("Gi00f9"). */
+    @Test
+    public void theAccentedTextsAreDecoded() throws IOException {
+        assertEquals("Down", bundle("uiBundle.properties").getProperty("editor.down"));
+        assertEquals("Descendre", bundle("uiBundle_fr.properties").getProperty("editor.down"));
+        assertEquals("Giù", bundle("uiBundle_it.properties").getProperty("editor.down"));
+        for (String file : BUNDLES) {
+            Properties properties = bundle(file);
+            assertEquals("←", properties.getProperty("plan.back").substring(0, 1), file);
+            assertTrue(properties.getProperty("plan.resume.change").endsWith("…"), file);
+        }
+    }
+
     @Test
     public void everyKeyIsResolvedByTheEngine() {
         for (String key : KEYS) {
-            assertFalse(ResourcesEngine.getString(key, "a", "b", "c", "d", "e").startsWith("%"), key);
+            Object[] args = key.startsWith("plan.resume.count.") ? new Object[]{2} : new Object[]{"a", "b", "c", "d", "e"};
+            assertFalse(ResourcesEngine.getString(key, args).startsWith("%"), key);
+        }
+    }
+
+    /** The counts are formatted with a plural choice: singular and plural. */
+    @Test
+    public void theResumeCountsHaveTheirPlural() {
+        for (String key : List.of("plan.resume.count.imported", "plan.resume.count.before")) {
+            String one = ResourcesEngine.getString(key, 1);
+            String many = ResourcesEngine.getString(key, 803);
+            assertTrue(one.startsWith("1 "), one);
+            assertTrue(many.startsWith("803 "), many);
         }
     }
 }

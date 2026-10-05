@@ -191,6 +191,8 @@ public class MainExecutorResumeTest {
         assertEquals(ResourcesEngine.getString("resume.skip.state", "IMG_02.JPG", cursorDate), items.get(0).getSkipReason());
         assertTrue(items.stream().allMatch(WorkItemExecution::isPrepared), "the preparation progress is complete");
         assertTrue(items.get(0).isAnalysisDeferred());
+        assertTrue(items.get(0).isSkippedByResumePoint());
+        assertFalse(items.get(2).isSkippedByResumePoint(), "selected");
         assertNull(items.get(0).getProjection(), "not analysed: no dry run");
         assertFalse(items.get(2).isAnalysisDeferred());
     }
@@ -896,6 +898,7 @@ public class MainExecutorResumeTest {
         WorkItemExecution skipped = named(exec, "IMG_02.JPG");
         assertEquals(ItemStatus.SKIPPED, skipped.getStatus());
         assertEquals("identical to the destination", skipped.getSkipReason());
+        assertFalse(skipped.isSkippedByResumePoint(), "skipped by the out step");
         assertEquals(ItemStatus.DONE, named(exec, "IMG_01.JPG").getStatus());
     }
 

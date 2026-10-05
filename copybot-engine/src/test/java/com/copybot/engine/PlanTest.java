@@ -263,12 +263,14 @@ public class PlanTest {
         WorkItemExecution second = named(plan, "IMG_02.JPG");
         String cursorReason = first.getSkipReason();
         plan.ignore(List.of(first, second), null);
+        assertFalse(first.isSkippedByResumePoint(), "ignored by the user");
 
         plan.unignore(List.of(first, second), null);
 
         assertFalse(first.isIgnored());
         assertEquals(ItemStatus.SKIPPED, first.getStatus(), "before the cursor");
         assertEquals(cursorReason, first.getSkipReason());
+        assertTrue(first.isSkippedByResumePoint());
         assertEquals(ItemStatus.PENDING, second.getStatus());
 
         plan.ignore(List.of(first), ResumePoint.all());

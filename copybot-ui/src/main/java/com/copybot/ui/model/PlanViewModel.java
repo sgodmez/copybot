@@ -588,6 +588,32 @@ public final class PlanViewModel {
         return Optional.of(ResourcesEngine.getString(kind, key.name(), date, sourceText));
     }
 
+    /**
+     * The number of files the resume point in force skips, for the resume banner: "already imported" for a detected
+     * point, "before the chosen point" for a manual one; empty when it skips none.
+     */
+    public Optional<String> resumeCountText() {
+        if (resumeText().isEmpty()) {
+            return Optional.empty();
+        }
+        long count = items.stream().filter(WorkItemExecution::isSkippedByResumePoint).count();
+        if (count == 0) {
+            return Optional.empty();
+        }
+        String key = override != null ? "plan.resume.count.before" : "plan.resume.count.imported";
+        return Optional.of(ResourcesEngine.getString(key, count));
+    }
+
+    /** Only the files to copy (or copied, or in error) show their target: a skipped file is not written. */
+    public static boolean showsTarget(WorkItemExecution item) {
+        return item.getStatus() != ItemStatus.SKIPPED;
+    }
+
+    /** The reason of a file the resume point skips: its status only says "Skipped" (the header tells why). */
+    public static Optional<String> statusTooltip(WorkItemExecution item) {
+        return item.isSkippedByResumePoint() ? Optional.ofNullable(item.getSkipReason()) : Optional.empty();
+    }
+
     /** "To copy", "Waiting — resources", "Copying 42 %", "Copied", "Skipped — reason", "Error — message" (spec desktop-ui §2). */
     public static String statusText(WorkItemExecution item) {
         return switch (item.getStatus()) {
@@ -601,7 +627,7 @@ public final class PlanViewModel {
                         : ResourcesEngine.getString("item.status.RUNNING");
             }
             case DONE -> ResourcesEngine.getString("item.status.DONE");
-            case SKIPPED -> item.getSkipReason() == null || item.getSkipReason().isBlank()
+            case SKIPPED -> item.isSkippedByResumePoint() || item.getSkipReason() == null || item.getSkipReason().isBlank()
                     ? ResourcesEngine.getString("item.status.SKIPPED.no-reason")
                     : ResourcesEngine.getString("item.status.SKIPPED", item.getSkipReason());
             case ERROR -> ResourcesEngine.getString("item.status.ERROR", errorText(item.getError()));

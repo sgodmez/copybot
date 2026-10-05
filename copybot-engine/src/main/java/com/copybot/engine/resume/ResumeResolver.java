@@ -158,7 +158,7 @@ public final class ResumeResolver {
             } else if (point.selects(key.get())) {
                 item.setReady();
             } else {
-                item.setSkipped(skipReason(point, source));
+                item.setSkippedByResumePoint(skipReason(point, source));
             }
         }
     }

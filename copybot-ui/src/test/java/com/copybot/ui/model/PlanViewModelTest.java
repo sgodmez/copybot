@@ -424,6 +424,63 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void aFileSkippedByTheResumePointSaysSkippedOnlyItsReasonInTheTooltip() throws IOException {
+        WorkItemExecution byPoint = item("a.jpg", 1);
+        byPoint.setSkippedByResumePoint("Already imported (cursor: a.jpg)");
+        WorkItemExecution byOut = item("b.jpg", 1);
+        byOut.setSkipped("identical to the destination");
+
+        assertEquals(ResourcesEngine.getString("item.status.SKIPPED.no-reason"), PlanViewModel.statusText(byPoint),
+                "the resume point is told once, by the header");
+        assertEquals(Optional.of("Already imported (cursor: a.jpg)"), PlanViewModel.statusTooltip(byPoint));
+        assertTrue(PlanViewModel.statusText(byOut).contains("identical to the destination"), "its own reason");
+        assertEquals(Optional.empty(), PlanViewModel.statusTooltip(byOut));
+    }
+
+    @Test
+    public void onlyTheFilesNotSkippedShowTheirTarget() throws IOException {
+        WorkItemExecution pending = item("a.jpg", 1);
+        WorkItemExecution skipped = item("b.jpg", 1);
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution ignored = item("c.jpg", 1);
+        ignored.setIgnored("ignored by the user");
+        WorkItemExecution failed = item("d.jpg", 1);
+        failed.setError(new IllegalStateException("x"));
+
+        assertTrue(PlanViewModel.showsTarget(pending));
+        assertFalse(PlanViewModel.showsTarget(skipped));
+        assertFalse(PlanViewModel.showsTarget(ignored));
+        assertTrue(PlanViewModel.showsTarget(failed));
+    }
+
+    @Test
+    public void theResumeBannerCountsTheFilesTheResumePointSkips() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setSkippedByResumePoint("before");
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setSkippedByResumePoint("before");
+        WorkItemExecution c = item("c.jpg", 1);
+        c.setIgnored("ignored by the user");
+        WorkItemExecution d = item("d.jpg", 1);
+        PlanViewModel model = new PlanViewModel(false);
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, a, b, c, d);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "b.jpg")), ResumeSource.DESTINATION));
+        model.update(state, List.of(a, b, c, d));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.imported", 2)), model.resumeCountText());
+
+        model.setOverride(ResumePoint.from(new ItemKey(SHOT, "b.jpg")));
+        b.setReady();
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.before", 1)), model.resumeCountText(),
+                "a manual point: the files before it, not imported ones");
+
+        model.setOverride(ResumePoint.all());
+        a.setReady();
+        assertEquals(Optional.empty(), model.resumeCountText(), "nothing skipped by the point");
+    }
+
+    @Test
     public void theDateColumnShowsTheResumeKeyOrTheFileDate() throws IOException {
         WorkItemExecution item = item("a.jpg", 1);
         String local = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
