@@ -20,9 +20,21 @@ public record PipelineConfig(
         /**
          * Resume detection. Absent: no resume (every listed file is processed, no state file).
          */
-        ResumeConfig resume
+        ResumeConfig resume,
+
+        /**
+         * How far the plan checks the targets that already exist (spec conflict-check §1). Absent: quick.
+         */
+        ConflictCheck conflictCheck
 
         ) {
+
+    /** Without conflictCheck (quick). */
+    public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
+                          List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
+                          ResumeConfig resume) {
+        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, null);
+    }
 
     public ResumeMode resumeMode() {
         return resume == null ? ResumeMode.NONE : resume.effectiveMode();
@@ -30,5 +42,9 @@ public record PipelineConfig(
 
     public ExecutionMode executionMode() {
         return execution == null ? ExecutionMode.PLAN : execution;
+    }
+
+    public ConflictCheck conflictCheckMode() {
+        return conflictCheck == null ? ConflictCheck.QUICK : conflictCheck;
     }
 }

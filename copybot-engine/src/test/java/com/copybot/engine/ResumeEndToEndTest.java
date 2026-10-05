@@ -141,6 +141,22 @@ public class ResumeEndToEndTest {
         assertFalse(Files.exists(nas.resolve("IMG_02.JPG")), "a dry run writes nothing");
     }
 
+    /** The dry run tells which files to copy already have a target, and what the copy will do (spec conflict-check §5). */
+    @Test
+    public void dryRunTellsTheFilesWhoseTargetAlreadyExists() throws IOException {
+        Path pipeline = pipeline("state", "{name}");
+        assertEquals(0, cli(pipeline));
+        Files.delete(nas.resolve("IMG_02.JPG"));
+
+        String[] result = capture(pipeline, "--dry-run", "--all");
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy-existing", "IMG_01.JPG", "").strip()), result[1]);
+        assertTrue(result[1].contains(nas.resolve("IMG_01.JPG").toString()), "the message names the target: " + result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_02.JPG")), result[1]);
+        assertFalse(result[1].contains(ResourcesEngine.getString("cli.plan.copy-existing", "IMG_02.JPG", "").strip()), result[1]);
+    }
+
     @Test
     public void dryRunWithAllAfterACursorPrintsTheFilesSelectedAgainAndWritesNothing() throws IOException {
         Path pipeline = pipeline("state", "{name}");

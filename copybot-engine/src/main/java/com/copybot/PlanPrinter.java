@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.resources.ResourcesEngine;
 
 import java.io.PrintStream;
@@ -36,7 +37,12 @@ final class PlanPrinter {
             String line = switch (item.getStatus()) {
                 case ERROR -> ResourcesEngine.getString("cli.item.error", name, Copybot.message(item.getError()));
                 case SKIPPED -> ResourcesEngine.getString("cli.plan.skip", name, item.getSkipReason());
-                default -> ResourcesEngine.getString("cli.plan.copy", name);
+                default -> {
+                    TargetCheck check = item.getTargetCheck(); // spec conflict-check §5
+                    yield check != null && check.exists() && check.message() != null
+                            ? ResourcesEngine.getString("cli.plan.copy-existing", name, check.message())
+                            : ResourcesEngine.getString("cli.plan.copy", name);
+                }
             };
             out.println(line);
         }

@@ -1,5 +1,6 @@
 package com.copybot.engine;
 
+import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
@@ -17,11 +18,13 @@ import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.engine.resume.ResumeSource;
 import com.copybot.exception.CopybotException;
+import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
+import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
@@ -58,6 +61,8 @@ import java.util.function.Consumer;
  * size would overflow it. Large listings (100k+ files) are an explicit use case of this project.
  */
 public class MainExecutor implements Runnable {
+
+    private static final CopybotLogger LOG = CopybotLogger.getLogger(MainExecutor.class);
 
     /** Minimum delay between two watcher notifications (coalescing, see {@link #notifyWatcher()}). */
     static final long WATCHER_PERIOD_MILLIS = 100;
@@ -111,6 +116,8 @@ public class MainExecutor implements Runnable {
     private volatile boolean preparing;
     /** The skipped items to analyse too ({@link #requestAnalysis}). */
     private final Set<WorkItemExecution> requestedAnalysis = ConcurrentHashMap.newKeySet();
+    /** How far the plan checks the existing targets (spec conflict-check §1). */
+    private volatile ConflictCheck conflictCheck = ConflictCheck.QUICK;
     /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
     private boolean analysing;
     /** {@link #prepare()} runs and has not published PREPARED yet: {@link #cancelPreparation()} stops it. Guarded by phaseLock. */
@@ -181,6 +188,7 @@ public class MainExecutor implements Runnable {
         this.watcher = watcher;
         this.registry = registry;
         this.resume = resume;
+        this.conflictCheck = pipelineConfig.conflictCheckMode();
         this.state = new PipelineState(List.of());
         this.state.setRegistry(registry);
     }
@@ -710,6 +718,7 @@ public class MainExecutor implements Runnable {
             checkCancelled();
             if (exec.getStatus() != ItemStatus.ERROR && !exec.isAnalysisDeferred() && exec.getProjection() == null) {
                 exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
+                checkTarget(exec);
             }
         }
     }
@@ -1182,12 +1191,61 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    /** While preparing, the target of an item is known as soon as it is analysed (spec pattern-helper §4.3). */
-    private void projectEarly(WorkItemExecution exec) {
+    /**
+     * While preparing, the target of an item is known as soon as it is analysed (spec pattern-helper §4.3), and
+     * checked at once (spec conflict-check §2).
+     */
+    private void projectEarly(WorkItemExecution exec) throws InterruptedException {
         List<PipelineStep<IProcessAction>> steps = dryRunSteps;
         if (steps != null) {
             exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
+            checkTarget(exec);
         }
+    }
+
+    /**
+     * What the out step would find at the targets of a file to copy (spec conflict-check §4): each produced item is
+     * checked, the most severe result kept. Under the out step's footprint for this file (its destination disk),
+     * like a light write. A plugin failure is UNKNOWN, never an item error. Nothing for conflictCheck "none", a file
+     * not selected, or a dry run that projected nothing.
+     */
+    private void checkTarget(WorkItemExecution exec) throws InterruptedException {
+        ConflictCheck level = conflictCheck;
+        IOutAction out = findOutAction();
+        if (level == ConflictCheck.NONE || out == null || exec.getStatus() != ItemStatus.PENDING
+                || !(exec.getProjection() instanceof Projection.Projected projected)) {
+            return;
+        }
+        int outIndex = itemSteps.size() - 1;
+        Set<String> footprint = FootprintResolver.resolve(out, exec.getWorkItem(), itemSteps.get(outIndex).getConfig(), outIndex);
+        registry.acquireAll(footprint);
+        try {
+            if (cancelRequested) {
+                throw new InterruptedException("cancelled");
+            }
+            TargetCheck result = null;
+            for (WorkItem produced : projected.items()) {
+                result = TargetCheck.mostSevere(result, check(out, produced, level == ConflictCheck.FULL));
+            }
+            exec.setTargetCheck(result == null ? TargetCheck.UNKNOWN : result);
+        } finally {
+            registry.releaseAll(footprint);
+        }
+    }
+
+    private static TargetCheck check(IOutAction out, WorkItem produced, boolean compareContent) {
+        try {
+            TargetCheck check = out.checkTarget(produced, compareContent);
+            return check == null ? TargetCheck.UNKNOWN : check;
+        } catch (RuntimeException e) {
+            LOG.debug(e, "plan.check.failed", produced.getNameDisplay(), String.valueOf(e));
+            return TargetCheck.UNKNOWN;
+        }
+    }
+
+    /** How far the plan checks the existing targets; from the pipeline, quick without one. */
+    void setConflictCheck(ConflictCheck conflictCheck) {
+        this.conflictCheck = conflictCheck;
     }
 
     /**

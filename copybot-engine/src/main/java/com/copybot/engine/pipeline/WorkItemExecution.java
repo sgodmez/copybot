@@ -2,6 +2,7 @@ package com.copybot.engine.pipeline;
 
 import com.copybot.engine.Projection;
 import com.copybot.engine.resume.ItemKey;
+import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
 
@@ -26,6 +27,8 @@ public class WorkItemExecution {
     private volatile boolean skippedByResumePoint;
     /** What the process steps would produce, by their dry run; set at the end of the preparation (spec pattern-helper §4.3). */
     private volatile Projection projection;
+    /** What the out step would find at the target, checked by the plan (spec conflict-check §4); null when not checked. */
+    private volatile TargetCheck targetCheck;
 
     /**
      * Resume ordering key, frozen at the preparation barrier: a later step may replace the work item
@@ -195,6 +198,15 @@ public class WorkItemExecution {
 
     public void setProjection(Projection projection) {
         this.projection = projection;
+    }
+
+    /** What the out step would find at the target of this file (the most severe of its products); null when not checked. */
+    public TargetCheck getTargetCheck() {
+        return targetCheck;
+    }
+
+    public void setTargetCheck(TargetCheck targetCheck) {
+        this.targetCheck = targetCheck;
     }
 
     /**

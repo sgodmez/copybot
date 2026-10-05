@@ -448,6 +448,7 @@ public final class CopybotEngine implements AutoCloseable {
         checkResumeModeType(tree);
         JsonElement resume = tree.isJsonObject() ? tree.getAsJsonObject().get("resume") : null;
         checkEnumType(tree, "execution", "execution.unknown");
+        checkEnumType(tree, "conflictCheck", "conflict-check.unknown");
         checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
         checkEnumType(resume, "destinationMatch", "resume.destination-match.unknown");
         PipelineConfig pipelineConfig;
@@ -461,6 +462,7 @@ public final class CopybotEngine implements AutoCloseable {
         }
         checkResumeModeName(tree, pipelineConfig);
         checkEnumName(tree, "execution", pipelineConfig.execution(), "execution.unknown");
+        checkEnumName(tree, "conflictCheck", pipelineConfig.conflictCheck(), "conflict-check.unknown");
         checkEnumName(resume, "destinationCheck",
                 pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationCheck(),
                 "resume.destination-check.unknown");

@@ -3,6 +3,8 @@ package com.copybot.plugin.embedded.actions;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractActionWithConfig;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.TargetCheck;
+import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -18,8 +20,10 @@ import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -192,6 +196,67 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             throw missingKey(workItem, resolution);
         }
         return Optional.of(Path.of(resolution.text()));
+    }
+
+    /**
+     * What the write would find at the target (spec conflict-check §3), nothing written: quick reads the target's
+     * attributes once and compares the sizes; full makes the comparison and applies the policies of the write.
+     * A target it cannot resolve (missing key) or reach is UNKNOWN.
+     */
+    @Override
+    public TargetCheck checkTarget(WorkItem workItem, boolean compareContent) {
+        OutPattern.Resolution resolution = resolution(workItem);
+        if (!resolution.complete() && settings.onMissingKey() != FileWriteSettings.MissingKey.LITERAL) {
+            return TargetCheck.UNKNOWN; // the target column already tells why
+        }
+        Path target = Path.of(resolution.text());
+        try {
+            BasicFileAttributes existing;
+            try {
+                existing = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            } catch (NoSuchFileException e) {
+                return TargetCheck.free();
+            }
+            if (ConflictResolver.isSource(workItem, target)) {
+                return new TargetCheck(Kind.IDENTICAL, target, ResourcesEngine.getString("write.check.same-file"));
+            }
+            return compareContent ? fullCheck(workItem, target, existing) : quickCheck(workItem, target, existing);
+        } catch (IOException | RuntimeException e) {
+            return TargetCheck.UNKNOWN; // the copy meets it again, and reports it
+        }
+    }
+
+    private TargetCheck quickCheck(WorkItem workItem, Path target, BasicFileAttributes existing) throws IOException {
+        FileWriteSettings current = settings;
+        if (!existing.isDirectory() && existing.size() == FileComparison.sourceSize(workItem)) {
+            return new TargetCheck(Kind.SAME_SIZE, target, ResourcesEngine.getString("write.check.same-size",
+                    target, current.compare().jsonName(), policyText(current.ifIdentical()), policyText(current.ifDifferent())));
+        }
+        return new TargetCheck(Kind.DIFFERENT_SIZE, target,
+                ResourcesEngine.getString("write.check.different-size", target, policyText(current.ifDifferent())));
+    }
+
+    private TargetCheck fullCheck(WorkItem workItem, Path target, BasicFileAttributes existing) throws IOException {
+        FileWriteSettings current = settings;
+        // as ConflictResolver: a directory is never identical, and is never read
+        boolean identical = !existing.isDirectory() && FileComparison.identical(workItem, target, current.compare());
+        FileWriteSettings.Policy policy = identical ? current.ifIdentical() : current.ifDifferent();
+        String outcome = policyText(policy);
+        if (policy == FileWriteSettings.Policy.RENAME) {
+            try {
+                ConflictResolver.Decision decision = conflicts.resolve(workItem, target); // reads only
+                outcome = decision.isSkip() ? decision.skipReason()
+                        : ResourcesEngine.getString("write.check.renamed", decision.target().getFileName());
+            } catch (CopybotException e) {
+                outcome = e.getMessage(); // a later candidate with the policy "error"
+            }
+        }
+        return new TargetCheck(identical ? Kind.IDENTICAL : Kind.DIFFERENT, target,
+                ResourcesEngine.getString(identical ? "write.check.identical" : "write.check.different", target, outcome));
+    }
+
+    private static String policyText(FileWriteSettings.Policy policy) {
+        return ResourcesEngine.getString("write.check.policy." + policy.name());
     }
 
     /** From outPattern: a key before its last separator (spec execution-mode §2). */

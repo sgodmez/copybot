@@ -506,6 +506,22 @@ public class CopybotEngineTest {
         }
     }
 
+    /** An unknown or non-string conflictCheck is refused, never silently "quick" (spec conflict-check §1). */
+    @Test
+    public void anUnknownConflictCheckIsRefused() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("alpha.txt"), "alpha");
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            for (String check : List.of("\"fast\"", "1", "[]")) {
+                Path pipeline = pipeline("c.json", in, dir("out"), "file.write", ",\"conflictCheck\":" + check);
+                CopybotException prepare = assertThrows(CopybotException.class, () -> engine.prepare(pipeline, null), check);
+                assertTrue(prepare.getMessage().contains("quick"), check + " -> " + prepare.getMessage());
+            }
+            Path known = pipeline("k.json", in, dir("out"), "file.write", ",\"conflictCheck\":\"full\"");
+            assertEquals(PipelineStatus.PREPARED, engine.prepare(known, null).getState().getStatus());
+        }
+    }
+
     /** Any present, non-null mode that is not a string is an unknown resume mode, never "not a JSON". */
     @Test
     public void aNonStringResumeModeIsAnUnknownMode() throws Exception {

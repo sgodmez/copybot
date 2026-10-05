@@ -76,7 +76,7 @@ final class ConflictResolver {
     }
 
     /** The existing candidate is the item's own local file (same file key: also a hard link, or another letter case on Windows). */
-    private static boolean isSource(WorkItem item, Path candidate) throws IOException {
+    static boolean isSource(WorkItem item, Path candidate) throws IOException {
         Path source = FileComparison.localSource(item);
         return source != null && Files.exists(source, LinkOption.NOFOLLOW_LINKS) && Files.isSameFile(source, candidate);
     }

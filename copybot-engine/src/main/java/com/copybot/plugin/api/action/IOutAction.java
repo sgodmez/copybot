@@ -32,6 +32,21 @@ public interface IOutAction extends IAction {
     }
 
     /**
+     * What the write of this item would find at its target, told by the plan before the copy (spec conflict-check
+     * §3), without writing anything: free, or an existing target and what the copy will do with it. The default
+     * cannot tell ({@link TargetCheck#UNKNOWN}): existing plugins keep working, nothing is announced.
+     * <p>
+     * Same contract as {@link #resolveTarget}: thread-safe, free of side effects, callable while other items are
+     * written. A failure may be thrown: the engine takes it as {@link TargetCheck#UNKNOWN}.
+     *
+     * @param compareContent false: existence and size only, one access to the target; true: the action's own
+     *                       comparison, the one its write would make (may read the existing target)
+     */
+    default TargetCheck checkTarget(WorkItem workItem, boolean compareContent) {
+        return TargetCheck.UNKNOWN;
+    }
+
+    /**
      * Whether the directory of the targets ({@link #resolveTarget}) depends on the item: a fixed directory (e.g. a
      * pattern {@code out/{name}}) tells nothing about what was already imported, the resume from the destination then
      * selects every file. Empty when the action cannot tell (the default).
