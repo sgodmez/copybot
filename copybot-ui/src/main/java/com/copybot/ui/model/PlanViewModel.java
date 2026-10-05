@@ -786,9 +786,8 @@ public final class PlanViewModel {
 
     /** The resume mode of the header: "no resume", "cursor, then destination"...; the raw mode when unknown. */
     public static String resumeModeText(String mode) {
-        return mode == null
-                ? label("plan.resume-mode.absent", "")
-                : label("plan.resume-mode." + mode, mode);
+        // no resume block and mode "none" behave the same: one label
+        return mode == null ? label("plan.resume-mode.none", "none") : label("plan.resume-mode." + mode, mode);
     }
 
     /** The translation of a key built from a value, or that raw value when the bundle has no such key. */

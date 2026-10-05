@@ -168,6 +168,19 @@ public class PipelineDocumentTest {
     }
 
     @Test
+    public void modeNoneIsNoResumeLikeNoBlock() {
+        assertEquals(Optional.empty(), PipelineDocument.parse("{\"resume\":{\"mode\":\"none\"}}").resumeMode(),
+                "the same behaviour: one choice in the editor");
+        assertFalse(PipelineDocument.RESUME_MODES.contains("none"));
+
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        document.setResumeMode("none");
+        assertEquals(Optional.empty(), document.resumeMode());
+        assertFalse(document.toJson().contains("\"resume\""), "written as no resume block");
+        assertEquals(PlanViewModel.resumeModeText(null), PlanViewModel.resumeModeText("none"), "one label");
+    }
+
+    @Test
     public void noResumeRemovesTheBlockUnlessItHoldsOtherMembers() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
         document.setResumeMode("destination");

@@ -72,8 +72,11 @@ public final class PipelineDocument {
         }
     }
 
-    /** The resume modes, as written in the pipeline ("resume.mode"). */
-    public static final List<String> RESUME_MODES = List.of("none", "state", "destination", "stateThenDestination");
+    /**
+     * The resume modes, as written in the pipeline ("resume.mode"); "none" behaves like no resume block, so it is not
+     * one more choice: no resume is {@code null}.
+     */
+    public static final List<String> RESUME_MODES = List.of("state", "destination", "stateThenDestination");
 
     /** The mode of a "resume" block without mode (see {@code ResumeConfig.effectiveMode}). */
     private static final String DEFAULT_RESUME_MODE = "stateThenDestination";
@@ -262,14 +265,18 @@ public final class PipelineDocument {
 
     // ---- pipeline ----
 
-    /** The effective resume mode: empty without "resume" block, stateThenDestination for a block without mode. */
+    /**
+     * The effective resume mode: empty without "resume" block or with mode "none" (the same behaviour),
+     * stateThenDestination for a block without mode.
+     */
     public Optional<String> resumeMode() {
         JsonElement resume = root.get("resume");
         if (resume == null || !resume.isJsonObject()) {
             return Optional.empty();
         }
         JsonElement mode = resume.getAsJsonObject().get("mode");
-        return Optional.of(mode != null && mode.isJsonPrimitive() ? mode.getAsString() : DEFAULT_RESUME_MODE);
+        String effective = mode != null && mode.isJsonPrimitive() ? mode.getAsString() : DEFAULT_RESUME_MODE;
+        return "none".equals(effective) ? Optional.empty() : Optional.of(effective);
     }
 
     /**
@@ -277,6 +284,9 @@ public final class PipelineDocument {
      *             other members (then its mode becomes "none")
      */
     public void setResumeMode(String mode) {
+        if ("none".equals(mode)) {
+            mode = null; // the same behaviour as no resume block
+        }
         if (Objects.equals(mode, resumeMode().orElse(null))) {
             return;
         }
