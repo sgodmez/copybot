@@ -83,8 +83,10 @@ default TargetCheck checkTarget(WorkItem workItem, boolean compareContent)  // T
 - Pour chaque fichier projeté (`Projection.Projected`), chaque élément produit est vérifié ; le plus grave est gardé
   dans `WorkItemExecution.getTargetCheck()` (null tant que rien n'est vérifié). Filtré, non simulable ou en échec :
   pas de vérification.
-- Ressources : la vérification prend l'empreinte de l'étape de sortie pour ce fichier (`FootprintResolver` : son disque
-  de destination, son `maxConcurrency`), le temps de l'accès ; une pause la retient, un arrêt l'interrompt.
+- Ressources : la vérification ne prend que les disques des cibles (`FootprintResolver.forTargets` : les
+  `touchedPaths` de l'étape de sortie), pas le disque source qu'elle ne lit pas, le temps de l'accès ; elle garde le
+  ticket du fichier (`ResourceRegistry.ticket`), donc passe juste après son analyse et non après toutes les analyses
+  en file. Une pause la retient, un arrêt l'interrompt.
 - Une exception d'un plugin est attrapée : `UNKNOWN`.
 
 ## 5. Interface

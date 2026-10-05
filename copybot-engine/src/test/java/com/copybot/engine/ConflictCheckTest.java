@@ -9,6 +9,7 @@ import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeStateStore;
+import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.TargetCheck;
@@ -38,7 +39,7 @@ public class ConflictCheckTest {
     }
 
     /** Out step answering a check per name (FREE by default); the failing names throw. Records what it was asked. */
-    static final class CheckingOut extends FakeAction implements IOutAction {
+    static class CheckingOut extends FakeAction implements IOutAction {
         final Map<String, Kind> kinds;
         final Map<String, Boolean> asked = new ConcurrentHashMap<>();
         final Set<String> failing = ConcurrentHashMap.newKeySet();
@@ -107,6 +108,48 @@ public class ConflictCheckTest {
         assertEquals(Kind.FREE, named(exec, "IMG_01.JPG").getTargetCheck().kind());
         assertEquals(Map.of("IMG_01.JPG", false, "IMG_02.JPG", false, "IMG_03.JPG", false), out.asked,
                 "quick by default: no content comparison");
+    }
+
+    /** Analysis recording its order in a shared log. */
+    static final class LoggingAnalyze extends FakeAction implements IAnalyzeAction {
+        final List<String> log;
+
+        LoggingAnalyze(List<String> log) {
+            this.log = log;
+        }
+
+        @Override
+        public void doAnalyze(WorkItem item) {
+            log.add("analyse " + item.getNameDisplay());
+            try {
+                Thread.sleep(20); // reading the file: the other analyses have time to queue
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    @Test
+    public void aFileIsCheckedRightAfterItsAnalysisNotAfterEveryOtherAnalysis() {
+        List<String> log = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        CheckingOut out = new CheckingOut(Map.of()) {
+            @Override
+            public TargetCheck checkTarget(WorkItem item, boolean compareContent) {
+                log.add("check " + name(item));
+                return super.checkTarget(item, compareContent);
+            }
+        };
+        // one file at a time on the card, every analysis queued before the first one runs (not processed while listing)
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(tempDir, 20, null), emptyConfig())),
+                List.of(new PipelineStep<>(null, new LoggingAnalyze(log), emptyConfig()), new PipelineStep<>(null, out, emptyConfig())),
+                1, false, null, registry(Map.of("disk:*", 1)), new ResumeContext(ResumeMode.STATE, store()));
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertTrue(log.indexOf("check IMG_01.JPG") < log.indexOf("analyse IMG_20.JPG"),
+                "the first file is checked before the last one is analysed, got " + log);
     }
 
     @Test

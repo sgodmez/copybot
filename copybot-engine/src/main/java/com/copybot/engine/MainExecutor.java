@@ -718,7 +718,7 @@ public class MainExecutor implements Runnable {
             checkCancelled();
             if (exec.getStatus() != ItemStatus.ERROR && !exec.isAnalysisDeferred() && exec.getProjection() == null) {
                 exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
-                checkTarget(exec);
+                checkTarget(exec, registry.ticket());
             }
         }
     }
@@ -1169,7 +1169,7 @@ public class MainExecutor implements Runnable {
                 exec.setReady();
                 if (!finalPhase) {
                     exec.markPrepared(); // stopped at the preparation barrier: analysed
-                    projectEarly(exec);
+                    projectEarly(exec, ticket);
                 }
             }
         } catch (InterruptedException e) {
@@ -1201,30 +1201,30 @@ public class MainExecutor implements Runnable {
      * While preparing, the target of an item is known as soon as it is analysed (spec pattern-helper §4.3), and
      * checked at once (spec conflict-check §2).
      */
-    private void projectEarly(WorkItemExecution exec) throws InterruptedException {
+    private void projectEarly(WorkItemExecution exec, long ticket) throws InterruptedException {
         List<PipelineStep<IProcessAction>> steps = dryRunSteps;
         if (steps != null) {
             exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
-            checkTarget(exec);
+            checkTarget(exec, ticket); // its own place in the queue: right after its analysis, not after all of them
         }
     }
 
     /**
      * What the out step would find at the targets of a file to copy (spec conflict-check §4): each produced item is
-     * checked, the most severe result kept. Under the out step's footprint for this file (its destination disk),
-     * like a light write. A plugin failure is UNKNOWN, never an item error. Nothing for conflictCheck "none", a file
-     * not selected, or a dry run that projected nothing.
+     * checked, the most severe result kept. Under the disks of the out step's targets (not the source disk), with
+     * the file's ticket so that it follows its analysis. A plugin failure is UNKNOWN, never an item error. Nothing
+     * for conflictCheck "none", a file not selected, or a dry run that projected nothing.
      */
-    private void checkTarget(WorkItemExecution exec) throws InterruptedException {
+    private void checkTarget(WorkItemExecution exec, long ticket) throws InterruptedException {
         ConflictCheck level = conflictCheck;
         IOutAction out = findOutAction();
         if (level == ConflictCheck.NONE || out == null || exec.getStatus() != ItemStatus.PENDING
                 || !(exec.getProjection() instanceof Projection.Projected projected)) {
             return;
         }
-        int outIndex = itemSteps.size() - 1;
-        Set<String> footprint = FootprintResolver.resolve(out, exec.getWorkItem(), itemSteps.get(outIndex).getConfig(), outIndex);
-        registry.acquireAll(footprint);
+        // the destination only: the check reads nothing on the source, it must not hold the card the analyses read
+        Set<String> footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
+        registry.acquireAll(footprint, ticket);
         try {
             if (cancelRequested) {
                 throw new InterruptedException("cancelled");

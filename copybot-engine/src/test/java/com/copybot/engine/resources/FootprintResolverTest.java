@@ -68,6 +68,16 @@ public class FootprintResolverTest {
     }
 
     @Test
+    public void aLookAtTheTargetsTakesTheirDisksOnlyNotTheSourceDisk() throws IOException {
+        WorkItem item = new WorkItem(Files.createFile(tempDir.resolve("photo.jpg")));
+
+        assertEquals(Set.of(), FootprintResolver.forTargets(new FakeAction(Set.of("cpu"), Set.of()), item),
+                "nothing touched: nothing held, not even the disk of the file");
+        assertEquals(Set.of(DiskResolver.diskResource(tempDir)),
+                FootprintResolver.forTargets(new FakeAction(Set.of("cpu"), Set.of(tempDir.resolve("nas"))), item));
+    }
+
+    @Test
     public void listingFootprintUsesNullItem() {
         FakeAction action = new FakeAction(Set.of(), Set.of(tempDir));
         Set<String> footprint = FootprintResolver.forListing(action, config(null, null));

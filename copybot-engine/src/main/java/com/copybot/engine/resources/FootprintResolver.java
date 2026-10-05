@@ -24,6 +24,18 @@ public final class FootprintResolver {
         return merge(action, null, config, -1);
     }
 
+    /**
+     * Footprint of a look at the targets of an item (the plan's conflict check): the disks the action touches, not
+     * the disk of the item itself, which the look does not read.
+     */
+    public static Set<String> forTargets(IAction action, WorkItem item) {
+        Set<String> footprint = new HashSet<>();
+        for (Path path : action.touchedPaths(item)) {
+            footprint.add(DiskResolver.diskResource(path));
+        }
+        return footprint;
+    }
+
     /** Footprint of one step execution for one item. */
     public static Set<String> resolve(IAction action, WorkItem item, PipelineStepConfig config, int stepIndex) {
         return merge(action, item, config, stepIndex);
