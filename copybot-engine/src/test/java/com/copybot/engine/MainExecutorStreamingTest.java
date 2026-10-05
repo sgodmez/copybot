@@ -375,6 +375,45 @@ public class MainExecutorStreamingTest {
         assertEquals(List.of(ResourcesEngine.getString("execution.streaming.dichotomy")), exec.getState().getWarnings());
     }
 
+    /** An out step that cannot tell where it writes (no target path at all). */
+    static final class BlindOut extends MainExecutorResumeTest.FakeAction implements IOutAction {
+        final Set<String> written = ConcurrentHashMap.newKeySet();
+
+        @Override
+        public void writeItem(WorkItem item) {
+            written.add(item.getNameDisplay());
+        }
+    }
+
+    @Test
+    public void inDestinationModeAFileWhoseTargetTheOutStepCannotTellIsAnError() {
+        BlindOut out = new BlindOut();
+        MainExecutor exec = executorWith(in(2, 0), new RecordingAnalyze(), out,
+                destination(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE, DestinationMatch.DIRECTORY), null);
+
+        exec.stream();
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertTrue(out.written.isEmpty(), "never copied without checking the destination");
+        for (WorkItemExecution item : exec.getState().getWorkItems()) {
+            assertEquals(ItemStatus.ERROR, item.getStatus());
+            assertEquals(ResourcesEngine.getString("resume.error.no-target"), item.getError().getMessage());
+        }
+    }
+
+    @Test
+    public void stateThenDestinationCopiesAFileWhoseTargetTheOutStepCannotTellWithAWarning() {
+        BlindOut out = new BlindOut();
+        MainExecutor exec = executorWith(in(2, 0), new RecordingAnalyze(), out,
+                destination(ResumeMode.STATE_THEN_DESTINATION, DestinationCheck.EVERY_FILE, DestinationMatch.DIRECTORY), null);
+
+        exec.stream();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_01.JPG", "IMG_02.JPG"), out.written, "like the preparation: everything selected");
+        assertEquals(List.of(ResourcesEngine.getString("resume.warn.no-target")), exec.getState().getWarnings(), "once");
+    }
+
     @Test
     public void stateThenDestinationWithoutCursorStreamsCheckingEveryFile() throws IOException {
         nasDay(2);

@@ -52,6 +52,8 @@ public final class ResumeResolver {
     /** While streaming with an out step that cannot tell whether its directory varies: the target directories seen (2 at most). */
     private final Set<Path> seenDirectories = new HashSet<>();
     private final AtomicBoolean fixedDirectoryWarned = new AtomicBoolean();
+    /** While streaming: the out step told no target path (mode stateThenDestination), warned once. */
+    private final AtomicBoolean noTargetWarned = new AtomicBoolean();
     /** The warnings found while streaming, not yet published ({@link #drainWarnings}). */
     private final Queue<String> streamingWarnings = new ConcurrentLinkedQueue<>();
 
@@ -388,8 +390,19 @@ public final class ResumeResolver {
      */
     public Optional<String> checkDestination(WorkItemExecution item) {
         Optional<Path> target = target(item);
-        if (target == null || target.isEmpty()) {
-            return Optional.empty(); // it cannot be checked: copied
+        if (target == null) {
+            // the out step tells no target path at all, like the preparation: an error in mode destination, the
+            // destination ignored (everything selected, one warning) when it is only the fallback of the cursor
+            if (mode == ResumeMode.DESTINATION) {
+                throw CopybotException.ofResource("resume.error.no-target");
+            }
+            if (noTargetWarned.compareAndSet(false, true)) {
+                streamingWarnings.add(ResourcesEngine.getString("resume.warn.no-target"));
+            }
+            return Optional.empty();
+        }
+        if (target.isEmpty()) {
+            return Optional.empty(); // no value for a pattern expression: the out step decides (its onMissingKey)
         }
         Path checked = checkedPath(target.get());
         if (match == DestinationMatch.DIRECTORY && !directoryVaries(checked)) {
