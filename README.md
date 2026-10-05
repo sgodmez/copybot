@@ -57,8 +57,8 @@ libraries.
   at the destination: with a dichotomy for a large tree, or file by file.
   The detected resume point is only a proposal: you can resume from a
   chosen file or day, or copy everything (`--from-file`, `--from-date`,
-  `--all`). Files skipped this way are not even analysed, unless you bring
-  them back.
+  `--all`), even before preparing: a chosen point acts like a cursor there.
+  Files skipped this way are not even analysed, unless you bring them back.
 - **Destination patterns.** `{captureDate.Y}/{captureDate.m}/{name}` with
   fallbacks (`{captureDate.Y|lastModified.Y|'unknown'}`) and a policy for a
   missing key. The editor's **pattern helper** reads a real sample from your
@@ -75,8 +75,9 @@ libraries.
   so actions do not deadlock and none waits forever. Two folders on the same
   physical disk can share one budget.
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
-  A stopped run does not move the cursor. In the CLI, Ctrl+C cancels and
-  leaves 5 s for writes in progress to finish.
+  A stopped run does not move the cursor. A preparation stopped after its
+  listing can be resumed from any listed file, without listing again. In the
+  CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
 - **Desktop application.** The home screen lists recent pipelines and how
   their last run went. The plan view has filters and a context menu: resume
   from here, ignore, see the planned processing, analyse. The pipeline editor

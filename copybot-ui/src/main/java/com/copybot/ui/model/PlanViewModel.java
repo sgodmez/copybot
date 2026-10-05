@@ -122,6 +122,13 @@ public final class PlanViewModel {
     private Set<WorkItemExecution> selectedAtStart = Set.of();
     /** The files being analysed in {@link Phase#ANALYSING}, empty otherwise. */
     private List<WorkItemExecution> analysing = List.of();
+    /**
+     * The resume point chosen for the next preparations (spec manual-point §3), null for the automatic one: a
+     * choice of the user, kept by {@link #reset()} and {@link #startPreparing()}.
+     */
+    private ResumePoint chosenPoint;
+    /** The last preparation listed every input to its end (a stopped one can then be continued). */
+    private boolean listingComplete;
 
     /** The "execution" of the pipeline (spec execution-mode §5): what the button does. */
     private ExecutionMode executionMode = ExecutionMode.PLAN;
@@ -175,6 +182,18 @@ public final class PlanViewModel {
         clear();
         phase = Phase.PREPARING;
         listing = true; // until the engine says otherwise
+        autoExecuteArmed = true;
+    }
+
+    /**
+     * A stopped preparation continues from a resume point (spec manual-point §2): the rows stay (nothing is listed
+     * again), the view is locked as for a preparation, the automatic execution armed if checked.
+     */
+    public void startContinuing() {
+        phase = Phase.PREPARING;
+        listing = false;
+        analysing = List.of();
+        override = null;
         autoExecuteArmed = true;
     }
 
@@ -232,6 +251,7 @@ public final class PlanViewModel {
     public void update(PipelineState state, List<WorkItemExecution> ordered) {
         status = state.getStatus();
         listing = state.isListingInProgress();
+        listingComplete = state.isListingComplete();
         proposal = state.getResumeProposal();
         failure = state.getFailure();
         preparationFailed = state.isPreparationFailed();
@@ -424,9 +444,40 @@ public final class PlanViewModel {
         return phase == Phase.PREPARED && proposal != null;
     }
 
-    /** The resume point "Resume from here" gives for this row: from its key, included. */
+    public void setChosenPoint(ResumePoint chosenPoint) {
+        this.chosenPoint = chosenPoint;
+    }
+
+    /** The resume point chosen for the next preparations, null for the automatic one. */
+    public ResumePoint chosenPoint() {
+        return chosenPoint;
+    }
+
+    /**
+     * "change…" outside a prepared plan (spec manual-point §3): the point of the next preparation, or the point a
+     * stopped preparation continues from; not while the engine is busy.
+     */
+    public boolean canChooseResumePoint() {
+        return !isActive() && phase != Phase.PREPARED;
+    }
+
+    /** A preparation stopped after its listing: "Resume from here", "Analyse" and a chosen point continue it. */
+    public boolean canContinue() {
+        return phase == Phase.PREPARE_STOPPED && listingComplete;
+    }
+
+    /**
+     * The resume point "Resume from here" gives for this row: from its key, included (the date known at the listing
+     * on a stopped preparation, before the resume order freezes it).
+     */
     public Optional<ResumePoint> resumePointFrom(WorkItemExecution item) {
-        return canChangeResumePoint() ? item.getResumeKey().map(ResumePoint::from) : Optional.empty();
+        if (canChangeResumePoint()) {
+            return item.getResumeKey().map(ResumePoint::from); // the key the resume order froze (none: no date)
+        }
+        if (canContinue()) {
+            return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).map(ResumePoint::from);
+        }
+        return Optional.empty();
     }
 
     /** Among these rows, those with a planned processing: the analysed ones (any phase). */
@@ -441,6 +492,11 @@ public final class PlanViewModel {
 
     /** Among these rows, those "Analyse" analyses: a prepared plan, skipped rows not analysed (skipped at the listing). */
     public List<WorkItemExecution> analysable(List<WorkItemExecution> rows) {
+        if (canContinue()) {
+            // a stopped preparation (spec manual-point §2): the rows the stop left unanalysed, or skipped unanalysed
+            return rows.stream().filter(i -> i.getStatus() == ItemStatus.PENDING && (!i.isPrepared() || i.isAnalysisDeferred())
+                    || i.isAnalysisDeferred() && i.getStatus() == ItemStatus.SKIPPED).toList();
+        }
         if (phase != Phase.PREPARED) {
             return List.of();
         }
@@ -726,36 +782,50 @@ public final class PlanViewModel {
     public String statusLine() {
         return switch (phase) {
             case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
-            case PREPARE_STOPPED -> ResourcesEngine.getString("plan.prepare-stopped", items.size(), analysedOfListed());
+            // stopped while listing: files may be missing, it cannot be continued (spec manual-point §2)
+            case PREPARE_STOPPED -> listingComplete
+                    ? ResourcesEngine.getString("plan.prepare-stopped", items.size(), analysedOfListed())
+                    : ResourcesEngine.getString("plan.prepare-stopped.listing", items.size());
             case FINISHED -> ResourcesEngine.getString("plan.finished", pipelineStatusText(status),
                     copied(), counts().skipped(), counts().errors());
             default -> "";
         };
     }
 
-    /** "Resume: after DSC_4821 (28/09 17:42) [cursor]", empty before a preparation. */
+    /**
+     * "Resume: after DSC_4821 (28/09 17:42) [cursor]"; before a prepared plan (spec manual-point §3), the point the
+     * next preparation will use: the chosen one, or "automatic". Empty during and after an execution without proposal.
+     */
     public Optional<String> resumeText() {
-        if (proposal == null || phase == Phase.NOT_PREPARED || phase == Phase.PREPARING || phase == Phase.PREPARE_FAILED
+        if (phase == Phase.NOT_PREPARED || phase == Phase.PREPARING || phase == Phase.PREPARE_FAILED
                 || phase == Phase.PREPARE_STOPPED) {
+            return Optional.of(chosenPoint == null ? ResourcesEngine.getString("plan.resume.auto")
+                    : pointText(chosenPoint, ResumeSource.MANUAL));
+        }
+        if (proposal == null) {
             return Optional.empty();
         }
         ResumePoint point = override != null ? override : proposal.point();
         ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
+        return Optional.of(pointText(point, source));
+    }
+
+    private static String pointText(ResumePoint point, ResumeSource source) {
         String sourceText = label("plan.resume.source." + source.name(), source.name());
         ItemKey key = point.key();
         if (point.kind() == ResumePoint.Kind.NOT_AT_DESTINATION) {
-            return Optional.of(ResourcesEngine.getString("plan.resume.missing", sourceText));
+            return ResourcesEngine.getString("plan.resume.missing", sourceText);
         }
         if (point.kind() == ResumePoint.Kind.ALL || key == null) {
-            return Optional.of(ResourcesEngine.getString("plan.resume.all", sourceText));
+            return ResourcesEngine.getString("plan.resume.all", sourceText);
         }
         if (key.name().isEmpty()) {
-            return Optional.of(ResourcesEngine.getString("plan.resume.from-date",
-                    DAY.format(key.date().atZone(ZoneId.systemDefault())), sourceText));
+            return ResourcesEngine.getString("plan.resume.from-date",
+                    DAY.format(key.date().atZone(ZoneId.systemDefault())), sourceText);
         }
         String date = RESUME_DATE.format(key.date().atZone(ZoneId.systemDefault()));
         String kind = point.kind() == ResumePoint.Kind.AFTER ? "plan.resume.after" : "plan.resume.from";
-        return Optional.of(ResourcesEngine.getString(kind, key.name(), date, sourceText));
+        return ResourcesEngine.getString(kind, key.name(), date, sourceText);
     }
 
     /**
@@ -770,7 +840,10 @@ public final class PlanViewModel {
         if (count == 0) {
             return Optional.empty();
         }
-        String key = override != null ? "plan.resume.count.before" : "plan.resume.count.imported";
+        // a manual point: an override, the proposal of a chosen point, or the chosen point of a preparation running
+        boolean manual = override != null || proposal != null && proposal.source() == ResumeSource.MANUAL
+                || proposal == null && chosenPoint != null;
+        String key = manual ? "plan.resume.count.before" : "plan.resume.count.imported";
         return Optional.of(ResourcesEngine.getString(key, count));
     }
 

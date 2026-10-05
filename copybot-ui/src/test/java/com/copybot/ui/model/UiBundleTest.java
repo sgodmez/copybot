@@ -43,7 +43,7 @@ public class UiBundleTest {
             "plan.warning.nothing-to-copy",
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
             "plan.analysing", "plan.analysing-again", "plan.resolving",
-            "plan.prepare-failed", "plan.prepare-stopped", "plan.finished", "item.status.NOT_ANALYSED", "plan.copy.left-out",
+            "plan.prepare-failed", "plan.prepare-stopped", "plan.prepare-stopped.listing", "plan.resume.auto", "resume.dialog.auto", "resume.dialog.choose-file", "plan.finished", "item.status.NOT_ANALYSED", "plan.copy.left-out",
             "helper.loading", "helper.cancel", "helper.retry", "helper.sample", "helper.truncated", "helper.ok",
             "helper.missing", "helper.effect.error", "helper.effect.skip", "helper.effect.literal", "helper.expand",
             "helper.collapse", "helper.column.file", "helper.column.path", "helper.test-file", "helper.analysing",

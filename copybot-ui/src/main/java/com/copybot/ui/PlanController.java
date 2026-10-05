@@ -228,7 +228,9 @@ public class PlanController {
         plan = null;
         preparingPlan = null;
         execution = null;
+        ResumePoint chosen = model.chosenPoint(); // a choice of the user: kept when the pipeline is read again
         model = new PlanViewModel();
+        model.setChosenPoint(chosen);
         model.setFilter(filterCombo.getValue() == null ? Filter.ALL : filterCombo.getValue());
         autoExecuteBox.setSelected(false);
         summary = null;
@@ -446,13 +448,14 @@ public class PlanController {
         preparingPlan = null;
         execution = null;
         model.startPreparing();
+        ResumePoint chosen = model.chosenPoint(); // like a cursor at that point (spec manual-point §1)
         refresh();
         try {
             CopybotMainUi.executor.submit(() -> {
                 Plan prepared;
                 try {
                     prepared = CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state),
-                            started -> Platform.runLater(() -> onPrepareStarted(op, started)));
+                            started -> Platform.runLater(() -> onPrepareStarted(op, started)), chosen);
                 } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
                     Platform.runLater(() -> onPrepareRefused(op, hold, t));
                     return;
@@ -496,6 +499,7 @@ public class PlanController {
         plan = null;
         preparingPlan = null;
         model.startStreaming();
+        ResumePoint chosen = model.chosenPoint();
         CompletableFuture<Execution> future = new CompletableFuture<>();
         execution = future;
         refresh();
@@ -503,7 +507,7 @@ public class PlanController {
             CopybotMainUi.executor.submit(() -> {
                 Execution run;
                 try {
-                    run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state));
+                    run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state), chosen);
                 } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
                     future.completeExceptionally(t);
                     Platform.runLater(() -> onPrepareRefused(op, hold, t));
@@ -771,7 +775,7 @@ public class PlanController {
         MenuItem fromHere = new MenuItem(ResourcesEngine.getString("plan.menu.resume-from-here"));
         fromHere.setOnAction(e -> {
             if (row.getItem() != null) {
-                model.resumePointFrom(row.getItem()).ifPresent(this::applyResumePoint);
+                model.resumePointFrom(row.getItem()).ifPresent(this::resumeFrom);
             }
         });
         MenuItem detail = new MenuItem();
@@ -786,7 +790,7 @@ public class PlanController {
         exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
         ContextMenu menu = new ContextMenu(fromHere, detail, analyse, new SeparatorMenuItem(), ignore, unignore, exclude);
         menu.setOnShowing(e -> {
-            fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty());
+            fromHere.setDisable(row.getItem() == null || busy() || model.resumePointFrom(row.getItem()).isEmpty());
             List<WorkItemExecution> selected = selectedRows();
             boolean busy = busy();
             // both apply to the selection, whatever the clicked row
@@ -1008,9 +1012,77 @@ public class PlanController {
 
     @FXML
     protected void onChangeResumeClick() {
-        if (plan != null && model.canChangeResumePoint()) {
-            resumeDialog().showAndWait().ifPresent(this::applyResumePoint);
+        if (busy()) {
+            return;
         }
+        if (plan != null && model.canChangeResumePoint()) {
+            resumeDialog(false).showAndWait().ifPresent(choice -> applyResumePoint(choice.point()));
+        } else if (model.canChooseResumePoint()) {
+            // before a prepared plan (spec manual-point §3): continues a stopped preparation, or is kept for the next one
+            resumeDialog(true).showAndWait().ifPresent(choice -> {
+                if (choice.point() != null && model.canContinue()) {
+                    continuePreparation(choice.point());
+                } else {
+                    model.setChosenPoint(choice.point());
+                    refresh();
+                }
+            });
+        }
+    }
+
+    /** "Resume from here": on a prepared plan, a manual point; on a stopped preparation, its continuation. */
+    private void resumeFrom(ResumePoint point) {
+        if (model.canContinue()) {
+            continuePreparation(point);
+        } else {
+            applyResumePoint(point);
+        }
+    }
+
+    /**
+     * Continues the stopped preparation from this point, without listing again (spec manual-point §2): like Prepare,
+     * in the background, the watcher of the preparation feeding the rows (same operation token), Stop stopping it;
+     * the point becomes the chosen one. Its end is handled like the end of a preparation.
+     */
+    private void continuePreparation(ResumePoint point) {
+        if (plan == null || busy() || !model.canContinue()) {
+            return;
+        }
+        Object op = operation;
+        Object hold = hold();
+        Plan stopped = plan;
+        preparingPlan = stopped;
+        model.setChosenPoint(point);
+        model.startContinuing();
+        refresh();
+        try {
+            CopybotMainUi.executor.submit(() -> {
+                try {
+                    CopybotMainUi.ENGINE.continuePreparation(stopped, point);
+                } catch (Throwable t) { // refused (engine busy or closed, not continuable), or an Error
+                    Platform.runLater(() -> onContinueRefused(op, hold, stopped, t));
+                    return;
+                }
+                Platform.runLater(() -> onPrepared(op, hold, stopped));
+            });
+        } catch (RejectedExecutionException e) {
+            onContinueRefused(op, hold, stopped, e); // the application is closing
+        }
+    }
+
+    /** The continuation was refused or failed unexpectedly: the view goes back to the stopped preparation. */
+    private void onContinueRefused(Object op, Object hold, Plan stopped, Throwable failure) {
+        release(hold);
+        if (op == operation && plan == stopped) {
+            preparingPlan = null;
+            model.update(stopped.getState(), stopped.getOrderedItems());
+        }
+        refresh();
+        PopinUtil.showError(asException(failure));
+    }
+
+    /** A choice of the resume dialog: a point, or null for the automatic one. */
+    private record ResumeChoice(ResumePoint point) {
     }
 
     /** In memory on the prepared, idle plan: the statuses are recomputed, nothing is executed. */
@@ -1097,17 +1169,22 @@ public class PlanController {
         }
     }
 
-    /** Everything / from a date / from a file of the plan. */
-    private Dialog<ResumePoint> resumeDialog() {
-        Dialog<ResumePoint> dialog = new Dialog<>();
+    /**
+     * Everything / from a date / from a file of the plan; with {@code withAuto} (before a prepared plan, spec
+     * manual-point §3) also "Automatic", and a file chosen on disk when no file is listed yet.
+     */
+    private Dialog<ResumeChoice> resumeDialog(boolean withAuto) {
+        Dialog<ResumeChoice> dialog = new Dialog<>();
         dialog.initOwner(CopybotMainUi.STAGE);
         dialog.setTitle(ResourcesEngine.getString("resume.dialog.title"));
         ToggleGroup group = new ToggleGroup();
+        RadioButton auto = new RadioButton(ResourcesEngine.getString("resume.dialog.auto"));
         RadioButton all = new RadioButton(ResourcesEngine.getString("resume.dialog.all"));
         RadioButton fromDate = new RadioButton(ResourcesEngine.getString("resume.dialog.date"));
         RadioButton fromFile = new RadioButton(ResourcesEngine.getString("resume.dialog.file"));
-        List.of(all, fromDate, fromFile).forEach(b -> b.setToggleGroup(group));
-        all.setSelected(true);
+        List.of(auto, all, fromDate, fromFile).forEach(b -> b.setToggleGroup(group));
+        ResumePoint current = withAuto ? model.chosenPoint() : null;
+        (withAuto && current == null ? auto : all).setSelected(true);
         DatePicker date = new DatePicker(LocalDate.now());
         // the keys themselves, "name (date)": two files of the same name (counter rollover) stay distinct
         ComboBox<ItemKey> file = new ComboBox<>();
@@ -1122,16 +1199,50 @@ public class PlanController {
                 return null; // not editable
             }
         });
-        plan.getOrderedItems().stream()
-                .map(WorkItemExecution::getResumeKey)
+        // the listed files (a prepared plan, a stopped preparation): their keys, the date known at the listing
+        model.items().stream()
+                .map(item -> item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())))
                 .flatMap(Optional::stream)
+                .sorted()
                 .forEach(file.getItems()::add);
         if (!file.getItems().isEmpty()) {
             file.setValue(file.getItems().getFirst());
         }
+        if (current != null && current.kind() == ResumePoint.Kind.FROM && current.key() != null) {
+            if (current.key().name().isEmpty()) {
+                fromDate.setSelected(true);
+                date.setValue(LocalDate.ofInstant(current.key().date(), ZoneId.systemDefault()));
+            } else {
+                fromFile.setSelected(true);
+                if (!file.getItems().contains(current.key())) {
+                    file.getItems().addFirst(current.key());
+                }
+                file.setValue(current.key());
+            }
+        }
+        // nothing listed yet: a file chosen on disk gives the key the listing will give it
+        Button chooseFile = new Button(ResourcesEngine.getString("resume.dialog.choose-file"));
+        chooseFile.setOnAction(e -> {
+            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+            java.io.File chosen = chooser.showOpenDialog(dialog.getDialogPane().getScene().getWindow());
+            if (chosen != null) {
+                try {
+                    ItemKey key = Plan.fromFile(chosen.toPath()).key();
+                    file.getItems().addFirst(key);
+                    file.setValue(key);
+                } catch (RuntimeException ex) {
+                    PopinUtil.showError(ex);
+                }
+            }
+        });
         date.disableProperty().bind(fromDate.selectedProperty().not());
         file.disableProperty().bind(fromFile.selectedProperty().not());
-        VBox content = new VBox(8, all, new HBox(8, fromDate, date), new HBox(8, fromFile, file));
+        chooseFile.disableProperty().bind(fromFile.selectedProperty().not());
+        VBox content = new VBox(8);
+        if (withAuto) {
+            content.getChildren().add(auto);
+        }
+        content.getChildren().addAll(all, new HBox(8, fromDate, date), new HBox(8, fromFile, file, chooseFile));
         dialog.getDialogPane().setContent(content);
         dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
         Node ok = dialog.getDialogPane().lookupButton(ButtonType.OK);
@@ -1141,13 +1252,16 @@ public class PlanController {
             if (button != ButtonType.OK) {
                 return null;
             }
+            if (auto.isSelected()) {
+                return new ResumeChoice(null);
+            }
             if (fromDate.isSelected()) {
-                return Plan.fromDate(date.getValue());
+                return new ResumeChoice(Plan.fromDate(date.getValue()));
             }
             if (fromFile.isSelected()) {
-                return ResumePoint.from(file.getValue());
+                return new ResumeChoice(ResumePoint.from(file.getValue()));
             }
-            return ResumePoint.all();
+            return new ResumeChoice(ResumePoint.all());
         });
         return dialog;
     }
@@ -1194,7 +1308,7 @@ public class PlanController {
         Optional<String> conflicts = model.conflictText();
         conflictLabel.setText(conflicts.orElse(""));
         show(conflictLabel, conflicts.isPresent());
-        changeResumeLink.setDisable(!model.canChangeResumePoint());
+        changeResumeLink.setDisable(busy || !model.canChangeResumePoint() && !model.canChooseResumePoint());
 
         placeholder.setText(phase == Phase.NOT_PREPARED ? ResourcesEngine.getString("plan.placeholder") : "");
         List<WorkItemExecution> visible = model.visibleItems();

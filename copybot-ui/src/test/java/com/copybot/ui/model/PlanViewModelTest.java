@@ -107,7 +107,10 @@ public class PlanViewModelTest {
         assertFalse(model.canCopy());
         assertFalse(model.canStop());
         assertEquals(List.of(), model.items());
-        assertEquals(Optional.empty(), model.resumeText());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText(),
+                "the resume point can be chosen before preparing (spec manual-point §3)");
+        assertTrue(model.canChooseResumePoint());
+        assertFalse(model.canChangeResumePoint(), "nothing prepared to change");
     }
 
     @Test
@@ -220,8 +223,9 @@ public class PlanViewModelTest {
         assertFalse(model.canStop());
         assertFalse(model.canChangeResumePoint());
         assertFalse(model.consumeAutoExecute(), "a stopped preparation never starts the copy");
-        assertTrue(model.resumeText().isEmpty());
-        assertEquals(ResourcesEngine.getString("plan.prepare-stopped", 2, 1), model.statusLine());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText());
+        assertFalse(model.canContinue(), "stopped while listing (the state says the listing is not complete)");
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped.listing", 2), model.statusLine());
     }
 
     @Test
@@ -1274,5 +1278,95 @@ public class PlanViewModelTest {
                 "listed, its analysis not run (preparing, or the preparation stopped)");
         listed.markPrepared();
         assertEquals(ResourcesEngine.getString("item.status.PENDING"), PlanViewModel.statusText(listed));
+    }
+
+    // ---- a chosen resume point acts like a cursor there (spec manual-point §3) ----
+
+    @Test
+    public void aPointChosenBeforePreparingIsShownAndKeptByThePreparation() {
+        PlanViewModel model = new PlanViewModel();
+        ResumePoint chosen = ResumePoint.from(new ItemKey(SHOT, "DSC01694.JPG"));
+
+        model.setChosenPoint(chosen);
+
+        assertEquals(chosen, model.chosenPoint());
+        String text = model.resumeText().orElseThrow();
+        assertTrue(text.contains("DSC01694.JPG"), text);
+        assertTrue(text.contains(ResourcesEngine.getString("plan.resume.source.MANUAL")), text);
+        model.startPreparing();
+        assertEquals(chosen, model.chosenPoint(), "the next preparations use it too");
+        assertEquals(Optional.of(text), model.resumeText(), "shown while preparing");
+        model.reset();
+        assertEquals(chosen, model.chosenPoint());
+
+        model.setChosenPoint(null);
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText());
+    }
+
+    @Test
+    public void thePreparedPlanOfAChosenPointCountsTheFilesBeforeIt() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setSkippedByResumePoint("before the chosen point");
+        WorkItemExecution b = item("b.jpg", 1);
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, a, b);
+        state.setResumeProposal(proposal(ResumePoint.from(new ItemKey(SHOT, "b.jpg")), ResumeSource.MANUAL));
+
+        model.update(state, List.of(a, b));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.before", 1)), model.resumeCountText());
+    }
+
+    private PlanViewModel stopped(boolean listingComplete, WorkItemExecution... items) {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.CANCELLED, items);
+        state.setListingComplete(listingComplete);
+        model.update(state, List.of());
+        return model;
+    }
+
+    @Test
+    public void aPreparationStoppedAfterItsListingCanBeResumedFromARowOrAnalysed() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        WorkItemExecution notAnalysed = item("b.jpg", 1);
+        PlanViewModel model = stopped(true, analysed, notAnalysed);
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertTrue(model.canContinue());
+        assertEquals(Optional.of(ResumePoint.from(new ItemKey(SHOT, "b.jpg"))), model.resumePointFrom(notAnalysed),
+                "from the date known at the listing");
+        assertEquals(List.of(notAnalysed), model.analysable(List.of(analysed, notAnalysed)), "only what is not analysed");
+        assertTrue(model.canChooseResumePoint());
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped", 2, 1), model.statusLine());
+    }
+
+    @Test
+    public void aPreparationStoppedWhileListingCannotBeResumedAndSaysWhy() throws IOException {
+        WorkItemExecution listed = item("a.jpg", 1);
+        PlanViewModel model = stopped(false, listed);
+
+        assertFalse(model.canContinue());
+        assertEquals(Optional.empty(), model.resumePointFrom(listed));
+        assertEquals(List.of(), model.analysable(List.of(listed)));
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped.listing", 1), model.statusLine());
+        assertTrue(model.canChooseResumePoint(), "a point can still be chosen for the next preparation");
+    }
+
+    @Test
+    public void continuingAStoppedPreparationKeepsTheRowsAndCanBeStopped() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        PlanViewModel model = stopped(true, analysed, item("b.jpg", 1));
+
+        model.startContinuing();
+
+        assertEquals(Phase.PREPARING, model.phase());
+        assertEquals(2, model.items().size(), "nothing is listed again: the rows stay");
+        assertTrue(model.canStop());
+        assertFalse(model.canChooseResumePoint());
+        assertFalse(model.canContinue());
     }
 }
