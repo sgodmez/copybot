@@ -31,6 +31,7 @@ public final class ResumeResolver {
     private final IOutAction out;
 
     private Optional<ItemKey> previousCursor = Optional.empty();
+    private boolean cursorRead;
 
     /**
      * @param store state file, unused when mode is NONE
@@ -62,13 +63,36 @@ public final class ResumeResolver {
         if (mode == ResumeMode.NONE) {
             return everything(List.of());
         }
-        previousCursor = store.readCursor();
+        readCursorOnce();
         return switch (mode) {
             case STATE -> fromState().orElseGet(() -> everything(List.of()));
             case DESTINATION -> fromDestination(ordered, true);
             case STATE_THEN_DESTINATION -> fromState().orElseGet(() -> fromDestination(ordered, false));
             case NONE -> throw new IllegalStateException("unreachable");
         };
+    }
+
+    /**
+     * The resume point known before the listing: after the state file cursor, in the modes that start from it
+     * when there is one. An item it does not select can be skipped as soon as it is listed (its key, the file
+     * modification date, comes with the listing): {@link #propose} proposes that same point.
+     *
+     * @return empty when the point depends on the listed items (no cursor, mode none or destination)
+     * @throws CopybotException the state file cannot be understood
+     */
+    public Optional<ResumePoint> listingPoint() {
+        if (mode != ResumeMode.STATE && mode != ResumeMode.STATE_THEN_DESTINATION) {
+            return Optional.empty();
+        }
+        readCursorOnce();
+        return previousCursor.map(ResumePoint::after);
+    }
+
+    private void readCursorOnce() {
+        if (!cursorRead) {
+            previousCursor = store.readCursor();
+            cursorRead = true;
+        }
     }
 
     /**
@@ -177,7 +201,7 @@ public final class ResumeResolver {
     }
 
     /** Only for an item the point does not select: never for ALL, which selects everything (hence a key). */
-    private static String skipReason(ResumePoint point, ResumeSource source) {
+    public static String skipReason(ResumePoint point, ResumeSource source) {
         String date = DISPLAY_DATE.format(point.key().date());
         if (point.key().name().isEmpty()) {
             // a resume point chosen by date only (--from-date): no file name to show

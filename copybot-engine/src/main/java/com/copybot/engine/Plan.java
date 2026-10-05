@@ -113,7 +113,7 @@ public final class Plan {
             return TargetProjection.NONE;
         }
         Projection projection = item.getProjection();
-        if (projection == null && executor.isPreparing()) { // not analysed yet
+        if (projection == null && (executor.isPreparing() || item.isAnalysisDeferred())) { // not analysed (yet)
             return TargetProjection.NONE;
         }
         if (projection == null) { // not prepared (error before the barrier): the item as it is

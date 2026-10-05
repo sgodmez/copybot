@@ -9,6 +9,7 @@ import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.resources.FootprintResolver;
 import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumePoint;
@@ -97,6 +98,12 @@ public class MainExecutor implements Runnable {
     private volatile List<PipelineStep<IProcessAction>> dryRunSteps;
     /** From the start of {@link #prepare()} until it returns. */
     private volatile boolean preparing;
+
+    /**
+     * While preparing, the resume point known before the listing (see {@link ResumeResolver#listingPoint}): the
+     * items it does not select are skipped as soon as they are listed, without analysis. null otherwise.
+     */
+    private volatile ResumePoint listingPoint;
 
     private ResumeResolver resolver;
     private ResumeProposal proposal;
@@ -369,6 +376,8 @@ public class MainExecutor implements Runnable {
             phaseEnd = barrierIndex;
             finalPhase = false;
             dryRunSteps = processSteps();
+            resolver = new ResumeResolver(resume.mode(), resume.store(), findOutAction());
+            listingPoint = resolver.listingPoint().orElse(null);
             runListings();
             commitPhase();
             if (listingFailed.get()) {
@@ -376,7 +385,6 @@ public class MainExecutor implements Runnable {
                 return;
             }
             orderedItems = ResumeResolver.order(state.getWorkItems());
-            resolver = new ResumeResolver(resume.mode(), resume.store(), findOutAction());
             proposal = resolver.propose(orderedItems);
             state.setResumeProposal(proposal);
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
@@ -388,6 +396,7 @@ public class MainExecutor implements Runnable {
             onPhaseFailed(e, true);
         } finally {
             dryRunSteps = null;
+            listingPoint = null;
             state.setListingInProgress(false);
             endPhase();
             preparing = false;
@@ -422,7 +431,7 @@ public class MainExecutor implements Runnable {
         List<PipelineStep<IProcessAction>> steps = processSteps();
         for (WorkItemExecution exec : orderedItems) {
             checkCancelled();
-            if (exec.getStatus() != ItemStatus.ERROR && exec.getProjection() == null) {
+            if (exec.getStatus() != ItemStatus.ERROR && !exec.isAnalysisDeferred() && exec.getProjection() == null) {
                 exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
             }
         }
@@ -483,7 +492,8 @@ public class MainExecutor implements Runnable {
             finalPhase = true;
             for (WorkItemExecution exec : orderedItems) {
                 if (exec.getStatus() == ItemStatus.PENDING) {
-                    submitItem(exec, barrierIndex, itemSteps.size());
+                    // an item skipped at the listing, selected again by a manual point, is analysed first
+                    submitItem(exec, exec.isAnalysisDeferred() ? 0 : barrierIndex, itemSteps.size());
                 }
             }
             awaitCompletion();
@@ -745,8 +755,12 @@ public class MainExecutor implements Runnable {
             throw new PhaseStopped(); // woken by the pause cancel() lifted: emit nothing more
         }
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
+        skipIfBeforeTheListingPoint(exec);
         state.getWorkItems().add(exec);
         notifyWatcher();
+        if (exec.isAnalysisDeferred()) {
+            return;
+        }
         try {
             submitItem(exec, 0, phaseEnd);
         } catch (RejectedExecutionException e) {
@@ -755,6 +769,21 @@ public class MainExecutor implements Runnable {
                 throw new PhaseStopped();
             }
             throw e;
+        }
+    }
+
+    /**
+     * Skips an item the resume point known before the listing does not select, without analysing it (its key is
+     * frozen now, the resolver applies the same point to it at the end of the preparation).
+     */
+    private void skipIfBeforeTheListingPoint(WorkItemExecution exec) {
+        ResumePoint point = listingPoint;
+        if (point == null) {
+            return;
+        }
+        exec.setResumeKey(ItemKey.of(exec.getWorkItem()).orElse(null));
+        if (exec.getResumeKey().filter(key -> !point.selects(key)).isPresent()) {
+            exec.deferAnalysis(ResumeResolver.skipReason(point, ResumeSource.STATE));
         }
     }
 

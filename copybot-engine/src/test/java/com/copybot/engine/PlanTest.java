@@ -144,6 +144,17 @@ public class PlanTest {
     }
 
     @Test
+    public void anItemSkippedAtTheListingHasNoTargetNorDetail() {
+        Plan plan = prepared(new TargetOut(null), 1);
+        WorkItemExecution old = named(plan, "IMG_01.JPG");
+
+        assertEquals(TargetProjection.NONE, plan.projectionOf(old), "not analysed: its target is not known");
+        assertTrue(plan.detailOf(old).isEmpty());
+        plan.preview(ResumePoint.all());
+        assertEquals(TargetProjection.NONE, plan.projectionOf(old), "selected again, still not analysed");
+    }
+
+    @Test
     public void theCountersFollowTheResumePoint() {
         Plan plan = prepared(new TargetOut(null), 1);
 

@@ -29,7 +29,7 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
         try (InputStream is = item.openInputStream()) {
             metadata = ImageMetadataReader.readMetadata(is);
         } catch (ImageProcessingException e) {
-            return; // unsupported format: no capture date, resume falls back on the file date
+            return; // unsupported format: no capture date
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "plugin.metadata-extractor.extract.error.io", item.getSourceLocationDisplay());
         }
@@ -58,8 +58,7 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
             return Optional.empty();
         }
         Date date = directory.getDate(tag);
-        // an unset creation time (0) decodes to the QuickTime epoch 1904-01-01: such a date would
-        // sort the file before any resume cursor and skip it forever, so the file date is used instead
+        // an unset creation time (0) decodes to the QuickTime epoch 1904-01-01: not a capture date
         return Optional.ofNullable(date).map(Date::toInstant).filter(instant -> instant.isAfter(Instant.EPOCH));
     }
 }

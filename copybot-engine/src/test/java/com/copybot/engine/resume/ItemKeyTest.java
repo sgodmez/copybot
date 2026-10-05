@@ -42,13 +42,21 @@ public class ItemKeyTest {
     }
 
     @Test
-    public void ofPrefersCaptureDateAndFallsBackOnLastModified() throws Exception {
+    public void ofUsesTheFileModificationDateOnly() throws Exception {
         WorkItem item = new WorkItem(Files.createFile(tempDir.resolve("IMG_1.JPG")));
         item.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2026-09-29T08:00:00Z"));
-        assertEquals(new ItemKey(Instant.parse("2026-09-29T08:00:00Z"), "IMG_1.JPG"), ItemKey.of(item).orElseThrow());
-
         item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, Instant.parse("2026-09-28T15:42:10Z"));
-        assertEquals(new ItemKey(Instant.parse("2026-09-28T15:42:10Z"), "IMG_1.JPG"), ItemKey.of(item).orElseThrow());
+
+        assertEquals(new ItemKey(Instant.parse("2026-09-29T08:00:00Z"), "IMG_1.JPG"), ItemKey.of(item).orElseThrow(),
+                "known as soon as the file is listed, whatever the analyses");
+    }
+
+    @Test
+    public void aCaptureDateAloneGivesNoKey() throws Exception {
+        WorkItem item = new WorkItem(Files.createFile(tempDir.resolve("IMG_2.JPG")));
+        item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, Instant.parse("2026-09-28T15:42:10Z"));
+
+        assertTrue(ItemKey.of(item).isEmpty());
     }
 
     @Test

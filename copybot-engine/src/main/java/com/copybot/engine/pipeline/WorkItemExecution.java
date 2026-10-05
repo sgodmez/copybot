@@ -39,6 +39,8 @@ public class WorkItemExecution {
     private volatile boolean forkFailed;
     /** True once the preparation is over for this item: it reached the preparation barrier or failed before it. */
     private volatile boolean prepared;
+    /** Skipped by the resume cursor as soon as it was listed: the steps before the barrier did not run for it. */
+    private volatile boolean analysisDeferred;
     /** Left out of this run by the user (SKIPPED): a resume point no longer selects it. */
     private volatile boolean ignored;
     /** The local file this item was created from, null for a remote or temporary one. */
@@ -200,6 +202,21 @@ public class WorkItemExecution {
     /** True once the preparation is over for this item: the progress of the analyses. */
     public boolean isPrepared() {
         return prepared;
+    }
+
+    /**
+     * Called by the preparation for an item the resume cursor skips as soon as it is listed: its preparation is
+     * over without its analyses. A manual resume point may select it again: the execution then analyses it.
+     */
+    public void deferAnalysis(String skipReason) {
+        this.analysisDeferred = true;
+        this.prepared = true;
+        setSkipped(skipReason);
+    }
+
+    /** True when the steps before the barrier have not run for this item (see {@link #deferAnalysis}). */
+    public boolean isAnalysisDeferred() {
+        return analysisDeferred;
     }
 
     public WorkStatus getWorkStatus() {

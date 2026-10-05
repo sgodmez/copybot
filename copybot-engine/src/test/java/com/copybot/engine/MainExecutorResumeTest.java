@@ -174,6 +174,68 @@ public class MainExecutorResumeTest {
     }
 
     @Test
+    public void theItemsBeforeTheStateCursorAreSkippedAtTheListingWithoutBeingAnalysed() {
+        store().writeCursor(day(2));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = executor(4, analyze, new RecordingOut(null), ResumeMode.STATE);
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_03.JPG", "IMG_04.JPG"), analyze.seen, "the old files are never read");
+        List<WorkItemExecution> items = exec.getOrderedItems();
+        assertEquals(List.of(ItemStatus.SKIPPED, ItemStatus.SKIPPED, ItemStatus.PENDING, ItemStatus.PENDING),
+                items.stream().map(WorkItemExecution::getStatus).toList());
+        String cursorDate = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+                .withZone(java.time.ZoneId.systemDefault()).format(day(2).date());
+        assertEquals(ResourcesEngine.getString("resume.skip.state", "IMG_02.JPG", cursorDate), items.get(0).getSkipReason());
+        assertTrue(items.stream().allMatch(WorkItemExecution::isPrepared), "the preparation progress is complete");
+        assertTrue(items.get(0).isAnalysisDeferred());
+        assertNull(items.get(0).getProjection(), "not analysed: no dry run");
+        assertFalse(items.get(2).isAnalysisDeferred());
+    }
+
+    @Test
+    public void stateThenDestinationAlsoSkipsAtTheListingWhenThereIsACursor() {
+        store().writeCursor(day(2));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = executor(3, analyze, new RecordingOut(null), ResumeMode.STATE_THEN_DESTINATION);
+
+        exec.prepare();
+
+        assertEquals(Set.of("IMG_03.JPG"), analyze.seen);
+        assertEquals(ResumeSource.STATE, exec.getState().getResumeProposal().source());
+    }
+
+    @Test
+    public void withoutCursorEveryItemIsAnalysed() {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = executor(3, analyze, new RecordingOut(null), ResumeMode.STATE);
+
+        exec.prepare();
+
+        assertEquals(3, analyze.seen.size());
+        assertTrue(exec.getOrderedItems().stream().noneMatch(WorkItemExecution::isAnalysisDeferred));
+    }
+
+    @Test
+    public void aManualPointSelectingItemsSkippedAtTheListingAnalysesThemAtTheExecution() {
+        store().writeCursor(day(3));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        RecordingOut out = new RecordingOut(null);
+        MainExecutor exec = executor(4, analyze, out, ResumeMode.STATE);
+
+        exec.prepare();
+        assertEquals(Set.of("IMG_04.JPG"), analyze.seen);
+        exec.execute(ResumePoint.from(day(2)));
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(Set.of("IMG_02.JPG", "IMG_03.JPG", "IMG_04.JPG"), analyze.seen, "analysed before being copied");
+        assertEquals(Set.of("IMG_02.JPG", "IMG_03.JPG", "IMG_04.JPG"), out.written);
+        assertEquals(day(4), store().readCursor().orElseThrow());
+    }
+
+    @Test
     public void modeNoneNeverWritesAStateFile() {
         RecordingOut out = new RecordingOut(null);
         MainExecutor exec = executor(2, new RecordingAnalyze(), out, ResumeMode.NONE);
