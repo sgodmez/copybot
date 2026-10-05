@@ -1119,7 +1119,8 @@ public class MainExecutor implements Runnable {
     }
 
     private void submitItem(WorkItemExecution exec, int fromStep, int toStep) {
-        submitTask(() -> runItem(exec, fromStep, toStep));
+        long ticket = registry.ticket(); // its place among the resource waiters: the order of submission
+        submitTask(() -> runItem(exec, fromStep, toStep, ticket));
     }
 
     /**
@@ -1127,6 +1128,11 @@ public class MainExecutor implements Runnable {
      * out step skipped ends SKIPPED with its reason.
      */
     private void runItem(WorkItemExecution exec, int fromStep, int toStep) {
+        runItem(exec, fromStep, toStep, registry.ticket());
+    }
+
+    /** @param ticket the item's place among the resource waiters ({@link ResourceRegistry#ticket()}) */
+    private void runItem(WorkItemExecution exec, int fromStep, int toStep, long ticket) {
         try {
             if (!processWhileListing) {
                 listingGate.await();
@@ -1137,7 +1143,7 @@ public class MainExecutor implements Runnable {
                 Set<String> footprint = FootprintResolver.resolve(step.getAction(), exec.getWorkItem(), step.getConfig(), i);
                 exec.setWaitingResources(i, footprint);
                 notifyWatcher();
-                registry.acquireAll(footprint);
+                registry.acquireAll(footprint, ticket);
                 if (cancelRequested) {
                     // cancel() lifts a pause before the tasks are shut down: the waiters it grants must not
                     // start their step

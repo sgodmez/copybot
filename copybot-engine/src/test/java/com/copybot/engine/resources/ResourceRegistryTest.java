@@ -468,4 +468,39 @@ public class ResourceRegistryTest {
         reg.resume();
         assertTrue(reg.snapshot().stream().noneMatch(ResourceSnapshot::paused));
     }
+
+    /**
+     * Thousands of items submitted at once on one disk (a preparation in mode destination): each one is served
+     * close to its submission rank. Waking every waiter at each grant on an unfair monitor let late arrivals lose
+     * the race to enter the queue for hundreds of grants: rows left "waiting" amid analysed ones.
+     */
+    @Test
+    @Timeout(60)
+    public void manyWaitersOnOneResourceAreServedInSubmissionOrder() throws InterruptedException {
+        ResourceRegistry reg = registry(Map.of("disk:card", 2));
+        Set<String> disk = Set.of("disk:card");
+        int count = 3000;
+        java.util.concurrent.ConcurrentLinkedQueue<Integer> served = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        try (java.util.concurrent.ExecutorService tasks = java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor()) {
+            for (int i = 0; i < count; i++) {
+                int rank = i;
+                long ticket = reg.ticket(); // taken in submission order, like MainExecutor does
+                tasks.submit(() -> {
+                    reg.acquireAll(disk, ticket);
+                    served.add(rank);
+                    Thread.sleep(1); // the analysis of a file
+                    reg.releaseAll(disk);
+                    return null;
+                });
+            }
+        }
+
+        int position = 0;
+        int worst = 0;
+        for (int rank : served) {
+            worst = Math.max(worst, position++ - rank);
+        }
+        assertEquals(count, served.size());
+        assertTrue(worst < 100, "an item was served " + worst + " places after its submission rank");
+    }
 }

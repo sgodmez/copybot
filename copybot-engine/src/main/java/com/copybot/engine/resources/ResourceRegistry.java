@@ -1,16 +1,18 @@
 package com.copybot.engine.resources;
 
-import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
@@ -23,7 +25,7 @@ import java.util.stream.Collectors;
  * indexed by resource name, so releasing a resource nobody waits for costs nothing and the
  * grant scan stops as soon as no free capacity can serve anyone. Starvation age is evaluated
  * lazily at each grant decision — time passing cannot by itself make a new grant possible,
- * so no periodic polling is needed.
+ * so no periodic polling is needed. Only the granted waiter is woken up, not every waiter.
  */
 public final class ResourceRegistry {
 
@@ -45,18 +47,34 @@ public final class ResourceRegistry {
         long since;
         int bypassCount;
         boolean granted;
+        /** Signalled when this waiter is granted: only it wakes up, not every waiter. */
+        final Condition turn;
+        final long ticket;
+        long arrival;
 
-        Waiter(Set<String> resources, long since) {
+        Waiter(Set<String> resources, long since, Condition turn, long ticket) {
             this.resources = resources;
             this.since = since;
+            this.turn = turn;
+            this.ticket = ticket;
         }
     }
 
     private final ResourceSettings settings;
     private final Map<String, ResourceCount> counts = new HashMap<>();
-    private final Deque<Waiter> waiters = new ArrayDeque<>(); // arrival order
+    /**
+     * The waiters in ticket order (see {@link #ticket()}), then arrival order. Not the arrival order alone: thousands of
+     * tasks submitted at once do not reach acquireAll in the order they were submitted (the virtual threads start in
+     * any order under load), and a late one queued behind all the others left a row waiting amid analysed ones.
+     */
+    private final TreeSet<Waiter> waiters = new TreeSet<>(Comparator.<Waiter>comparingLong(w -> w.ticket)
+            .thenComparingLong(w -> w.arrival));
+    private final AtomicLong nextTicket = new AtomicLong();
+    /** Arrival rank, guarded by lock: breaks ties between waiters given the same ticket. */
+    private long nextArrival;
     private final Map<String, Set<Waiter>> waitersByResource = new HashMap<>();
-    private final Object lock = new Object();
+    private final ReentrantLock lock = new ReentrantLock();
+    private final Condition notPaused = lock.newCondition();
 
     /** While true nothing is granted (see {@link #pause()}). Guarded by lock. */
     private boolean paused;
@@ -87,7 +105,8 @@ public final class ResourceRegistry {
      * (changing the capacity of an in-flight resource would make {@code used > capacity} possible).
      */
     public void registerCapacity(String name, int capacity) {
-        synchronized (lock) {
+        lock.lock();
+        try {
             String canonical = settings.canonical(name);
             ResourceCount existing = counts.get(canonical);
             if (existing == null || existing.used == 0) {
@@ -98,6 +117,8 @@ public final class ResourceRegistry {
                     grantEligibleWaiters(); // a widened capacity may unblock waiters
                 }
             }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -106,11 +127,14 @@ public final class ResourceRegistry {
      * until {@link #resume()}. Permits already held are unaffected and are released normally.
      */
     public void pause() {
-        synchronized (lock) {
+        lock.lock();
+        try {
             if (!paused) {
                 paused = true;
                 pausedAt = clock.getAsLong();
             }
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -120,7 +144,8 @@ public final class ResourceRegistry {
      * otherwise a long pause would starve every waiter at once, hence strict FIFO right after the resume.
      */
     public void resume() {
-        synchronized (lock) {
+        lock.lock();
+        try {
             if (!paused) {
                 return;
             }
@@ -130,13 +155,18 @@ public final class ResourceRegistry {
                 waiter.since += now - Math.max(waiter.since, pausedAt); // arrived during the pause: since = now
             }
             grantEligibleWaiters();
-            lock.notifyAll();
+            notPaused.signalAll();
+        } finally {
+            lock.unlock();
         }
     }
 
     public boolean isPaused() {
-        synchronized (lock) {
+        lock.lock();
+        try {
             return paused;
+        } finally {
+            lock.unlock();
         }
     }
 
@@ -145,21 +175,39 @@ public final class ResourceRegistry {
      * already interrupted (a cancelled listing must stop emitting even when nothing is paused).
      */
     public void awaitNotPaused() throws InterruptedException {
-        synchronized (lock) {
+        lock.lock();
+        try {
             if (Thread.interrupted()) {
                 throw new InterruptedException();
             }
             while (paused) {
-                lock.wait();
+                notPaused.await();
             }
+        } finally {
+            lock.unlock();
         }
+    }
+
+    /**
+     * A place in the queue, taken when the work is submitted: {@link #acquireAll(Set, long)} serves the waiters in
+     * ticket order (anti-starvation aside), whatever the order they reach it in. Callable from any thread.
+     */
+    public long ticket() {
+        return nextTicket.getAndIncrement();
+    }
+
+    /** {@link #acquireAll(Set, long)} with a ticket taken now: served after the work already submitted. */
+    public void acquireAll(Set<String> names) throws InterruptedException {
+        acquireAll(names, ticket());
     }
 
     /**
      * Blocks until ALL requested resources are simultaneously available, then takes
      * one permit on each. Interruptible; on interruption nothing stays acquired.
+     *
+     * @param ticket from {@link #ticket()}: a lower ticket is served first among the waiters that fit
      */
-    public void acquireAll(Set<String> names) throws InterruptedException {
+    public void acquireAll(Set<String> names, long ticket) throws InterruptedException {
         Set<String> canonical = canonicalize(names);
         if (canonical.isEmpty()) {
             // nothing to arbitrate (an empty waiter would never be indexed, hence never scanned),
@@ -167,15 +215,17 @@ public final class ResourceRegistry {
             awaitNotPaused();
             return;
         }
-        Waiter me = new Waiter(canonical, clock.getAsLong());
-        synchronized (lock) {
+        Waiter me = new Waiter(canonical, clock.getAsLong(), lock.newCondition(), ticket);
+        lock.lock();
+        try {
             canonical.forEach(this::countFor); // materialize so the scan sees their free capacity
-            waiters.addLast(me);
+            me.arrival = nextArrival++;
+            waiters.add(me);
             index(me);
             grantEligibleWaiters();
             try {
                 while (!me.granted) {
-                    lock.wait(); // every grant notifies; nothing else can make this waiter eligible
+                    me.turn.await(); // signalled by its grant; nothing else can make this waiter eligible
                 }
             } catch (InterruptedException e) {
                 waiters.remove(me);
@@ -186,23 +236,29 @@ public final class ResourceRegistry {
                 }
                 throw e;
             }
+        } finally {
+            lock.unlock();
         }
     }
 
     /** Returns one permit on each named resource and wakes up eligible waiters. */
     public void releaseAll(Set<String> names) {
-        synchronized (lock) {
+        lock.lock();
+        try {
             Set<String> canonical = canonicalize(names);
             doRelease(canonical);
             // a release can only unblock someone waiting on one of the released names
             if (canonical.stream().anyMatch(waitersByResource::containsKey)) {
                 grantEligibleWaiters();
             }
+        } finally {
+            lock.unlock();
         }
     }
 
     public List<ResourceSnapshot> snapshot() {
-        synchronized (lock) {
+        lock.lock();
+        try {
             return counts.entrySet().stream()
                     .map(e -> new ResourceSnapshot(
                             e.getKey(),
@@ -212,13 +268,15 @@ public final class ResourceRegistry {
                             paused))
                     .sorted(Comparator.comparing(ResourceSnapshot::name))
                     .toList();
+        } finally {
+            lock.unlock();
         }
     }
 
     // ---- all methods below are always called while holding `lock` ----
 
     /**
-     * First-fit scan of the arrival queue. Anti-starvation is <em>scoped to the resources the
+     * First-fit scan of the queue (ticket order). Anti-starvation is <em>scoped to the resources the
      * starved waiter actually needs</em>: those names are reserved (nobody behind it may take them
      * until it is served), but waiters whose footprint is disjoint from every reservation are still
      * granted. A global stop would make the registry degenerate into strict FIFO — in two-phase mode
@@ -254,7 +312,7 @@ public final class ResourceRegistry {
                 it.remove();
                 unindex(waiter);
                 skipped.forEach(s -> s.bypassCount++);
-                lock.notifyAll();
+                waiter.turn.signal();
                 waiter.resources.forEach(n -> {
                     ResourceCount count = countFor(n);
                     if (count.used >= count.capacity) {
