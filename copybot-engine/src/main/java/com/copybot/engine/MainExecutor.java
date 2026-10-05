@@ -107,6 +107,12 @@ public class MainExecutor implements Runnable {
      */
     private volatile ResumePoint listingPoint;
 
+    /**
+     * While preparing, true when the resume point comes from the destination probe: the items are not analysed at
+     * the listing, the probe analyses the ones it checks, then the point the ones it selects.
+     */
+    private volatile boolean analysisOnDemand;
+
     private ResumeResolver resolver;
     private ResumeProposal proposal;
     private List<WorkItemExecution> orderedItems = List.of();
@@ -380,6 +386,7 @@ public class MainExecutor implements Runnable {
             dryRunSteps = processSteps();
             resolver = new ResumeResolver(resume.mode(), resume.store(), findOutAction());
             listingPoint = resolver.listingPoint().orElse(null);
+            analysisOnDemand = listingPoint == null && resolver.probesTheDestination();
             runListings();
             commitPhase();
             if (listingFailed.get()) {
@@ -387,9 +394,10 @@ public class MainExecutor implements Runnable {
                 return;
             }
             orderedItems = ResumeResolver.order(state.getWorkItems());
-            proposal = resolver.propose(orderedItems);
+            proposal = resolver.propose(orderedItems, this::analyseNow);
             state.setResumeProposal(proposal);
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
+            analyseTheSelectedItems();
             projectItems();
             state.setStatus(PipelineStatus.PREPARED);
         } catch (InterruptedException e) {
@@ -399,6 +407,7 @@ public class MainExecutor implements Runnable {
         } finally {
             dryRunSteps = null;
             listingPoint = null;
+            analysisOnDemand = false;
             state.setListingInProgress(false);
             endPhase();
             preparing = false;
@@ -512,6 +521,41 @@ public class MainExecutor implements Runnable {
             }
         }
         return steps;
+    }
+
+    /**
+     * The destination probe checks this item: analysed now (on the phase thread) when it is not yet.
+     *
+     * @return false when its analysis failed: it cannot be probed
+     */
+    private boolean analyseNow(WorkItemExecution exec) throws InterruptedException {
+        if (exec.isAnalysisDeferred()) {
+            runItem(exec, 0, barrierIndex);
+            if (Thread.interrupted()) {
+                throw new InterruptedException("interrupted");
+            }
+            checkCancelled();
+        }
+        return exec.getStatus() != ItemStatus.ERROR;
+    }
+
+    /**
+     * With the analysis on demand, once the resume point is applied: the items it selects are analysed, the
+     * others stay unanalysed, their preparation over (like the items skipped at the listing).
+     */
+    private void analyseTheSelectedItems() throws InterruptedException {
+        for (WorkItemExecution exec : orderedItems) {
+            if (exec.isAnalysisDeferred() && exec.getStatus() == ItemStatus.SKIPPED) {
+                exec.deferAnalysis(exec.getSkipReason()); // prepared, still not analysed
+            }
+        }
+        for (WorkItemExecution exec : orderedItems) {
+            if (exec.isAnalysisDeferred() && exec.getStatus() == ItemStatus.PENDING) {
+                submitItem(exec, 0, barrierIndex);
+            }
+        }
+        awaitCompletion();
+        checkCancelled();
     }
 
     /**
@@ -849,7 +893,7 @@ public class MainExecutor implements Runnable {
             throw new PhaseStopped(); // woken by the pause cancel() lifted: emit nothing more
         }
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
-        skipIfBeforeTheListingPoint(exec);
+        deferAtTheListing(exec);
         state.getWorkItems().add(exec);
         notifyWatcher();
         if (exec.isAnalysisDeferred()) {
@@ -868,11 +912,16 @@ public class MainExecutor implements Runnable {
 
     /**
      * Skips an item the resume point known before the listing does not select, without analysing it (its key is
-     * frozen now, the resolver applies the same point to it at the end of the preparation).
+     * frozen now, the resolver applies the same point to it at the end of the preparation); with the analysis on
+     * demand, leaves every item unanalysed for now.
      */
-    private void skipIfBeforeTheListingPoint(WorkItemExecution exec) {
+    private void deferAtTheListing(WorkItemExecution exec) {
         ResumePoint point = listingPoint;
         if (point == null) {
+            if (analysisOnDemand) {
+                exec.setResumeKey(ItemKey.of(exec.getWorkItem()).orElse(null));
+                exec.markAnalysisDeferred();
+            }
             return;
         }
         exec.setResumeKey(ItemKey.of(exec.getWorkItem()).orElse(null));

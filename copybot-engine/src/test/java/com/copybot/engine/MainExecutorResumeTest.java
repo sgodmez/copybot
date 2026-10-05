@@ -441,6 +441,120 @@ public class MainExecutorResumeTest {
         assertThrows(IllegalStateException.class, exec::analyseDeferred);
     }
 
+    /** Writes nothing; its target is nas/&lt;day of the file name&gt;/&lt;name&gt;, it cannot resolve unresolvable. */
+    final class DayOut extends FakeAction implements IOutAction {
+        final Set<String> written = ConcurrentHashMap.newKeySet();
+        final Set<String> unresolvable;
+
+        DayOut(Set<String> unresolvable) {
+            this.unresolvable = unresolvable;
+        }
+
+        @Override
+        public void writeItem(WorkItem item) {
+            written.add(item.getNameDisplay());
+        }
+
+        @Override
+        public java.util.Optional<Path> resolveTarget(WorkItem item) {
+            String name = item.getNameDisplay();
+            if (unresolvable.contains(name)) {
+                throw com.copybot.exception.CopybotException.ofResource("resume.error.no-target");
+            }
+            return java.util.Optional.of(tempDir.resolve("nas").resolve(name.substring(4, 6)).resolve(name));
+        }
+    }
+
+    /** 30 files, one per day, the destination holding the directories of the first imported days. */
+    private MainExecutor destination(int importedDays, RecordingAnalyze analyze, DayOut out, ResumeMode mode) throws IOException {
+        for (int d = 1; d <= importedDays; d++) {
+            Files.createDirectories(tempDir.resolve("nas").resolve(String.format("%02d", d)));
+        }
+        return new MainExecutor(
+                List.of(new PipelineStep<>(null, new DatedIn(30), emptyConfig())),
+                List.of(new PipelineStep<>(null, analyze, emptyConfig()), new PipelineStep<>(null, out, emptyConfig())),
+                1, false, null, registry(), new ResumeContext(mode, store()));
+    }
+
+    private static Set<String> days(int from, int to) {
+        Set<String> names = new java.util.HashSet<>();
+        for (int d = from; d <= to; d++) {
+            names.add(String.format("IMG_%02d.JPG", d));
+        }
+        return names;
+    }
+
+    @Test
+    public void theDestinationProbeAnalysesOnlyTheFilesItChecksThenTheSelectedOnes() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = destination(20, analyze, new DayOut(Set.of()), ResumeMode.DESTINATION);
+
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(ResumePoint.after(day(20)), exec.getState().getResumeProposal().point());
+        assertTrue(analyze.seen.containsAll(days(21, 30)), "the selected files are analysed");
+        Set<String> oldAnalysed = new java.util.HashSet<>(analyze.seen);
+        oldAnalysed.removeAll(days(21, 30));
+        assertTrue(oldAnalysed.size() <= 7, "only the probed old files are read, got " + oldAnalysed);
+        List<WorkItemExecution> items = exec.getOrderedItems();
+        assertTrue(items.subList(0, 20).stream().allMatch(w -> w.getStatus() == ItemStatus.SKIPPED));
+        assertTrue(items.subList(20, 30).stream().allMatch(w -> w.getStatus() == ItemStatus.PENDING && !w.isAnalysisDeferred()));
+        assertTrue(items.stream().allMatch(WorkItemExecution::isPrepared), "the preparation progress is complete");
+        assertTrue(items.subList(0, 20).stream().filter(w -> !oldAnalysed.contains(w.getWorkItem().getNameDisplay()))
+                .allMatch(w -> w.isAnalysisDeferred() && w.getProjection() == null), "the others are not analysed");
+    }
+
+    @Test
+    public void withoutCursorStateThenDestinationAlsoAnalysesOnDemand() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = destination(20, analyze, new DayOut(Set.of()), ResumeMode.STATE_THEN_DESTINATION);
+
+        exec.prepare();
+
+        assertEquals(ResumeSource.DESTINATION, exec.getState().getResumeProposal().source());
+        assertTrue(analyze.seen.size() <= 17, "10 selected + the probed ones, got " + analyze.seen.size());
+    }
+
+    @Test
+    public void anEmptyDestinationAnalysesEverything() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        DayOut out = new DayOut(Set.of());
+        MainExecutor exec = destination(0, analyze, out, ResumeMode.DESTINATION);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(days(1, 30), analyze.seen);
+        assertEquals(days(1, 30), out.written);
+    }
+
+    @Test
+    public void anUnresolvableProbedFileIsReplacedByItsNeighbour() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = destination(20, analyze, new DayOut(days(14, 16)), ResumeMode.DESTINATION);
+
+        exec.prepare();
+
+        assertEquals(ResumePoint.after(day(20)), exec.getState().getResumeProposal().point());
+    }
+
+    @Test
+    public void aFileOfTheDestinationModeSelectedAgainByAManualPointIsAnalysedAgain() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        DayOut out = new DayOut(Set.of());
+        MainExecutor exec = destination(20, analyze, out, ResumeMode.DESTINATION);
+        exec.prepare();
+
+        exec.applyOverride(ResumePoint.all());
+        exec.analyseDeferred();
+
+        assertEquals(days(1, 30), analyze.seen);
+        assertTrue(exec.toAnalyse().isEmpty());
+        exec.execute(ResumePoint.all());
+        assertEquals(days(1, 30), out.written);
+    }
+
     @Test
     public void modeNoneNeverWritesAStateFile() {
         RecordingOut out = new RecordingOut(null);

@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -74,6 +75,60 @@ public class DestinationProbeTest {
         DestinationProbe.Result r = DestinationProbe.probe(flat, dir -> true);
         assertEquals(ResumePoint.all(), r.point());
         assertNotNull(r.warning());
+    }
+
+    /** 1000 hourly files, 10 per day directory d0..d99, directories up to d41 imported. */
+    private static List<ItemKey> hourly() {
+        List<ItemKey> keys = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            keys.add(new ItemKey(Instant.parse("2026-01-01T00:00:00Z").plusSeconds(i * 3600L), "F" + i));
+        }
+        return keys;
+    }
+
+    private static boolean imported(Path dir) {
+        return Integer.parseInt(dir.getFileName().toString().substring(1)) < 42;
+    }
+
+    @Test
+    public void resolvesTheTargetOfTheProbedFilesOnly() throws InterruptedException {
+        List<ItemKey> keys = hourly();
+        Set<Integer> resolved = new java.util.HashSet<>();
+        DestinationProbe.Result r = DestinationProbe.probe(keys, i -> {
+            resolved.add(i);
+            return Optional.of(Path.of("nas", "d" + (i / 10)));
+        }, DestinationProbeTest::imported);
+
+        assertEquals(ResumePoint.after(keys.get(419)), r.point());
+        assertTrue(resolved.size() <= 14, "first, last and ~log2(1000) probes, got " + resolved.size());
+        assertTrue(resolved.containsAll(Set.of(0, 999)), "the first and the last tell whether the directory varies");
+    }
+
+    @Test
+    public void anUnresolvableFileIsSkippedByTheDichotomy() throws InterruptedException {
+        List<ItemKey> keys = hourly();
+        DestinationProbe.Result r = DestinationProbe.probe(keys,
+                i -> i % 3 == 0 ? Optional.empty() : Optional.of(Path.of("nas", "d" + (i / 10))),
+                DestinationProbeTest::imported);
+
+        assertEquals(ResumePoint.after(keys.get(419)), r.point(), "419 is resolvable (419 % 3 != 0)");
+    }
+
+    @Test
+    public void theLastResolvableFileCanBeTheLastImported() throws InterruptedException {
+        List<ItemKey> keys = hourly();
+        DestinationProbe.Result r = DestinationProbe.probe(keys,
+                i -> i >= 415 && i < 420 ? Optional.empty() : Optional.of(Path.of("nas", "d" + (i / 10))),
+                DestinationProbeTest::imported);
+
+        assertEquals(ResumePoint.after(keys.get(414)), r.point(), "415..419 cannot be probed: they stay selected");
+    }
+
+    @Test
+    public void nothingResolvableSelectsEverything() throws InterruptedException {
+        DestinationProbe.Result r = DestinationProbe.probe(hourly(), i -> Optional.empty(), dir -> true);
+        assertEquals(ResumePoint.all(), r.point());
+        assertNull(r.warning());
     }
 
     @Test

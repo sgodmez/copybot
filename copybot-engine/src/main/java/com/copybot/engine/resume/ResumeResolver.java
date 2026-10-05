@@ -59,15 +59,42 @@ public final class ResumeResolver {
         return keyed;
     }
 
+    /**
+     * Analyses an item on demand, for the destination probe to resolve its target.
+     */
+    @FunctionalInterface
+    public interface Analyser {
+        /** @return false when the item cannot be probed (its analysis failed) */
+        boolean analyse(WorkItemExecution item) throws InterruptedException;
+    }
+
+    /** The items are already analysed: those in error cannot be probed. */
+    private static final Analyser ANALYSED = item -> item.getStatus() != ItemStatus.ERROR;
+
+    /** For items already analysed. */
     public ResumeProposal propose(List<WorkItemExecution> ordered) {
+        try {
+            return propose(ordered, ANALYSED);
+        } catch (InterruptedException e) {
+            throw new IllegalStateException("unreachable: nothing is analysed", e);
+        }
+    }
+
+    /**
+     * @param analyser analyses the items the destination probe checks, when they are not analysed yet
+     */
+    public ResumeProposal propose(List<WorkItemExecution> ordered, Analyser analyser) throws InterruptedException {
         if (mode == ResumeMode.NONE) {
             return everything(List.of());
         }
         readCursorOnce();
         return switch (mode) {
             case STATE -> fromState().orElseGet(() -> everything(List.of()));
-            case DESTINATION -> fromDestination(ordered, true);
-            case STATE_THEN_DESTINATION -> fromState().orElseGet(() -> fromDestination(ordered, false));
+            case DESTINATION -> fromDestination(ordered, true, analyser);
+            case STATE_THEN_DESTINATION -> {
+                Optional<ResumeProposal> state = fromState();
+                yield state.isPresent() ? state.get() : fromDestination(ordered, false, analyser);
+            }
             case NONE -> throw new IllegalStateException("unreachable");
         };
     }
@@ -86,6 +113,26 @@ public final class ResumeResolver {
         }
         readCursorOnce();
         return previousCursor.map(ResumePoint::after);
+    }
+
+    /**
+     * True when {@link #propose} will probe the destination (mode destination, or no cursor to start from): the
+     * items need no analysis before it, it analyses the ones it checks.
+     *
+     * @throws CopybotException the state file cannot be understood
+     */
+    public boolean probesTheDestination() {
+        if (out == null) {
+            return false; // no target to probe: propose falls back (or fails) as without probe
+        }
+        if (mode == ResumeMode.DESTINATION) {
+            return true;
+        }
+        if (mode == ResumeMode.STATE_THEN_DESTINATION) {
+            readCursorOnce();
+            return previousCursor.isEmpty();
+        }
+        return false;
     }
 
     private void readCursorOnce() {
@@ -161,32 +208,49 @@ public final class ResumeResolver {
         return previousCursor.map(cursor -> new ResumeProposal(ResumePoint.after(cursor), ResumeSource.STATE, List.of()));
     }
 
-    private ResumeProposal fromDestination(List<WorkItemExecution> ordered, boolean explicit) {
+    private ResumeProposal fromDestination(List<WorkItemExecution> ordered, boolean explicit, Analyser analyser)
+            throws InterruptedException {
         if (out == null) {
             return noTarget(explicit);
         }
-        List<DestinationProbe.Candidate> candidates = new ArrayList<>();
-        for (WorkItemExecution item : ordered) {
-            Optional<ItemKey> key = item.getResumeKey();
-            if (item.getStatus() == ItemStatus.ERROR || key.isEmpty()) {
-                continue;
-            }
-            Optional<Path> target;
-            try {
-                target = out.resolveTarget(item.getWorkItem());
-            } catch (CopybotException e) {
-                // e.g. no value for a pattern expression: this item cannot be probed, it stays selected and
-                // fails or is skipped at the execution, by its own onMissingKey (spec pattern-helper §2)
-                continue;
-            }
-            if (target.isEmpty()) {
-                return noTarget(explicit);
-            }
-            candidates.add(new DestinationProbe.Candidate(key.get(), target.get().toAbsolutePath().normalize().getParent()));
+        List<WorkItemExecution> candidates = ordered.stream()
+                .filter(item -> item.getStatus() != ItemStatus.ERROR && item.getResumeKey().isPresent())
+                .toList();
+        DestinationProbe.Result result;
+        try {
+            result = DestinationProbe.probe(candidates.stream().map(item -> item.getResumeKey().orElseThrow()).toList(),
+                    i -> targetDir(candidates.get(i), analyser), Files::isDirectory);
+        } catch (NoTarget e) {
+            return noTarget(explicit);
         }
-        DestinationProbe.Result result = DestinationProbe.probe(candidates, Files::isDirectory);
         ResumeSource source = result.point().kind() == ResumePoint.Kind.AFTER ? ResumeSource.DESTINATION : ResumeSource.NONE;
         return new ResumeProposal(result.point(), source, result.warning() == null ? List.of() : List.of(result.warning()));
+    }
+
+    /** The out step cannot tell where it writes (no target path at all): the destination cannot be probed. */
+    private static final class NoTarget extends RuntimeException {
+        NoTarget() {
+            super("no target", null, false, false);
+        }
+    }
+
+    /** @throws NoTarget the out step resolves no target path */
+    private Optional<Path> targetDir(WorkItemExecution item, Analyser analyser) throws InterruptedException {
+        if (!analyser.analyse(item)) {
+            return Optional.empty();
+        }
+        Optional<Path> target;
+        try {
+            target = out.resolveTarget(item.getWorkItem());
+        } catch (CopybotException e) {
+            // e.g. no value for a pattern expression: this item cannot be probed, it stays selected and
+            // fails or is skipped at the execution, by its own onMissingKey (spec pattern-helper §2)
+            return Optional.empty();
+        }
+        if (target.isEmpty()) {
+            throw new NoTarget();
+        }
+        return Optional.of(target.get().toAbsolutePath().normalize().getParent());
     }
 
     private ResumeProposal noTarget(boolean explicit) {
