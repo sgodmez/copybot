@@ -29,8 +29,12 @@ import com.copybot.resources.ResourcesEngine;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -98,6 +102,8 @@ public class MainExecutor implements Runnable {
     private volatile List<PipelineStep<IProcessAction>> dryRunSteps;
     /** From the start of {@link #prepare()} until it returns, and during {@link #analyseDeferred()}. */
     private volatile boolean preparing;
+    /** The skipped items to analyse too ({@link #requestAnalysis}). */
+    private final Set<WorkItemExecution> requestedAnalysis = ConcurrentHashMap.newKeySet();
     /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
     private boolean analysing;
 
@@ -415,17 +421,32 @@ public class MainExecutor implements Runnable {
     }
 
     /**
-     * The items to copy whose analysis was deferred at the listing: a manual resume point selected them again
-     * (empty when the preparation deferred nothing, or the point in force selects none of them).
+     * The items whose analysis was deferred at the listing that {@link #analyseDeferred()} analyses: the ones to copy
+     * (a manual resume point selected them again) and the skipped ones the user asked for
+     * ({@link #requestAnalysis}); empty when the preparation deferred nothing.
      */
     List<WorkItemExecution> toAnalyse() {
         return orderedItems.stream()
-                .filter(item -> item.getStatus() == ItemStatus.PENDING && item.isAnalysisDeferred())
+                .filter(item -> item.isAnalysisDeferred() && (item.getStatus() == ItemStatus.PENDING
+                        || item.getStatus() == ItemStatus.SKIPPED && requestedAnalysis.contains(item)))
                 .toList();
     }
 
     /**
-     * Analyses the items a manual resume point selected again although their analysis was deferred at the listing
+     * Asks {@link #analyseDeferred()} to also analyse these skipped items, so that their planned processing is known:
+     * they stay skipped, for the same reason. The items already analysed (or in error) are left out.
+     */
+    void requestAnalysis(Collection<WorkItemExecution> items) {
+        for (WorkItemExecution item : items) {
+            if (item.isAnalysisDeferred() && item.getStatus() == ItemStatus.SKIPPED) {
+                requestedAnalysis.add(item);
+            }
+        }
+    }
+
+    /**
+     * Analyses the items a manual resume point selected again although their analysis was deferred at the listing,
+     * and the skipped ones asked for ({@link #requestAnalysis}: they stay skipped)
      * ({@link #toAnalyse()}), like the preparation: the steps before the barrier, then the dry run of the process
      * steps (spec deferred-analysis §1). They stop at the barrier PENDING (the analysis never escapes the resume
      * point), an item failing its analysis ends ERROR. Status RUNNING meanwhile, PREPARED again afterwards, also
@@ -449,6 +470,17 @@ public class MainExecutor implements Runnable {
             }
             analysing = true;
         }
+        // a skipped item asked for stays skipped: the barrier would make it PENDING (to copy)
+        Map<WorkItemExecution, String> skipped = new HashMap<>();
+        Set<WorkItemExecution> skippedByPoint = new HashSet<>();
+        for (WorkItemExecution exec : items) {
+            if (exec.getStatus() == ItemStatus.SKIPPED) {
+                skipped.put(exec, exec.getSkipReason());
+                if (exec.isSkippedByResumePoint()) {
+                    skippedByPoint.add(exec);
+                }
+            }
+        }
         preparing = true;
         markRunning();
         startPhase();
@@ -467,6 +499,16 @@ public class MainExecutor implements Runnable {
         } finally {
             dryRunSteps = null;
             shutdownTasks(); // every task is over before the cancel request is forgotten (runItem reads it)
+            skipped.forEach((exec, reason) -> {
+                if (exec.getStatus() != ItemStatus.ERROR) {
+                    if (skippedByPoint.contains(exec)) {
+                        exec.setSkippedByResumePoint(reason);
+                    } else {
+                        exec.setSkipped(reason); // ignored by the user: still ignored
+                    }
+                }
+            });
+            requestedAnalysis.removeAll(items);
             synchronized (phaseLock) {
                 analysing = false;
                 cancelRequested = false; // requested during this analysis (checked above): it only stopped it

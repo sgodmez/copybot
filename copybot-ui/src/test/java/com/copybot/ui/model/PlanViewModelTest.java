@@ -541,6 +541,23 @@ public class PlanViewModelTest {
     // ---- files ignored by the user ----
 
     @Test
+    public void onlyTheSkippedRowsNotAnalysedCanBeAnalysed() throws IOException {
+        WorkItemExecution deferred = item("a.jpg", 1);
+        deferred.deferAnalysis("before the cursor");
+        WorkItemExecution analysedSkipped = item("b.jpg", 1);
+        analysedSkipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution toCopy = item("c.jpg", 1);
+        PlanViewModel model = prepared(false, deferred, analysedSkipped, toCopy);
+        List<WorkItemExecution> all = List.of(deferred, analysedSkipped, toCopy);
+
+        assertEquals(List.of(deferred), model.analysable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.analysable(all), "only on a prepared, idle plan");
+    }
+
+    @Test
     public void onlyRowsToCopyOrSkippedByTheResumePointCanBeIgnoredForThisRun() throws IOException {
         WorkItemExecution toCopy = item("a.jpg", 1);
         WorkItemExecution beforeCursor = item("b.jpg", 1);

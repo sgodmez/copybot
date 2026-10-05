@@ -701,8 +701,13 @@ public class PlanController {
         });
         MenuItem detail = new MenuItem(ResourcesEngine.getString("plan.menu.detail"));
         detail.setOnAction(e -> {
-            if (row.getItem() != null) {
+            if (row.getItem() == null) {
+                return;
+            }
+            if (row.getItem().getProjection() != null) {
                 showDetail(row.getItem());
+            } else {
+                analyse(model.analysable(selectedRows()));
             }
         });
         MenuItem ignore = new MenuItem();
@@ -714,10 +719,16 @@ public class PlanController {
         ContextMenu menu = new ContextMenu(fromHere, detail, new SeparatorMenuItem(), ignore, unignore, exclude);
         menu.setOnShowing(e -> {
             fromHere.setDisable(row.getItem() == null || model.resumePointFrom(row.getItem()).isEmpty());
-            Plan shown = targetsPlan();
-            detail.setDisable(row.getItem() == null || shown == null || shown.detailOf(row.getItem()).isEmpty());
             List<WorkItemExecution> selected = selectedRows();
             boolean busy = busy();
+            if (row.getItem() != null && row.getItem().getProjection() == null) {
+                // not analysed: "Analyse" instead of a disabled "Planned processing"
+                setCountedItem(detail, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
+            } else {
+                Plan shown = targetsPlan();
+                detail.setText(ResourcesEngine.getString("plan.menu.detail"));
+                detail.setDisable(row.getItem() == null || shown == null || shown.detailOf(row.getItem()).isEmpty());
+            }
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
             setCountedItem(exclude, "plan.menu.exclude", busy ? 0 : model.excludable(selected).size());
@@ -962,8 +973,29 @@ public class PlanController {
             model.update(analysed.getState(), analysed.getOrderedItems());
         }
         refresh();
+        WorkItemExecution single = detailAfterAnalysis;
+        detailAfterAnalysis = null;
+        if (failure == null && single != null && op == operation && plan == analysed && single.getProjection() != null) {
+            showDetail(single); // one file asked for: what it was analysed for
+        }
         if (failure != null) {
             PopinUtil.showError(asException(failure));
+        }
+    }
+
+    /** The file "Analyse" was asked for alone: its planned processing opens once analysed. */
+    private WorkItemExecution detailAfterAnalysis;
+
+    /** "Analyse" on skipped files not analysed: they stay skipped, their planned processing becomes known. */
+    private void analyse(List<WorkItemExecution> items) {
+        if (plan == null || items.isEmpty() || busy()) {
+            return;
+        }
+        plan.requestAnalysis(items);
+        List<WorkItemExecution> toAnalyse = plan.toAnalyse();
+        if (!toAnalyse.isEmpty()) {
+            detailAfterAnalysis = items.size() == 1 ? items.getFirst() : null;
+            startAnalysis(toAnalyse);
         }
     }
 

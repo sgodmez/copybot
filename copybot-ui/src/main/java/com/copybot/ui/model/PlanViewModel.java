@@ -347,6 +347,14 @@ public final class PlanViewModel {
         return canChangeResumePoint() ? item.getResumeKey().map(ResumePoint::from) : Optional.empty();
     }
 
+    /** Among these rows, those "Analyse" analyses: a prepared plan, skipped rows not analysed (skipped at the listing). */
+    public List<WorkItemExecution> analysable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> i.isAnalysisDeferred() && i.getStatus() == ItemStatus.SKIPPED).toList();
+    }
+
     // ---- files ignored by the user (context menu of the rows) ----
 
     /** Among these rows, those "Ignore for this copy" leaves out: a prepared plan, rows to copy or skipped by the resume point. */

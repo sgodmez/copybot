@@ -178,11 +178,20 @@ public final class Plan {
 
     /**
      * The items to copy whose analysis was deferred at the listing (before the state cursor), selected again by a
-     * manual resume point: {@link CopybotEngine#analyse} analyses them so that they get their target. Empty in
-     * every other case (spec deferred-analysis §1).
+     * manual resume point, and the skipped ones asked for ({@link #requestAnalysis}): {@link CopybotEngine#analyse}
+     * analyses them so that they get their target. Empty in every other case (spec deferred-analysis §1).
      */
     public List<WorkItemExecution> toAnalyse() {
         return executor.toAnalyse();
+    }
+
+    /**
+     * Asks the next {@link CopybotEngine#analyse} to also analyse these skipped files (analysis deferred at the
+     * listing), so that their planned processing is known: they stay skipped, for the same reason. The files already
+     * analysed are left out; then {@link #toAnalyse()} includes them.
+     */
+    public void requestAnalysis(Collection<WorkItemExecution> items) {
+        executor.requestAnalysis(items);
     }
 
     /**

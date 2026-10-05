@@ -302,6 +302,47 @@ public class MainExecutorResumeTest {
     }
 
     @Test
+    public void aSkippedFileAskedForIsAnalysedAndStaysSkipped() {
+        store().writeCursor(day(3));
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        RecordingOut out = new RecordingOut(null);
+        MainExecutor exec = analysedExecutor(4, analyze, out, new StatusWatcher());
+        exec.prepare();
+        WorkItemExecution second = named(exec, "IMG_02.JPG");
+        String reason = second.getSkipReason();
+        WorkItemExecution first = named(exec, "IMG_01.JPG");
+        exec.setIgnored(List.of(first), true, null);
+
+        exec.requestAnalysis(List.of(first, second));
+        assertEquals(List.of(first, second), exec.toAnalyse());
+        exec.analyseDeferred();
+
+        assertEquals(Set.of("IMG_01.JPG", "IMG_02.JPG", "IMG_04.JPG"), analyze.seen);
+        assertEquals(ItemStatus.SKIPPED, second.getStatus(), "analysed, still before the cursor");
+        assertEquals(reason, second.getSkipReason());
+        assertTrue(second.isSkippedByResumePoint());
+        assertFalse(second.isAnalysisDeferred());
+        assertNotNull(second.getProjection(), "its planned processing is known");
+        assertTrue(first.isIgnored(), "still ignored by the user");
+        assertEquals(ItemStatus.SKIPPED, first.getStatus());
+        assertTrue(exec.toAnalyse().isEmpty());
+
+        exec.execute(null);
+        assertEquals(Set.of("IMG_04.JPG"), out.written, "the resume point is unchanged");
+    }
+
+    @Test
+    public void aFileAlreadyAnalysedOrInErrorIsNotAskedFor() {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = analysedExecutor(2, analyze, new RecordingOut(null), new StatusWatcher());
+        exec.prepare();
+
+        exec.requestAnalysis(exec.getOrderedItems());
+
+        assertTrue(exec.toAnalyse().isEmpty(), "everything was analysed by the preparation");
+    }
+
+    @Test
     public void aManualPointSelectingDeferredItemsAnalysesThemBeforeTheExecution() {
         store().writeCursor(day(3));
         RecordingAnalyze analyze = new RecordingAnalyze();
