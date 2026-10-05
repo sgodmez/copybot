@@ -102,6 +102,8 @@ public final class PlanViewModel {
      * not to a preparation: kept by {@link #reset()} and {@link #startPreparing()}.
      */
     private String preparationRefusal;
+    /** The pipeline does nothing with the files: refuses the one-step modes (see {@link #startRefusal()}). */
+    private String nothingDoneRefusal;
     private Set<WorkItemExecution> selectedAtStart = Set.of();
     /** The files being analysed in {@link Phase#ANALYSING}, empty otherwise. */
     private List<WorkItemExecution> analysing = List.of();
@@ -334,7 +336,23 @@ public final class PlanViewModel {
     }
 
     public boolean canPrepare() {
-        return !isActive() && preparationRefusal == null;
+        return !isActive() && startRefusal() == null;
+    }
+
+    /**
+     * Why the button that starts the run stays disabled: no input step; or, for the one-step modes (their button
+     * copies), a pipeline that does nothing with the files. Null when it can start.
+     */
+    private String startRefusal() {
+        if (preparationRefusal != null) {
+            return preparationRefusal;
+        }
+        return executionMode != ExecutionMode.PLAN ? nothingDoneRefusal : null;
+    }
+
+    /** What the pipeline read says when it does nothing with the files (no output nor process step); set on each read. */
+    public void setNothingDoneRefusal(Optional<String> refusal) {
+        this.nothingDoneRefusal = refusal.orElse(null);
     }
 
     public boolean canCopy() {
@@ -357,8 +375,8 @@ public final class PlanViewModel {
      * operation is told by the status line).
      */
     public Optional<String> warning() {
-        if (preparationRefusal != null) {
-            return Optional.of(preparationRefusal);
+        if (startRefusal() != null) {
+            return Optional.of(startRefusal());
         }
         if (phase != Phase.PREPARED) {
             return Optional.empty();

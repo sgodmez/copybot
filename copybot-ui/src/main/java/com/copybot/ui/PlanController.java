@@ -264,6 +264,8 @@ public class PlanController {
         loading = false;
         model.setPreparationRefusal(document.gaps().contains(PipelineDocument.Gap.NO_INPUT)
                 ? Optional.of(PipelineDocument.Gap.NO_INPUT.message()) : Optional.empty());
+        model.setNothingDoneRefusal(document.gaps().contains(PipelineDocument.Gap.DOES_NOTHING)
+                ? Optional.of(PipelineDocument.Gap.DOES_NOTHING.message()) : Optional.empty());
         model.setExecutionMode(document.executionMode()); // the box stays a one-shot toggle, unchecked
         autoExecuteBox.setSelected(model.isAutoExecute());
         summary = loaded;

@@ -346,6 +346,25 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void aPipelineThatDoesNothingCannotBeRunInOneStepButCanBePlanned() {
+        PlanViewModel model = new PlanViewModel();
+        model.setNothingDoneRefusal(Optional.of("does nothing"));
+
+        model.setExecutionMode(ExecutionMode.PLAN);
+        assertTrue(model.canPrepare(), "the plan can be looked at, the copy is refused afterwards");
+        assertTrue(model.warning().isEmpty());
+
+        for (ExecutionMode oneStep : List.of(ExecutionMode.AUTO, ExecutionMode.STREAMING)) {
+            model.setExecutionMode(oneStep);
+            assertFalse(model.canPrepare(), oneStep + ": its button copies");
+            assertEquals(Optional.of("does nothing"), model.warning(), oneStep.name());
+        }
+
+        model.setNothingDoneRefusal(Optional.empty()); // an output step was added in the editor
+        assertTrue(model.canPrepare());
+    }
+
+    @Test
     public void aRunningPreparationIsNoWarning() {
         PlanViewModel model = new PlanViewModel();
 
