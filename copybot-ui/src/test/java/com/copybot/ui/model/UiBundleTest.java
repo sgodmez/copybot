@@ -16,7 +16,7 @@ import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The texts of the desktop UI exist in both UI bundles (spec desktop-ui part 6). */
+/** The texts of the desktop UI exist in every UI bundle (spec desktop-ui part 6). */
 public class UiBundleTest {
 
     static final List<String> KEYS = List.of(
@@ -37,7 +37,7 @@ public class UiBundleTest {
             "plan.exclude.confirm", "plan.exclude.add", "plan.exclude.already", "plan.exclude.uncovered",
             "plan.warning.nothing-to-copy",
             "plan.auto-execute", "plan.pause", "plan.resume", "plan.stop", "plan.progress", "plan.preparing",
-            "plan.analysing", "plan.resolving",
+            "plan.analysing", "plan.analysing-again", "plan.resolving",
             "plan.prepare-failed", "plan.finished",
             "helper.loading", "helper.cancel", "helper.retry", "helper.sample", "helper.truncated", "helper.ok",
             "helper.missing", "helper.effect.error", "helper.effect.skip", "helper.effect.literal", "helper.expand",
@@ -63,6 +63,8 @@ public class UiBundleTest {
             "plan.menu.detail", "plan.detail.title", "plan.detail.status", "plan.detail.filtered",
             "plan.detail.unsupported", "plan.detail.no-target");
 
+    static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
+
     @BeforeAll
     public static void registerUiBundle() {
         ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
@@ -82,7 +84,7 @@ public class UiBundleTest {
 
     @Test
     public void everyKeyIsInBothBundlesAndIsAValidMessageFormat() throws IOException {
-        for (String file : List.of("uiBundle.properties", "uiBundle_fr.properties")) {
+        for (String file : BUNDLES) {
             Properties properties = bundle(file);
             for (String key : KEYS) {
                 String value = properties.getProperty(key);
@@ -96,7 +98,7 @@ public class UiBundleTest {
     /** The engine formats every text through MessageFormat, which eats a lone apostrophe. */
     @Test
     public void noValueHasALoneApostrophe() throws IOException {
-        for (String file : List.of("uiBundle.properties", "uiBundle_fr.properties")) {
+        for (String file : BUNDLES) {
             Properties properties = bundle(file);
             List<String> offending = properties.stringPropertyNames().stream()
                     .filter(key -> Pattern.compile("(?<!')'(?!')").matcher(properties.getProperty(key)).find())
@@ -106,9 +108,10 @@ public class UiBundleTest {
     }
 
     @Test
-    public void bothBundlesHaveTheSameKeys() throws IOException {
-        assertEquals(bundle("uiBundle.properties").stringPropertyNames(),
-                bundle("uiBundle_fr.properties").stringPropertyNames());
+    public void everyBundleHasTheSameKeys() throws IOException {
+        for (String file : BUNDLES) {
+            assertEquals(bundle("uiBundle.properties").stringPropertyNames(), bundle(file).stringPropertyNames(), file);
+        }
     }
 
     @Test
