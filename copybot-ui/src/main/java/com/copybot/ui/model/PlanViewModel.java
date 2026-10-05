@@ -504,7 +504,10 @@ public final class PlanViewModel {
         lines.add("   " + Stream.of(source.getSourceLocationDisplay(), sizeText(item), dateText(item))
                 .filter(s -> s != null && !s.isEmpty())
                 .collect(Collectors.joining(" · ")));
-        lines.add(ResourcesEngine.getString("plan.detail.status", statusText(item)));
+        // the full status: for a file the resume point skips, its reason (the column only says "Skipped")
+        Optional<String> reason = statusTooltip(item);
+        lines.add(ResourcesEngine.getString("plan.detail.status", reason.isPresent()
+                ? ResourcesEngine.getString("item.status.SKIPPED", reason.get()) : statusText(item)));
         lines.add("");
         for (Projection.Step step : detail.steps()) {
             lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced()));

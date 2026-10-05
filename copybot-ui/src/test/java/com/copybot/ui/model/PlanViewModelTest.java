@@ -871,6 +871,19 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void theDetailOfAFileSkippedByTheResumePointGivesItsReason() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        item.setSkippedByResumePoint("Already imported (cursor: DSC_1.NEF)");
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+
+        String status = PlanViewModel.detailText(item, detail).lines().toList().get(2);
+
+        assertEquals(ResourcesEngine.getString("plan.detail.status",
+                ResourcesEngine.getString("item.status.SKIPPED", "Already imported (cursor: DSC_1.NEF)")), status,
+                "the column only says Skipped, the detail tells why");
+    }
+
+    @Test
     public void theDetailEndsOnTheStepThatStoppedTheDryRun() throws IOException {
         WorkItemExecution item = item("DSC_1.NEF", 2048);
         List<Projection.Step> converted = List.of(new Projection.Step("convert", List.of("DSC_1.jpg")));
