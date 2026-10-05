@@ -192,6 +192,60 @@ public class CopybotEngineTest {
     }
 
     @Test
+    public void aPreparationStoppedFromItsPlanEndsCancelledWithWhatWasListedAndFreesTheEngine() throws Exception {
+        CopybotEngine engine = new CopybotEngine(config());
+        try {
+            CountDownLatch firstListed = new CountDownLatch(1);
+            Path source = Files.createDirectory(tempDir.resolve("source"));
+            MainExecutor preparing = withResume(new DatedIn(source, 3, () -> {
+                firstListed.countDown();
+                try {
+                    new CountDownLatch(1).await(); // the listing hangs after its first file
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }), new GatedOut(Set.of(), null), registry(Map.of("disk:*", 1000)),
+                    new ResumeStateStore(tempDir.resolve("p.state.json")));
+            AtomicReference<Plan> started = new AtomicReference<>();
+            AtomicReference<Plan> returned = new AtomicReference<>();
+            Thread caller = Thread.ofVirtual().start(() -> returned.set(engine.prepare(preparing, started::set)));
+            assertTrue(firstListed.await(5, TimeUnit.SECONDS));
+
+            started.get().cancelPreparation();
+            caller.join(TimeUnit.SECONDS.toMillis(20));
+
+            assertFalse(caller.isAlive());
+            assertSame(started.get(), returned.get());
+            assertEquals(PipelineStatus.CANCELLED, returned.get().getState().getStatus());
+            assertTrue(returned.get().getState().getWorkItems().stream()
+                            .anyMatch(i -> i.getWorkItem().getNameDisplay().equals("IMG_01.JPG")),
+                    "what was listed is kept");
+            assertFalse(Files.exists(tempDir.resolve("p.state.json")), "a stopped preparation writes no state");
+
+            Path other = Files.createDirectory(tempDir.resolve("other"));
+            Plan next = engine.prepare(withResume(new DatedIn(other, 2, null), new GatedOut(Set.of(), null),
+                    registry(Map.of("disk:*", 1000)), new ResumeStateStore(tempDir.resolve("q.state.json"))));
+            assertEquals(PipelineStatus.PREPARED, next.getState().getStatus(), "the engine is free again");
+        } finally {
+            engine.close(); // a failed assertion must not leave the listing parked
+        }
+    }
+
+    @Test
+    public void stoppingAPreparationAlreadyOverHasNoEffectOnThePlan() throws Exception {
+        try (CopybotEngine engine = new CopybotEngine(config())) {
+            Plan plan = engine.prepare(withResume(new DatedIn(tempDir, 2, null), new GatedOut(Set.of(), null),
+                    registry(Map.of("disk:*", 1000)), new ResumeStateStore(tempDir.resolve("p.state.json"))));
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus());
+
+            plan.cancelPreparation(); // too late: it must not cancel the execution to come
+
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus());
+            assertEquals(PipelineStatus.SUCCESS, awaitStatus(engine.execute(plan, null)));
+        }
+    }
+
+    @Test
     public void closeCancelsTheRunningExecutionAndWaitsForIt() throws Exception {
         GatedOut out = new GatedOut(Set.of(), new CountDownLatch(1));
         ResourceRegistry reg = registry(Map.of("disk:*", 1000));

@@ -119,7 +119,7 @@ public class PlanViewModelTest {
         assertEquals(List.of(a), model.items(), "the table fills during the listing");
         assertFalse(model.canGoBack());
         assertFalse(model.canPrepare());
-        assertFalse(model.canStop(), "a preparation is not stopped from the view");
+        assertTrue(model.canStop(), "a preparation can be stopped");
         assertTrue(model.isActive());
         assertTrue(model.progressText().contains("1"), model.progressText());
         assertEquals("", model.statusLine(), "the preparation is told next to its bar");
@@ -167,7 +167,7 @@ public class PlanViewModelTest {
     }
 
     @Test
-    public void aFailedOrCancelledPreparation() throws IOException {
+    public void aFailedPreparation() throws IOException {
         PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState failed = state(PipelineStatus.ERROR);
@@ -179,10 +179,43 @@ public class PlanViewModelTest {
         assertTrue(model.statusLine().contains("card removed"), model.statusLine());
         assertTrue(model.canPrepare());
         assertFalse(model.canCopy());
+    }
 
+    @Test
+    public void aStoppedPreparationKeepsWhatWasListedAndAnalysedButCannotBeCopied() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setAutoExecute(true);
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        WorkItemExecution listed = item("b.jpg", 1);
         model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, analysed, listed), List.of());
+
+        model.update(state(PipelineStatus.CANCELLED, analysed, listed), List.of());
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertEquals(List.of(analysed, listed), model.items(), "the partial plan stays in view");
+        assertFalse(model.isActive());
+        assertTrue(model.canPrepare(), "prepared again to be copied");
+        assertTrue(model.canGoBack());
+        assertFalse(model.canCopy());
+        assertFalse(model.canStop());
+        assertFalse(model.canChangeResumePoint());
+        assertFalse(model.consumeAutoExecute(), "a stopped preparation never starts the copy");
+        assertTrue(model.resumeText().isEmpty());
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped", 2, 1), model.statusLine());
+    }
+
+    @Test
+    public void aPreparationStoppedBeforeListingAnythingKeepsTheViewEmpty() {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+
         model.update(state(PipelineStatus.CANCELLED), List.of());
-        assertEquals(Phase.NOT_PREPARED, model.phase());
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertTrue(model.items().isEmpty());
+        assertTrue(model.canPrepare());
     }
 
     /** An item the preparation skipped at the listing without analysing it, selected again by a manual point. */

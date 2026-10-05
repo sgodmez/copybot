@@ -42,11 +42,13 @@ import java.util.stream.Stream;
 public final class PlanViewModel {
 
     public enum Phase {
-        /** nothing prepared (at opening, after a reload or a cancelled preparation) */
+        /** nothing prepared (at opening, after a reload or a preparation refused before it started) */
         NOT_PREPARED,
         PREPARING,
         PREPARED,
         PREPARE_FAILED,
+        /** the preparation was stopped: what was listed and analysed so far stays in view, it cannot be copied */
+        PREPARE_STOPPED,
         /**
          * a manual resume point selected again files whose analysis was deferred at the listing: they are being
          * analysed (spec deferred-analysis §2), the plan is PREPARED again afterwards
@@ -253,7 +255,7 @@ public final class PlanViewModel {
             phase = switch (status) {
                 case PREPARED -> Phase.PREPARED;
                 case ERROR -> Phase.PREPARE_FAILED;
-                case CANCELLED -> Phase.NOT_PREPARED;
+                case CANCELLED -> Phase.PREPARE_STOPPED;
                 default -> Phase.PREPARING;
             };
         }
@@ -398,9 +400,9 @@ public final class PlanViewModel {
         return phase == Phase.PAUSED;
     }
 
-    /** "Stop": during an execution or an analysis of the files selected again (a preparation is not stopped from the view). */
+    /** "Stop": during a preparation, an execution or an analysis of the files selected again. */
     public boolean canStop() {
-        return isExecutionActive() || phase == Phase.ANALYSING;
+        return phase == Phase.PREPARING || isExecutionActive() || phase == Phase.ANALYSING;
     }
 
     /** "change…" and "Resume from here": a prepared plan, before its execution. */
@@ -553,6 +555,11 @@ public final class PlanViewModel {
         return (int) items.stream().filter(WorkItemExecution::isPrepared).count();
     }
 
+    /** Among the listed files, those analysed (or failed): prepared, their analysis not deferred. */
+    private int analysedOfListed() {
+        return (int) items.stream().filter(i -> i.isPrepared() && !i.isAnalysisDeferred()).count();
+    }
+
     private static long size(WorkItemExecution item) {
         Long size = item.getWorkItem().getMetadatas().getSize();
         return size == null ? 0 : size;
@@ -660,6 +667,7 @@ public final class PlanViewModel {
     public String statusLine() {
         return switch (phase) {
             case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
+            case PREPARE_STOPPED -> ResourcesEngine.getString("plan.prepare-stopped", items.size(), analysedOfListed());
             case FINISHED -> ResourcesEngine.getString("plan.finished", pipelineStatusText(status),
                     copied(), counts().skipped(), counts().errors());
             default -> "";
@@ -668,7 +676,8 @@ public final class PlanViewModel {
 
     /** "Resume: after DSC_4821 (28/09 17:42) [cursor]", empty before a preparation. */
     public Optional<String> resumeText() {
-        if (proposal == null || phase == Phase.NOT_PREPARED || phase == Phase.PREPARING || phase == Phase.PREPARE_FAILED) {
+        if (proposal == null || phase == Phase.NOT_PREPARED || phase == Phase.PREPARING || phase == Phase.PREPARE_FAILED
+                || phase == Phase.PREPARE_STOPPED) {
             return Optional.empty();
         }
         ResumePoint point = override != null ? override : proposal.point();

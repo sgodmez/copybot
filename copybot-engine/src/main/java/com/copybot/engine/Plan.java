@@ -195,7 +195,16 @@ public final class Plan {
     }
 
     /**
-     * Stops a running {@link CopybotEngine#analyse}: the plan stays PREPARED, the items not analysed yet are
+     * Stops the preparation of this plan while {@link CopybotEngine#prepare} runs: it ends CANCELLED, what was
+     * listed and analysed so far kept in its state, and the engine is free once prepare() has returned. No effect
+     * once the plan is prepared (a late request must not cancel its execution). Non-blocking, callable from any thread.
+     */
+    public void cancelPreparation() {
+        executor.cancelPreparation();
+    }
+
+    /**
+     * Stops a running {@link CopybotEngine#analyse}:the plan stays PREPARED, the items not analysed yet are
      * analysed by the execution. No effect when no analysis runs. Callable from any thread.
      */
     public void cancelAnalysis() {

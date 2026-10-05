@@ -456,6 +456,7 @@ public class PlanController {
     private void onPrepareStarted(Object op, Plan started) {
         if (op == operation && plan == null) {
             preparingPlan = started;
+            refresh(); // Stop can now stop it
         }
     }
 
@@ -652,6 +653,13 @@ public class PlanController {
 
     @FXML
     protected void onStopClick() {
+        if (model.phase() == Phase.PREPARING) {
+            if (preparingPlan != null) {
+                // non-blocking: the end of prepare() shows what was listed and analysed so far
+                preparingPlan.cancelPreparation();
+            }
+            return;
+        }
         if (model.phase() == Phase.ANALYSING && plan != null) {
             plan.cancelAnalysis(); // non-blocking: the end of analyse() brings the view back to the plan
             return;
@@ -1151,9 +1159,10 @@ public class PlanController {
         show(warningLabel, warning.isPresent());
         show(pauseButton, model.isExecutionActive() && !model.canResume());
         show(resumeButton, model.canResume());
-        show(stopButton, model.isExecutionActive() || phase == Phase.ANALYSING);
+        show(stopButton, phase == Phase.PREPARING || model.isExecutionActive() || phase == Phase.ANALYSING);
         pauseButton.setDisable(!model.canPause());
-        stopButton.setDisable(!model.canStop());
+        // a preparation is stopped through its plan, handed out once the pipeline file is read
+        stopButton.setDisable(!model.canStop() || phase == Phase.PREPARING && preparingPlan == null);
 
         boolean preparing = phase == Phase.PREPARING || phase == Phase.ANALYSING; // the same bar
         show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);

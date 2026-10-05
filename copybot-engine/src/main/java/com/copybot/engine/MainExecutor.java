@@ -113,6 +113,8 @@ public class MainExecutor implements Runnable {
     private final Set<WorkItemExecution> requestedAnalysis = ConcurrentHashMap.newKeySet();
     /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
     private boolean analysing;
+    /** {@link #prepare()} runs and has not published PREPARED yet: {@link #cancelPreparation()} stops it. Guarded by phaseLock. */
+    private boolean preparationStoppable;
 
     /**
      * While preparing, the resume point known before the listing (see {@link ResumeResolver#listingPoint}): the
@@ -454,6 +456,9 @@ public class MainExecutor implements Runnable {
             throw new IllegalStateException("prepare() requires a resume context");
         }
         preparing = true;
+        synchronized (phaseLock) {
+            preparationStoppable = true;
+        }
         markRunning();
         state.setListingInProgress(true);
         startPhase();
@@ -478,6 +483,10 @@ public class MainExecutor implements Runnable {
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
             analyseTheSelectedItems();
             projectItems();
+            synchronized (phaseLock) {
+                checkCancelled(); // a cancelPreparation() until now stops it; later, it has no effect
+                preparationStoppable = false;
+            }
             state.setStatus(PipelineStatus.PREPARED);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -488,6 +497,9 @@ public class MainExecutor implements Runnable {
             listingPoint = null;
             analysisOnDemand = false;
             state.setListingInProgress(false);
+            synchronized (phaseLock) {
+                preparationStoppable = false;
+            }
             endPhase();
             preparing = false;
         }
@@ -606,6 +618,18 @@ public class MainExecutor implements Runnable {
         shutdownTasks();
         if (!byCancel) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Stops {@link #prepare()} ({@link #cancel()}): it ends CANCELLED. No effect once the plan is prepared or when no
+     * preparation runs: a late request must not cancel the execution to come. Callable from any thread.
+     */
+    void cancelPreparation() {
+        synchronized (phaseLock) {
+            if (preparationStoppable) {
+                cancel();
+            }
         }
     }
 
