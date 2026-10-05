@@ -171,6 +171,19 @@ public final class ResumeResolver {
         return false;
     }
 
+    /**
+     * Reads the state file cursor without proposing anything: a resume point chosen by the user replaces the
+     * proposal, but {@link #nextCursor} still never moves the cursor back (spec manual-point §1). Nothing to read in
+     * mode none.
+     *
+     * @throws CopybotException the state file cannot be understood
+     */
+    public void readCursor() {
+        if (mode != ResumeMode.NONE) {
+            readCursorOnce();
+        }
+    }
+
     private void readCursorOnce() {
         if (!cursorRead) {
             previousCursor = store.readCursor();

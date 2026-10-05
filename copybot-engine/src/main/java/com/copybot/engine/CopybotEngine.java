@@ -140,13 +140,64 @@ public final class CopybotEngine implements AutoCloseable {
      *                listing. It must not call any engine operation.
      */
     public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started) {
+        return prepare(pipelinePath, watcher, started, null);
+    }
+
+    /**
+     * Same as {@link #prepare(Path, Consumer, Consumer)} from a resume point chosen by the user, which acts like a
+     * cursor at that point (spec manual-point §1): the files before it are skipped at the listing without analysis,
+     * the destination is not probed, the proposal is the point (MANUAL).
+     *
+     * @param chosen null for the automatic resume point
+     */
+    public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started, ResumePoint chosen) {
         begin();
         MainExecutor mainExecutor = endOnFailure(() -> {
             PipelineConfig pipelineConfig = readPipeline(pipelinePath);
             PipelineChecks.requirePreparable(pipelineConfig);
-            return new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
+            MainExecutor prepared = new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
+            prepared.chooseResumePoint(chosen);
+            return prepared;
         });
         return prepareBegun(mainExecutor, started);
+    }
+
+    /**
+     * Continues a stopped preparation ({@link Plan#canContinue()}) from a resume point, without listing again: like
+     * a cursor at that point (spec manual-point §2). Blocking, in the calling thread, the active operation for its
+     * whole duration (close() stops it); its progress goes to the watcher of the preparation. Ends PREPARED (the plan
+     * is then executable), CANCELLED when stopped again ({@link Plan#cancelPreparation()}, still continuable), ERROR
+     * on a failure.
+     *
+     * @throws IllegalStateException another operation is active, the engine is closed, or the plan is not a stopped
+     *                               preparation whose listing is complete
+     */
+    public void continuePreparation(Plan plan, ResumePoint point) {
+        begin();
+        try {
+            MainExecutor mainExecutor = plan.getExecutor();
+            track(mainExecutor);
+            synchronized (lock) {
+                if (closed) { // a stopped plan ignores cancel(): refuse here rather than run while closing
+                    throw new IllegalStateException(ResourcesEngine.getString("engine.closed"));
+                }
+            }
+            mainExecutor.continuePreparation(point);
+            boolean kept = false;
+            if (mainExecutor.getState().getStatus() == PipelineStatus.PREPARED) {
+                synchronized (lock) {
+                    if (!closed) {
+                        preparedPlan = mainExecutor;
+                        kept = true;
+                    }
+                }
+            }
+            if (!kept) {
+                mainExecutor.resume(); // a stopped or failed continuation leaves nothing paused
+            }
+        } finally {
+            end();
+        }
     }
 
     // visible for tests: prepares a pipeline built from pre-resolved steps
@@ -192,9 +243,12 @@ public final class CopybotEngine implements AutoCloseable {
      * execution (spec deferred-analysis §1). Blocking, runs in the calling thread and counts as the active
      * operation for its whole duration; the plan is RUNNING meanwhile, PREPARED again when it returns, also when
      * it is stopped ({@link Plan#cancelAnalysis()}, {@link #close()}). Its progress goes to the watcher of the
-     * preparation. Nothing to analyse: returns at once, the plan untouched.
+     * preparation. Nothing to analyse: returns at once, the plan untouched. On a stopped preparation that can be
+     * continued ({@link Plan#canContinue()}), the files asked for ({@link Plan#requestAnalysis}): CANCELLED again
+     * when it returns, still continuable (spec manual-point §2).
      *
-     * @throws IllegalStateException when another operation is active, the engine is closed or the plan is not PREPARED
+     * @throws IllegalStateException when another operation is active, the engine is closed or the plan is neither
+     *                               PREPARED nor a stopped preparation that can be continued
      */
     public void analyse(Plan plan) {
         begin();
@@ -222,14 +276,25 @@ public final class CopybotEngine implements AutoCloseable {
      * @throws CopybotException      when the pipeline file is missing or invalid, or its resume mode unknown
      */
     public Execution run(Path pipelinePath, Consumer<PipelineState> watcher) {
+        return run(pipelinePath, watcher, null);
+    }
+
+    /**
+     * Same as {@link #run(Path, Consumer)} from a resume point chosen by the user (spec manual-point §1): like a
+     * cursor at that point, also without a resume block (the point filters, no cursor is written).
+     *
+     * @param chosen null for the automatic resume point
+     */
+    public Execution run(Path pipelinePath, Consumer<PipelineState> watcher, ResumePoint chosen) {
         begin();
         return endOnFailure(() -> {
             PipelineConfig pipelineConfig = readPipeline(pipelinePath);
             PipelineChecks.requireExecutable(pipelineConfig);
-            ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE
+            ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE && chosen == null
                     ? null
                     : resumeContext(pipelinePath, pipelineConfig);
             MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
+            mainExecutor.chooseResumePoint(chosen);
             return start(mainExecutor, pipelineConfig.executionMode() == ExecutionMode.STREAMING
                     ? mainExecutor::stream : mainExecutor::run);
         });

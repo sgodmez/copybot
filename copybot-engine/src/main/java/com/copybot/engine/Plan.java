@@ -14,6 +14,9 @@ import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.resources.ResourcesEngine;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -188,7 +191,8 @@ public final class Plan {
     /**
      * Asks the next {@link CopybotEngine#analyse} to also analyse these skipped files (analysis deferred at the
      * listing), so that their planned processing is known: they stay skipped, for the same reason. The files already
-     * analysed are left out; then {@link #toAnalyse()} includes them.
+     * analysed are left out; then {@link #toAnalyse()} includes them. On a stopped preparation that can be continued
+     * ({@link #canContinue()}), the files the stop left unanalysed too: the analysis leaves the plan stopped.
      */
     public void requestAnalysis(Collection<WorkItemExecution> items) {
         executor.requestAnalysis(items);
@@ -250,6 +254,29 @@ public final class Plan {
                                 && fileName.equals(item.getWorkItem().getNameDisplay()))
                         ? CopybotException.ofResource("resume.from-file.no-date", fileName)
                         : CopybotException.ofResource("resume.from-file.not-found", fileName));
+    }
+
+    /**
+     * Resume from a file chosen on disk, included: the key the listing gives it (its modification date to the
+     * second, its name), so that a point can be chosen before any listing (spec manual-point §3).
+     *
+     * @throws java.io.UncheckedIOException the file cannot be read
+     */
+    public static ResumePoint fromFile(Path file) {
+        try {
+            return ResumePoint.from(new ItemKey(Files.getLastModifiedTime(file).toInstant(), file.getFileName().toString()));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * A stopped preparation whose listing is complete (spec manual-point §2): {@link CopybotEngine#continuePreparation}
+     * continues it from a resume point, {@link #requestAnalysis} and {@link CopybotEngine#analyse} analyse some of its
+     * files. False for a preparation stopped while listing: files not listed yet would be left out.
+     */
+    public boolean canContinue() {
+        return executor.canContinue();
     }
 
     /** Resume from the start of this day (system time zone), included. */

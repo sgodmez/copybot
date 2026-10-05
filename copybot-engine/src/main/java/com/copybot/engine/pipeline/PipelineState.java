@@ -18,6 +18,7 @@ public class PipelineState {
 
     // written by listing threads, read by watchers/UI on other threads
     private volatile boolean listingInProgress;
+    private volatile boolean listingComplete;
 
     private ResourceRegistry registry;
 
@@ -64,6 +65,18 @@ public class PipelineState {
 
     public void setListingInProgress(boolean listingInProgress) {
         this.listingInProgress = listingInProgress;
+    }
+
+    /**
+     * Every input step of the last preparation listed to its end: no failure, no stop (spec manual-point §2). A
+     * preparation stopped afterwards can be continued; one stopped while listing cannot (files would be missing).
+     */
+    public boolean isListingComplete() {
+        return listingComplete;
+    }
+
+    public void setListingComplete(boolean listingComplete) {
+        this.listingComplete = listingComplete;
     }
 
     public void setRegistry(ResourceRegistry registry) {

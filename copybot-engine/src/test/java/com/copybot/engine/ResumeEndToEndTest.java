@@ -242,6 +242,21 @@ public class ResumeEndToEndTest {
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
     }
 
+    /** --from-date is known before the listing: a chosen point, like a cursor at that day (spec manual-point §1). */
+    @Test
+    public void dryRunFromDateSkipsTheDaysBeforeAsAChosenPointAndWritesNothing() throws IOException {
+        Path pipeline = pipeline("state", "{name}");
+
+        String[] result = capture(pipeline, "--dry-run", "--from-date=2026-09-02");
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[1].contains("[" + ResourcesEngine.getString("cli.plan.source.MANUAL") + "]"), result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_02.JPG")), result[1]);
+        assertFalse(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_01.JPG")), result[1]);
+        assertFalse(Files.exists(nas), "a dry run writes nothing");
+        assertFalse(Files.exists(tempDir.resolve("sd.state.json")));
+    }
+
     @Test
     public void allAndFromDateTogetherAreRejectedAndCopyNothing() throws IOException {
         Path pipeline = pipeline("state", "{name}");

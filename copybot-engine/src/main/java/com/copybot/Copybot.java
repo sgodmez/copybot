@@ -108,7 +108,9 @@ public class Copybot implements Callable<Integer> {
         // a dry run prints the warnings with the plan (stdout), a real run on stderr as soon as they are known
         Consumer<PipelineState> watcher = isDryRun ? null : warningsOnStderrOnce();
         if (isDryRun || resumeOverride != null) {
-            Plan plan = engine.prepare(pipelinePath, watcher);
+            // --all and --from-date are known before the listing: a chosen point, like a cursor there (spec
+            // manual-point §1); --from-file names a listed file: applied once the listing found its key
+            Plan plan = engine.prepare(pipelinePath, watcher, null, chosenPoint());
             PipelineStatus prepared = plan.getState().getStatus();
             if (prepared == PipelineStatus.CANCELLED) {
                 System.out.println("Cancelled !");
@@ -117,12 +119,14 @@ public class Copybot implements Callable<Integer> {
             if (prepared != PipelineStatus.PREPARED) {
                 return failed(plan.getState());
             }
-            ResumePoint override = resolveOverride(plan);
+            ResumePoint override = fromFileOverride(plan);
             if (isDryRun) {
-                plan.preview(override);
-                // the files the override selects again although the cursor skipped them at the listing: analysed
-                // like the others before being printed (nothing to do otherwise)
-                engine.analyse(plan);
+                if (override != null) {
+                    plan.preview(override);
+                    // the files the override selects again although the cursor skipped them at the listing: analysed
+                    // like the others before being printed (nothing to do otherwise)
+                    engine.analyse(plan);
+                }
                 PlanPrinter.print(plan, override, System.out);
                 return EXIT_SUCCESS;
             }
@@ -239,17 +243,17 @@ public class Copybot implements Callable<Integer> {
         return t.getMessage() != null ? t.getMessage() : t.getClass().getName();
     }
 
-    private ResumePoint resolveOverride(Plan plan) {
-        if (resumeOverride == null) {
+    /** --all or --from-date: a point known before the listing; null otherwise. */
+    private ResumePoint chosenPoint() {
+        if (resumeOverride == null || resumeOverride.fromFile != null) {
             return null;
         }
-        if (resumeOverride.all) {
-            return ResumePoint.all();
-        }
-        if (resumeOverride.fromFile != null) {
-            return plan.fromFile(resumeOverride.fromFile);
-        }
-        return Plan.fromDate(resumeOverride.fromDate);
+        return resumeOverride.all ? ResumePoint.all() : Plan.fromDate(resumeOverride.fromDate);
+    }
+
+    /** --from-file: the key of the listed file of that name; null otherwise. */
+    private ResumePoint fromFileOverride(Plan plan) {
+        return resumeOverride == null || resumeOverride.fromFile == null ? null : plan.fromFile(resumeOverride.fromFile);
     }
 
 

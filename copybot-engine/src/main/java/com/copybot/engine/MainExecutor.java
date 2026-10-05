@@ -128,6 +128,21 @@ public class MainExecutor implements Runnable {
      * items it does not select are skipped as soon as they are listed, without analysis. null otherwise.
      */
     private volatile ResumePoint listingPoint;
+    /** Where {@link #listingPoint} comes from: the state cursor, or a point chosen by the user (the skip reason). */
+    private volatile ResumeSource listingSource = ResumeSource.STATE;
+
+    /**
+     * A resume point chosen by the user before the preparation or the streaming run (spec manual-point §1): it is
+     * the listing point and the proposal, like a cursor at that point; null for the automatic one.
+     */
+    private volatile ResumePoint chosenPoint;
+    /**
+     * The last phase was a preparation ({@link #prepare()} or {@link #continuePreparation}): a CANCELLED status is
+     * then a stopped preparation, which can be continued when its listing is complete. Guarded by phaseLock.
+     */
+    private boolean lastPhaseWasPreparation;
+    /** A listing of the current preparation was stopped (cancel, interrupt) before its end. */
+    private final AtomicBoolean listingStopped = new AtomicBoolean(false);
 
     /** {@link #stream()}: processing while listing, the resume applied at the listing. */
     private volatile boolean streaming;
@@ -382,6 +397,9 @@ public class MainExecutor implements Runnable {
     }
 
     private void runSinglePhase() {
+        synchronized (phaseLock) {
+            lastPhaseWasPreparation = false;
+        }
         markRunning();
         state.setListingInProgress(true);
         startPhase();
@@ -427,11 +445,21 @@ public class MainExecutor implements Runnable {
      */
     private ResumeProposal resumeAtTheListing() {
         resolver = new ResumeResolver(resume, findOutAction());
-        ResumeProposal streamed = resolver.streamingProposal();
+        ResumePoint chosen = chosenPoint;
+        ResumeProposal streamed;
+        if (chosen != null) {
+            resolver.readCursor(); // the cursor never moves back (nextCursor)
+            streamed = new ResumeProposal(chosen, ResumeSource.MANUAL, List.of());
+            listingSource = ResumeSource.MANUAL;
+        } else {
+            streamed = resolver.streamingProposal();
+            listingSource = ResumeSource.STATE;
+        }
         addWarnings(streamed.warnings());
         proposal = new ResumeProposal(streamed.point(), streamed.source(), List.of());
         state.setResumeProposal(proposal);
-        listingPoint = streamed.point().kind() == ResumePoint.Kind.AFTER ? streamed.point() : null;
+        ResumePoint.Kind kind = streamed.point().kind();
+        listingPoint = kind == ResumePoint.Kind.AFTER || kind == ResumePoint.Kind.FROM ? streamed.point() : null;
         checkEachFile = streamed.point().kind() == ResumePoint.Kind.NOT_AT_DESTINATION;
         resumeAtTheListing = true;
         return streamed;
@@ -466,7 +494,10 @@ public class MainExecutor implements Runnable {
         preparing = true;
         synchronized (phaseLock) {
             preparationStoppable = true;
+            lastPhaseWasPreparation = true;
         }
+        listingStopped.set(false);
+        state.setListingComplete(false);
         markRunning();
         state.setListingInProgress(true);
         startPhase();
@@ -477,8 +508,18 @@ public class MainExecutor implements Runnable {
             finalPhase = false;
             dryRunSteps = processSteps();
             resolver = new ResumeResolver(resume, findOutAction());
-            listingPoint = resolver.listingPoint().orElse(null);
-            analysisOnDemand = listingPoint == null && resolver.probesTheDestination();
+            ResumePoint chosen = chosenPoint;
+            if (chosen != null) {
+                // like a cursor at that point (spec manual-point §1): no probe, the files before it not analysed
+                listingPoint = chosen;
+                listingSource = ResumeSource.MANUAL;
+                analysisOnDemand = false;
+                resolver.readCursor(); // never moved back by nextCursor
+            } else {
+                listingPoint = resolver.listingPoint().orElse(null);
+                listingSource = ResumeSource.STATE;
+                analysisOnDemand = listingPoint == null && resolver.probesTheDestination();
+            }
             runListings();
             commitPhase();
             if (listingFailed.get()) {
@@ -486,7 +527,9 @@ public class MainExecutor implements Runnable {
                 return;
             }
             orderedItems = ResumeResolver.order(state.getWorkItems());
-            proposal = resolver.propose(orderedItems, this::analyseNow);
+            proposal = chosen != null
+                    ? new ResumeProposal(chosen, ResumeSource.MANUAL, List.of())
+                    : resolver.propose(orderedItems, this::analyseNow);
             state.setResumeProposal(proposal);
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
             analyseTheSelectedItems();
@@ -519,6 +562,12 @@ public class MainExecutor implements Runnable {
      * ({@link #requestAnalysis}); empty when the preparation deferred nothing.
      */
     List<WorkItemExecution> toAnalyse() {
+        if (canContinue()) {
+            // a stopped preparation: only the files asked for, never every file left unanalysed by the stop
+            return state.getWorkItems().stream()
+                    .filter(item -> item.isAnalysisDeferred() && requestedAnalysis.contains(item))
+                    .toList();
+        }
         return orderedItems.stream()
                 .filter(item -> item.isAnalysisDeferred() && (item.getStatus() == ItemStatus.PENDING
                         || item.getStatus() == ItemStatus.SKIPPED && requestedAnalysis.contains(item)))
@@ -527,12 +576,112 @@ public class MainExecutor implements Runnable {
 
     /**
      * Asks {@link #analyseDeferred()} to also analyse these skipped items, so that their planned processing is known:
-     * they stay skipped, for the same reason. The items already analysed (or in error) are left out.
+     * they stay skipped, for the same reason. The items already analysed (or in error) are left out. On a stopped
+     * preparation that can be continued, the files the stop left unanalysed can be asked for too (spec
+     * manual-point §2).
      */
     void requestAnalysis(Collection<WorkItemExecution> items) {
+        boolean stopped = canContinue();
         for (WorkItemExecution item : items) {
             if (item.isAnalysisDeferred() && item.getStatus() == ItemStatus.SKIPPED) {
                 requestedAnalysis.add(item);
+            } else if (stopped && item.getStatus() == ItemStatus.PENDING && (!item.isPrepared() || item.isAnalysisDeferred())) {
+                item.markAnalysisDeferred();
+                requestedAnalysis.add(item);
+            }
+        }
+    }
+
+    /**
+     * Before {@link #prepare()} or {@link #stream()}: a resume point chosen by the user, which acts like a cursor at
+     * that point (spec manual-point §1); null for the automatic one.
+     */
+    void chooseResumePoint(ResumePoint point) {
+        chosenPoint = point;
+    }
+
+    /** A stopped preparation whose listing is complete: {@link #continuePreparation} can continue it. */
+    boolean canContinue() {
+        synchronized (phaseLock) {
+            return isContinuable();
+        }
+    }
+
+    /** Caller holds phaseLock. */
+    private boolean isContinuable() {
+        return state.getStatus() == PipelineStatus.CANCELLED && lastPhaseWasPreparation && state.isListingComplete()
+                && phaseThread == null && !preparing;
+    }
+
+    /**
+     * Continues a stopped preparation from a resume point, without listing again: like a cursor at that point (spec
+     * manual-point §2). The files before it are skipped (not analysed when they were not yet), the files from it not
+     * analysed yet are analysed and checked, the ones already analysed keep their target and check; the proposal is
+     * the point, MANUAL. Ends PREPARED; stopped again ({@link #cancelPreparation()}, {@link #cancel()}): CANCELLED,
+     * still continuable; a failure: ERROR. Blocking, in the caller's thread, with the watcher of the preparation.
+     *
+     * @throws IllegalStateException not a stopped preparation whose listing is complete (engine.not-continuable)
+     */
+    void continuePreparation(ResumePoint point) {
+        java.util.Objects.requireNonNull(point, "point");
+        synchronized (phaseLock) {
+            if (!isContinuable()) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.not-continuable", state.getStatus()));
+            }
+            // the stop that ended the preparation is over; a stop from now on stops this continuation
+            cancelRequested = false;
+            cancelInterruptSent = false;
+            preparationStoppable = true;
+            preparing = true;
+            markRunning(); // under the same lock: a cancel() is never lost on a still terminal status
+        }
+        startPhase();
+        try {
+            checkCancelled();
+            phaseEnd = barrierIndex;
+            finalPhase = false;
+            dryRunSteps = processSteps();
+            listingPoint = null;
+            analysisOnDemand = false;
+            resolver.readCursor(); // never moved back by nextCursor
+            orderedItems = ResumeResolver.order(state.getWorkItems());
+            for (WorkItemExecution exec : orderedItems) {
+                if (exec.getStatus() == ItemStatus.PENDING && !exec.isPrepared()) {
+                    exec.markAnalysisDeferred(); // never analysed (the stop interrupted it, or the probe was to)
+                }
+            }
+            proposal = new ResumeProposal(point, ResumeSource.MANUAL, List.of());
+            state.setResumeProposal(proposal);
+            resolver.apply(point, ResumeSource.MANUAL, orderedItems);
+            analyseTheSelectedItems();
+            checkTheUncheckedTargets();
+            projectItems();
+            synchronized (phaseLock) {
+                checkCancelled(); // a stop until now stops it; later, it has no effect
+                preparationStoppable = false;
+            }
+            state.setStatus(PipelineStatus.PREPARED);
+        } catch (InterruptedException e) {
+            onPhaseInterrupted();
+        } catch (RuntimeException | Error e) {
+            onPhaseFailed(e, true);
+        } finally {
+            dryRunSteps = null;
+            synchronized (phaseLock) {
+                preparationStoppable = false;
+            }
+            endPhase();
+            preparing = false;
+        }
+    }
+
+    /** The files to copy analysed before a stop whose target check the stop interrupted. */
+    private void checkTheUncheckedTargets() throws InterruptedException {
+        for (WorkItemExecution exec : orderedItems) {
+            checkCancelled();
+            if (exec.getStatus() == ItemStatus.PENDING && exec.isPrepared() && !exec.isAnalysisDeferred()
+                    && exec.getProjection() != null && exec.getTargetCheck() == null) {
+                checkTarget(exec, registry.ticket());
             }
         }
     }
@@ -553,14 +702,23 @@ public class MainExecutor implements Runnable {
      */
     void analyseDeferred() {
         List<WorkItemExecution> items;
+        PipelineStatus endStatus;
         synchronized (phaseLock) {
-            if (state.getStatus() != PipelineStatus.PREPARED) {
+            boolean stopped = isContinuable();
+            if (state.getStatus() != PipelineStatus.PREPARED && !stopped) {
                 throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
             }
             items = toAnalyse();
-            if (cancelRequested || items.isEmpty()) {
+            if (items.isEmpty() || !stopped && cancelRequested) {
                 return;
             }
+            if (stopped) {
+                // a stopped preparation (spec manual-point §2): the stop that ended it is not a stop of this analysis,
+                // and the status leaves CANCELLED under the lock, so that a stop of the analysis is never lost
+                cancelRequested = false;
+                markRunning();
+            }
+            endStatus = stopped ? PipelineStatus.CANCELLED : PipelineStatus.PREPARED;
             analysing = true;
         }
         // a skipped item asked for stays skipped: the barrier would make it PENDING (to copy)
@@ -606,7 +764,7 @@ public class MainExecutor implements Runnable {
                 analysing = false;
                 cancelRequested = false; // requested during this analysis (checked above): it only stopped it
                 phaseThread = null; // a later cancel() cancels the plan, not this phase
-                state.setStatus(PipelineStatus.PREPARED); // before the terminal notification of endPhase
+                state.setStatus(endStatus); // PREPARED, or CANCELLED for a stopped preparation; before the terminal notification of endPhase
             }
             endPhase();
             preparing = false;
@@ -771,6 +929,9 @@ public class MainExecutor implements Runnable {
         ResumePoint point = override != null ? override : proposal.point();
         ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
         applyOverride(override);
+        synchronized (phaseLock) {
+            lastPhaseWasPreparation = false; // a stopped execution is not a preparation to continue
+        }
         markRunning();
         startPhase();
         try {
@@ -995,11 +1156,16 @@ public class MainExecutor implements Runnable {
             } finally {
                 registry.releaseAll(footprint);
             }
+            if (Thread.currentThread().isInterrupted() || cancelRequested) {
+                listingStopped.set(true); // a plugin that ended its listing early on the stop: maybe incomplete
+            }
         } catch (InterruptedException e) {
+            listingStopped.set(true);
             Thread.currentThread().interrupt();
         } catch (PhaseStopped e) {
             // the phase is being stopped (see emitItem): not a listing failure. Only this private marker is
             // ignored: any other exception, a plugin's own CancellationException included, fails the run.
+            listingStopped.set(true);
         } catch (Throwable t) {
             // A failing listing must not silently look like success: the whole run is marked ERROR.
             state.recordFailureIfAbsent(t); // the first listing failure wins, atomically
@@ -1007,6 +1173,7 @@ public class MainExecutor implements Runnable {
         } finally {
             listingGate.countDown();
             if (listingGate.getCount() == 0) {
+                state.setListingComplete(!listingStopped.get() && !listingFailed.get());
                 state.setListingInProgress(false);
                 notifyWatcher();
             }
@@ -1031,12 +1198,14 @@ public class MainExecutor implements Runnable {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             if (cancelRequested || taskExecutor.isShutdown()) {
+                listingStopped.set(true); // even if the plugin swallows the marker: this listing is incomplete
                 throw new PhaseStopped();
             }
             // not an interrupt of ours: the listing stops short, which must fail the run
             throw new IllegalStateException("listing interrupted", e);
         }
         if (cancelRequested) {
+            listingStopped.set(true); // even if the plugin swallows the marker: this listing is incomplete
             throw new PhaseStopped(); // woken by the pause cancel() lifted: emit nothing more
         }
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
@@ -1058,6 +1227,7 @@ public class MainExecutor implements Runnable {
         } catch (RejectedExecutionException e) {
             if (taskExecutor.isShutdown()) {
                 // the phase shut its executor down (cancel, interrupt) while this listing was emitting
+                listingStopped.set(true); // even if the plugin swallows the marker: this listing is incomplete
                 throw new PhaseStopped();
             }
             throw e;
@@ -1088,7 +1258,7 @@ public class MainExecutor implements Runnable {
         }
         exec.setResumeKey(ItemKey.of(exec.getWorkItem()).orElse(null));
         if (exec.getResumeKey().filter(key -> !point.selects(key)).isPresent()) {
-            exec.deferAnalysis(ResumeResolver.skipReason(point, ResumeSource.STATE));
+            exec.deferAnalysis(ResumeResolver.skipReason(point, listingSource));
         }
     }
 
