@@ -43,6 +43,15 @@ public record ConfigField(
         return hints.contains(hint);
     }
 
+    /**
+     * The i18n key of the label of one value of an {@link FieldKind#ENUM}: "config.&lt;path&gt;.value.&lt;value&gt;",
+     * prefixed like the label (the value stays as written in the JSON).
+     */
+    public String valueKey(String value) {
+        String base = labelKey.endsWith(".name") ? labelKey.substring(0, labelKey.length() - ".name".length()) : labelKey;
+        return base + ".value." + value;
+    }
+
     /** This field, its children and its element schema with "prefix." in front of every i18n key. */
     public ConfigField withKeyPrefix(String prefix) {
         return new ConfigField(name, path, kind, required, defaultValue, hints,

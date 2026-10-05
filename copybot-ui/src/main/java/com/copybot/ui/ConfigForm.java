@@ -49,6 +49,11 @@ final class ConfigForm {
 
         String description(ConfigField field);
 
+        /** The label shown for one value of an enum field (the JSON keeps the value): the value itself by default. */
+        default String valueLabel(ConfigField field, String value) {
+            return value;
+        }
+
         /** The JSON of a value that is not edited as text (a list of records). */
         String json(ConfigField field);
 
@@ -178,6 +183,15 @@ final class ConfigForm {
         return description.isEmpty() ? node : new VBox(3, node, small(description));
     }
 
+    /** "Yes" / "No" for the JSON true / false; any other value (kept as written in the file) as it is. */
+    static String booleanLabel(String value) {
+        return switch (value) {
+            case "true" -> ResourcesEngine.getString("editor.value.true");
+            case "false" -> ResourcesEngine.getString("editor.value.false");
+            default -> value;
+        };
+    }
+
     private static Label small(String text) {
         Label label = new Label(text);
         label.setWrapText(true);
@@ -187,8 +201,8 @@ final class ConfigForm {
 
     private Node input(ConfigField field) {
         return switch (field.kind()) {
-            case BOOLEAN -> choice(field, List.of("true", "false"));
-            case ENUM -> choice(field, field.enumValues());
+            case BOOLEAN -> choice(field, List.of("true", "false"), ConfigForm::booleanLabel);
+            case ENUM -> choice(field, field.enumValues(), value -> access.valueLabel(field, value));
             case LIST -> list(field);
             case PATH -> path(field);
             default -> text(new TextField(), field);
@@ -199,7 +213,7 @@ final class ConfigForm {
      * The values only: an absent field shows its default selected (nothing is written until another choice).
      * "" (absent) is offered only for an optional field without default; a value outside them is kept and shown.
      */
-    private Node choice(ConfigField field, List<String> values) {
+    private Node choice(ConfigField field, List<String> values, java.util.function.UnaryOperator<String> label) {
         ComboBox<String> combo = new ComboBox<>();
         List<String> items = new ArrayList<>();
         if (field.defaultValue() == null && !field.required()) {
@@ -210,7 +224,7 @@ final class ConfigForm {
         combo.setConverter(new StringConverter<>() {
             @Override
             public String toString(String value) {
-                return value == null ? "" : value;
+                return value == null || value.isEmpty() ? "" : label.apply(value);
             }
 
             @Override

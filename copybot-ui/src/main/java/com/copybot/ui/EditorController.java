@@ -597,6 +597,11 @@ public class EditorController {
             }
 
             @Override
+            public String valueLabel(ConfigField field, String value) {
+                return action.valueLabel(field, value);
+            }
+
+            @Override
             public String description(ConfigField field) {
                 return action.description(field);
             }

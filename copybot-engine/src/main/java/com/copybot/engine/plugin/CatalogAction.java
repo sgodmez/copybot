@@ -57,6 +57,11 @@ public record CatalogAction(
         return texts.getOrDefault(field.labelKey(), field.name());
     }
 
+    /** The localized label of one value of an enum field, the value as written when the plugin has none. */
+    public String valueLabel(ConfigField field, String value) {
+        return texts.getOrDefault(field.valueKey(value), value);
+    }
+
     /** The localized description of the field, empty when the plugin has none. */
     public String description(ConfigField field) {
         return texts.getOrDefault(field.descriptionKey(), "");

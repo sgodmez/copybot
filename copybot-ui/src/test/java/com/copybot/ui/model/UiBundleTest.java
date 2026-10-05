@@ -26,7 +26,7 @@ public class UiBundleTest {
             "plan.target.more", "plan.back","plan.edit", "plan.resume-mode",
             "plan.details.show", "plan.details.hide", "plan.chip.no-setting", "plan.card.last-run",
             "plan.card.resume", "plan.badge.copied", "plan.badge.skipped", "plan.badge.error", "plan.badge.errors",
-            "plan.resume-mode.absent", "plan.resume-mode.none", "plan.resume-mode.state",
+            "plan.resume-mode.none", "plan.resume-mode.state",
             "plan.resume-mode.destination", "plan.resume-mode.stateThenDestination",
             "plan.resume.all", "plan.resume.after", "plan.resume.from", "plan.resume.from-date",
             "plan.resume.source.NONE", "plan.resume.source.STATE", "plan.resume.source.DESTINATION",
@@ -66,7 +66,7 @@ public class UiBundleTest {
             "item.status.SKIPPED.no-reason", "editor.save.tooltip", "editor.save-as.tooltip", "editor.show-json.tooltip",
             "editor.lenient", "editor.overwrite", "home.state-file", "editor.incomplete", "editor.save-anyway",
             "plan.menu.detail", "plan.menu.details", "plan.menu.analyse", "plan.detail.title", "plan.detail.position", "plan.detail.status", "plan.detail.filtered",
-            "plan.detail.unsupported", "plan.detail.no-target");
+            "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
 

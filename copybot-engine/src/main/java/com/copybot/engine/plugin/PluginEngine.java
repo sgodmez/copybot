@@ -153,6 +153,9 @@ public final class PluginEngine {
                 for (ConfigField field : schema.allFields()) {
                     text(bundle, field.labelKey()).ifPresent(t -> texts.put(field.labelKey(), t));
                     text(bundle, field.descriptionKey()).ifPresent(t -> texts.put(field.descriptionKey(), t));
+                    for (String value : field.enumValues()) {
+                        text(bundle, field.valueKey(value)).ifPresent(t -> texts.put(field.valueKey(value), t));
+                    }
                 }
             }
             actions.add(new CatalogAction(plugin.getName(), instance.getPluginCode(), plugin.getVersion(),

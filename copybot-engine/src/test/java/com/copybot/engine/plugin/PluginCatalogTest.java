@@ -86,6 +86,17 @@ public class PluginCatalogTest {
     }
 
     @Test
+    public void theValuesOfAChoiceAreLocalizedTheUnknownOnesShownAsWritten() {
+        CatalogAction write = embedded("file.write");
+        ConfigField onMissingKey = write.configSchema().orElseThrow().field("onMissingKey").orElseThrow();
+
+        String error = write.valueLabel(onMissingKey, "error");
+        assertNotEquals("error", error, "a translated value");
+        assertFalse(error.startsWith("%"), error);
+        assertEquals("mystery", write.valueLabel(onMissingKey, "mystery"), "a value without label: as written");
+    }
+
+    @Test
     public void aFieldWithoutLabelShowsItsName() {
         CatalogAction write = embedded("file.write");
         ConfigField unknown = new ConfigField("mystery", "mystery", FieldKind.STRING,

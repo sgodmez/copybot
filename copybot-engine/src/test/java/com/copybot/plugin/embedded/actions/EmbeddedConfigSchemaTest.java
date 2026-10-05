@@ -91,6 +91,22 @@ public class EmbeddedConfigSchemaTest {
     }
 
     @Test
+    public void everyValueOfAChoiceHasALabelInBothBundles() throws IOException {
+        assertEquals("plugin.embedded.file.write.config.onMissingKey.value.error",
+                field(writeSchema(), "onMissingKey").valueKey("error"));
+        for (String file : List.of("pluginBundle.properties", "pluginBundle_fr.properties")) {
+            Properties properties = bundle(file);
+            for (ConfigSchema schema : List.of(readSchema(), writeSchema())) {
+                for (ConfigField field : schema.allFields()) {
+                    for (String value : field.enumValues()) {
+                        assertNotNull(properties.getProperty(field.valueKey(value)), field.valueKey(value) + " in " + file);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     public void everyFieldAndActionHasALabelAndADescriptionInBothBundles() throws IOException {
         for (String file : List.of("pluginBundle.properties", "pluginBundle_fr.properties")) {
             Properties properties = bundle(file);
