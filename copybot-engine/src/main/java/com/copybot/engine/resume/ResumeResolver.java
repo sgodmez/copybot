@@ -195,7 +195,9 @@ public final class ResumeResolver {
             } else if (point.selects(key.get())) {
                 item.setReady();
             } else {
-                item.setSkippedByResumePoint(skipReason(point, source));
+                item.setSkippedByResumePoint(source == ResumeSource.DESTINATION && match == DestinationMatch.FILE
+                        ? skipReason(point, "resume.skip.destination-file") // the dichotomy probed the files
+                        : skipReason(point, source));
             }
         }
     }
@@ -438,16 +440,21 @@ public final class ResumeResolver {
 
     /** Only for an item the point does not select: never for ALL, which selects everything (hence a key). */
     public static String skipReason(ResumePoint point, ResumeSource source) {
-        String date = DISPLAY_DATE.format(point.key().date());
-        if (point.key().name().isEmpty()) {
-            // a resume point chosen by date only (--from-date): no file name to show
-            return ResourcesEngine.getString("resume.skip.manual-date", date);
-        }
         String resourceKey = switch (source) {
             case STATE -> "resume.skip.state";
             case DESTINATION -> "resume.skip.destination";
             case MANUAL, NONE -> "resume.skip.manual";
         };
+        return skipReason(point, resourceKey);
+    }
+
+    /** With the message of this resource key (file name, date), or the one of a date alone. */
+    private static String skipReason(ResumePoint point, String resourceKey) {
+        String date = DISPLAY_DATE.format(point.key().date());
+        if (point.key().name().isEmpty()) {
+            // a resume point chosen by date only (--from-date): no file name to show
+            return ResourcesEngine.getString("resume.skip.manual-date", date);
+        }
         return ResourcesEngine.getString(resourceKey, point.key().name(), date);
     }
 }

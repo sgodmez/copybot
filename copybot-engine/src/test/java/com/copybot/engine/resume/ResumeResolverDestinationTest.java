@@ -240,6 +240,25 @@ public class ResumeResolverDestinationTest {
     }
 
     @Test
+    public void theReasonOfTheDichotomyNamesWhatItChecked() throws Exception {
+        file("2026-09-01", "A.JPG");
+        List<WorkItemExecution> ordered = card();
+        for (DestinationMatch match : DestinationMatch.values()) {
+            ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.DICHOTOMY, match,
+                    dayOut(Optional.of(true)));
+            ResumeProposal p = resolver.propose(ordered);
+
+            resolver.apply(p.point(), p.source(), ordered);
+
+            String key = match == DestinationMatch.FILE ? "resume.skip.destination-file" : "resume.skip.destination";
+            String date = java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
+                    .withZone(java.time.ZoneId.systemDefault()).format(p.point().key().date());
+            assertEquals(ResourcesEngine.getString(key, p.point().key().name(), date), ordered.get(0).getSkipReason(),
+                    match.name());
+        }
+    }
+
+    @Test
     public void aFixedDirectoryIsFineInFileMode() throws Exception {
         List<WorkItemExecution> ordered = card();
         file("all", "A.JPG");
