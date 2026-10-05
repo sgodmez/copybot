@@ -688,10 +688,18 @@ public final class PlanViewModel {
         return size == null ? "?" : displaySize(size, 2);
     }
 
-    /** "Copy N files (X GB)". */
+    /**
+     * "Copy N files (X GB)": the files the copy will write. Those a full conflict check announces left out (identical,
+     * "ifIdentical": "skip") are not counted: "Copy N files (X GB), M already there left out".
+     */
     public String copyLabel() {
-        Plan.Counts counts = counts();
-        return ResourcesEngine.getString("plan.copy", counts.selected(), displaySize(counts.selectedBytes(), 1));
+        List<WorkItemExecution> selected = items.stream().filter(i -> Plan.Counts.isSelected(i.getStatus())).toList();
+        List<WorkItemExecution> written = selected.stream()
+                .filter(i -> i.getTargetCheck() == null || !i.getTargetCheck().skipped()).toList();
+        String size = displaySize(written.stream().mapToLong(PlanViewModel::size).sum(), 1);
+        int leftOut = selected.size() - written.size();
+        return leftOut == 0 ? ResourcesEngine.getString("plan.copy", written.size(), size)
+                : ResourcesEngine.getString("plan.copy.left-out", written.size(), size, leftOut);
     }
 
     /**
@@ -788,6 +796,10 @@ public final class PlanViewModel {
     public static String statusText(WorkItemExecution item) {
         return switch (item.getStatus()) {
             case PENDING -> {
+                if (!item.isPrepared()) {
+                    // listed, not analysed yet (preparing, or the preparation stopped): not known to be copied
+                    yield ResourcesEngine.getString("item.status.NOT_ANALYSED");
+                }
                 String pending = ResourcesEngine.getString("item.status.PENDING");
                 TargetCheck check = item.getTargetCheck();
                 yield check != null && check.exists()

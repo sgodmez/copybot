@@ -218,7 +218,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
                 return TargetCheck.free();
             }
             if (ConflictResolver.isSource(workItem, target)) {
-                return new TargetCheck(Kind.IDENTICAL, target, ResourcesEngine.getString("write.check.same-file"));
+                return new TargetCheck(Kind.IDENTICAL, target, ResourcesEngine.getString("write.check.same-file"), true);
             }
             return compareContent ? fullCheck(workItem, target, existing) : quickCheck(workItem, target, existing);
         } catch (IOException | RuntimeException e) {
@@ -242,9 +242,11 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         boolean identical = !existing.isDirectory() && FileComparison.identical(workItem, target, current.compare());
         FileWriteSettings.Policy policy = identical ? current.ifIdentical() : current.ifDifferent();
         String outcome = policyText(policy);
+        boolean skipped = policy == FileWriteSettings.Policy.SKIP;
         if (policy == FileWriteSettings.Policy.RENAME) {
             try {
                 ConflictResolver.Decision decision = conflicts.resolve(workItem, target); // reads only
+                skipped = decision.isSkip(); // a renamed candidate identical to the item
                 outcome = decision.isSkip() ? decision.skipReason()
                         : ResourcesEngine.getString("write.check.renamed", decision.target().getFileName());
             } catch (CopybotException e) {
@@ -252,7 +254,8 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             }
         }
         return new TargetCheck(identical ? Kind.IDENTICAL : Kind.DIFFERENT, target,
-                ResourcesEngine.getString(identical ? "write.check.identical" : "write.check.different", target, outcome));
+                ResourcesEngine.getString(identical ? "write.check.identical" : "write.check.different", target, outcome),
+                skipped);
     }
 
     private static String policyText(FileWriteSettings.Policy policy) {

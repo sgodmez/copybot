@@ -1175,6 +1175,7 @@ public class PlanViewModelTest {
 
     private WorkItemExecution checked(String name, Kind kind) throws IOException {
         WorkItemExecution item = item(name, 1);
+        item.markPrepared(); // the plan checks a target once the file is analysed
         item.setTargetCheck(kind == Kind.FREE ? TargetCheck.free()
                 : new TargetCheck(kind, tempDir.resolve("nas").resolve(name), "copy of " + name));
         return item;
@@ -1239,5 +1240,39 @@ public class PlanViewModelTest {
         model.startExecuting();
         model.update(state(PipelineStatus.RUNNING, same), List.of());
         assertEquals(Optional.empty(), model.conflictText(), "the statuses of the copy tell it then");
+    }
+
+    @Test
+    public void theCopyButtonLeavesOutTheFilesAFullCheckAnnouncesSkipped() throws IOException {
+        WorkItemExecution identical = item("a.jpg", 1000);
+        identical.markPrepared();
+        identical.setTargetCheck(new TargetCheck(Kind.IDENTICAL, tempDir.resolve("nas/a.jpg"), "skipped", true));
+        WorkItemExecution renamed = item("b.jpg", 3000);
+        renamed.markPrepared();
+        renamed.setTargetCheck(new TargetCheck(Kind.DIFFERENT, tempDir.resolve("nas/b.jpg"), "renamed", false));
+        WorkItemExecution free = item("c.jpg", 2000);
+        free.markPrepared();
+        free.setTargetCheck(TargetCheck.free());
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+
+        model.update(state(PipelineStatus.PREPARED, identical, renamed, free), List.of(identical, renamed, free));
+
+        PlanViewModel bytes = new PlanViewModel();
+        bytes.update(state(PipelineStatus.PREPARED, renamed, free), List.of(renamed, free));
+        String writtenSize = bytes.copyLabel().replaceAll(".*\\((.*)\\).*", "$1");
+        assertEquals(ResourcesEngine.getString("plan.copy.left-out", 2, writtenSize, 1), model.copyLabel(),
+                "2 files written, the identical one left out");
+        assertTrue(model.canCopy(), "the copy still runs: it skips it and moves the cursor");
+    }
+
+    @Test
+    public void aFileNotAnalysedYetIsNotToCopy() throws IOException {
+        WorkItemExecution listed = item("a.jpg", 1);
+
+        assertEquals(ResourcesEngine.getString("item.status.NOT_ANALYSED"), PlanViewModel.statusText(listed),
+                "listed, its analysis not run (preparing, or the preparation stopped)");
+        listed.markPrepared();
+        assertEquals(ResourcesEngine.getString("item.status.PENDING"), PlanViewModel.statusText(listed));
     }
 }

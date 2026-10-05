@@ -69,6 +69,7 @@ public class FileWriteCheckTest {
         TargetCheck differentSize = action("").checkTarget(source("b.jpg", "abc"), false);
 
         assertEquals(Kind.SAME_SIZE, sameSize.kind());
+        assertFalse(sameSize.skipped(), "quick cannot tell: the copy compares");
         assertEquals(same, sameSize.existing());
         assertNotNull(sameSize.message());
         assertEquals(Kind.DIFFERENT_SIZE, differentSize.kind());
@@ -94,6 +95,8 @@ public class FileWriteCheckTest {
 
         assertEquals(Kind.IDENTICAL, identical.kind());
         assertEquals(Kind.DIFFERENT, renamed.kind());
+        assertTrue(identical.skipped(), "identical, ifIdentical skip (the default): left out by the copy");
+        assertFalse(renamed.skipped(), "renamed: copied");
         assertTrue(renamed.message().contains("other (2).jpg"), renamed.message());
         assertEquals(3, nasFiles().size(), "nothing is written");
     }
@@ -107,6 +110,10 @@ public class FileWriteCheckTest {
                 .checkTarget(source("a.jpg", "abc"), true).message();
         String skip = action(",\"onConflict\":{\"ifDifferent\":\"skip\"}")
                 .checkTarget(source("a.jpg", "abc"), true).message();
+        assertTrue(action(",\"onConflict\":{\"ifDifferent\":\"skip\"}").checkTarget(source("a.jpg", "abc"), true).skipped());
+        assertFalse(action(",\"onConflict\":{\"ifDifferent\":\"overwrite\"}").checkTarget(source("a.jpg", "abc"), true).skipped());
+        assertFalse(action(",\"onConflict\":{\"ifIdentical\":\"overwrite\"}").checkTarget(source("a.jpg", "xyz"), true).skipped(),
+                "identical but overwritten: written");
 
         assertNotEquals(overwrite, error);
         assertNotEquals(overwrite, skip);
@@ -123,6 +130,7 @@ public class FileWriteCheckTest {
 
         assertEquals(Kind.IDENTICAL, action("").checkTarget(inPlace, false).kind());
         assertEquals(Kind.IDENTICAL, action("").checkTarget(inPlace, true).kind());
+        assertTrue(action("").checkTarget(inPlace, false).skipped(), "the source itself is never written");
     }
 
     @Test

@@ -9,8 +9,10 @@ import java.nio.file.Path;
  * @param kind     what was found
  * @param existing the existing target, null when nothing exists or the action cannot tell
  * @param message  what the copy will do with it, in the current language, for the user; null when nothing exists
+ * @param skipped  the copy will leave the item out (e.g. identical with "ifIdentical": "skip", the source itself):
+ *                 known only when the action compared as the copy will; false when it cannot tell
  */
-public record TargetCheck(Kind kind, Path existing, String message) {
+public record TargetCheck(Kind kind, Path existing, String message, boolean skipped) {
 
     public enum Kind {
         /** the action cannot tell (the default), or the target could not be resolved */
@@ -46,6 +48,11 @@ public record TargetCheck(Kind kind, Path existing, String message) {
         if (kind == null) {
             throw new IllegalArgumentException("kind");
         }
+    }
+
+    /** A check that cannot tell whether the copy leaves the item out. */
+    public TargetCheck(Kind kind, Path existing, String message) {
+        this(kind, existing, message, false);
     }
 
     public static TargetCheck free() {
