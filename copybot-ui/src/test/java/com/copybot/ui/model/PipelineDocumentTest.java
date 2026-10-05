@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
@@ -113,34 +114,50 @@ public class PipelineDocumentTest {
 
     // ---- pipeline fields ----
 
+    /** Spec execution-mode §5: "plan" is the default, not written. */
     @Test
-    public void autoExecuteLivesInTheUiBlock() {
+    public void theExecutionModeIsWrittenOnlyWhenNotPlan() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
-        assertFalse(document.autoExecute());
+        assertEquals(ExecutionMode.PLAN, document.executionMode());
 
-        document.setAutoExecute(true);
-        assertTrue(document.autoExecute());
+        document.setExecutionMode(ExecutionMode.PLAN);
+        assertFalse(document.isModified(), "plan is the default");
+
+        document.setExecutionMode(ExecutionMode.STREAMING);
         assertTrue(document.isModified());
+        assertEquals(ExecutionMode.STREAMING, document.executionMode());
+        assertEquals("streaming", tree(document.toJson()).get("execution").getAsString());
+        document.setExecutionMode(ExecutionMode.AUTO);
+        assertEquals("auto", tree(document.toJson()).get("execution").getAsString());
 
-        document.setAutoExecute(false);
-        assertEquals(tree("{\"theme\":\"dark\"}"), tree(document.toJson()).getAsJsonObject("ui"), "the other ui members stay");
-
-        PipelineDocument bare = PipelineDocument.empty();
-        bare.setAutoExecute(true);
-        bare.setAutoExecute(false);
-        assertEquals("{}\n", bare.toJson(), "an emptied ui block is removed");
+        document.setExecutionMode(ExecutionMode.PLAN);
+        assertFalse(tree(document.toJson()).has("execution"));
+        assertEquals(tree("{\"theme\":\"dark\"}"), tree(document.toJson()).getAsJsonObject("ui"), "the ui block stays as is");
+        assertEquals(ExecutionMode.PLAN, PipelineDocument.parse("{\"execution\":\"later\"}").executionMode(),
+                "an unknown mode reads as the default (the engine refuses it)");
     }
 
     @Test
-    public void startProcessingWhileListingIsWrittenOnlyWhenTrue() {
-        PipelineDocument document = PipelineDocument.empty();
+    public void theDestinationOptionsLiveInTheResumeBlockAndTheirDefaultsAreNotWritten() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertEquals("dichotomy", document.destinationCheck());
+        assertEquals("directory", document.destinationMatch());
 
-        document.setStartProcessingWhileListing(false);
-        assertFalse(document.isModified(), "false is the default");
+        document.setDestinationCheck("everyFile");
+        document.setDestinationMatch("file");
+        assertTrue(document.isModified());
+        assertEquals(tree("{\"mode\":\"state\",\"destinationCheck\":\"everyFile\",\"destinationMatch\":\"file\"}"),
+                tree(document.toJson()).getAsJsonObject("resume"));
+        assertEquals("everyFile", document.destinationCheck());
+        assertEquals("file", document.destinationMatch());
 
-        document.setStartProcessingWhileListing(true);
-        assertTrue(document.startProcessingWhileListing());
-        assertTrue(tree(document.toJson()).get("startProcessingWhileListing").getAsBoolean());
+        document.setDestinationCheck("dichotomy");
+        document.setDestinationMatch("directory");
+        assertEquals(tree("{\"mode\":\"state\"}"), tree(document.toJson()).getAsJsonObject("resume"));
+        assertThrows(IllegalArgumentException.class, () -> document.setDestinationCheck("sometimes"));
+        assertThrows(IllegalArgumentException.class, () -> document.setDestinationMatch("name"));
+        assertThrows(IllegalStateException.class, () -> PipelineDocument.empty().setDestinationCheck("everyFile"),
+                "without resume block: it would turn the resume on");
     }
 
     @Test
@@ -171,7 +188,7 @@ public class PipelineDocumentTest {
     public void aFailingSaveLeavesTheOriginalFileIntactAndNoTempFile() throws IOException {
         Path file = Files.writeString(tempDir.resolve("p.json"), PIPELINE);
         PipelineDocument document = PipelineDocument.parse("{\"comment\":\"new\"}");
-        document.setAutoExecute(true);
+        document.setExecutionMode(ExecutionMode.STREAMING);
 
         assertThrows(IOException.class, () -> document.save(file, temp -> {
             assertTrue(Files.exists(temp), "the temp file exists when the hook runs");
@@ -204,12 +221,12 @@ public class PipelineDocumentTest {
     public void saveReplacesAnExistingFileAndClearsTheModifiedFlag() throws IOException {
         Path file = Files.writeString(tempDir.resolve("p.json"), "old");
         PipelineDocument document = PipelineDocument.empty();
-        document.setAutoExecute(true);
+        document.setExecutionMode(ExecutionMode.STREAMING);
 
         document.save(file);
 
         assertFalse(document.isModified());
-        assertTrue(tree(Files.readString(file)).getAsJsonObject("ui").get("autoExecute").getAsBoolean());
+        assertEquals("streaming", tree(Files.readString(file)).get("execution").getAsString());
         try (var entries = Files.list(tempDir)) {
             assertEquals(1, entries.count());
         }

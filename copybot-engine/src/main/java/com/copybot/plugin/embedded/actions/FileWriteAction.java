@@ -194,6 +194,12 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         return Optional.of(Path.of(resolution.text()));
     }
 
+    /** From outPattern: a key before its last separator (spec execution-mode §2). */
+    @Override
+    public Optional<Boolean> targetDirectoryVaries() {
+        return Optional.of(settings.outPattern().directoryVaries());
+    }
+
     /**
      * The target of the item, or why there is none (spec pattern-helper §2).
      *

@@ -13,8 +13,16 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 /**
@@ -27,6 +35,8 @@ public final class ResumeResolver {
             DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss").withZone(ZoneId.systemDefault());
 
     private final ResumeMode mode;
+    private final DestinationCheck check;
+    private final DestinationMatch match;
     private final ResumeStateStore store;
     private final IOutAction out;
 
@@ -34,12 +44,33 @@ public final class ResumeResolver {
     private boolean cursorRead;
 
     /**
+     * The files found at the destination by a check of every file, with the path checked: the point
+     * {@link ResumePoint.Kind#NOT_AT_DESTINATION} skips them (spec execution-mode §2). Filled by {@link #propose},
+     * or file by file by {@link #checkDestination} while streaming (from several threads).
+     */
+    private final Map<WorkItemExecution, Path> atDestination = new ConcurrentHashMap<>();
+    /** While streaming with an out step that cannot tell whether its directory varies: the target directories seen (2 at most). */
+    private final Set<Path> seenDirectories = new HashSet<>();
+    private final AtomicBoolean fixedDirectoryWarned = new AtomicBoolean();
+    /** The warnings found while streaming, not yet published ({@link #drainWarnings}). */
+    private final Queue<String> streamingWarnings = new ConcurrentLinkedQueue<>();
+
+    /**
+     * The dichotomy on the target directories.
+     *
      * @param store state file, unused when mode is NONE
      * @param out   the pipeline out action, null when there is none
      */
     public ResumeResolver(ResumeMode mode, ResumeStateStore store, IOutAction out) {
-        this.mode = mode;
-        this.store = store;
+        this(new ResumeContext(mode, store), out);
+    }
+
+    /** @param out the pipeline out action, null when there is none */
+    public ResumeResolver(ResumeContext context, IOutAction out) {
+        this.mode = context.mode();
+        this.check = context.check();
+        this.match = context.match();
+        this.store = context.store();
         this.out = out;
     }
 
@@ -125,6 +156,9 @@ public final class ResumeResolver {
         if (out == null) {
             return false; // no target to probe: propose falls back (or fails) as without probe
         }
+        if (check == DestinationCheck.EVERY_FILE) {
+            return false; // every file is analysed at the listing, then checked
+        }
         if (mode == ResumeMode.DESTINATION) {
             return true;
         }
@@ -153,8 +187,11 @@ public final class ResumeResolver {
                 continue;
             }
             Optional<ItemKey> key = item.getResumeKey();
+            Path found = point.kind() == ResumePoint.Kind.NOT_AT_DESTINATION ? atDestination.get(item) : null;
             if (key.isEmpty()) {
                 item.setError(CopybotException.ofResource("resume.item.no-date", item.getWorkItem().getNameDisplay()));
+            } else if (found != null) {
+                item.setSkippedByResumePoint(atDestinationReason(found));
             } else if (point.selects(key.get())) {
                 item.setReady();
             } else {
@@ -216,15 +253,49 @@ public final class ResumeResolver {
         List<WorkItemExecution> candidates = ordered.stream()
                 .filter(item -> item.getStatus() != ItemStatus.ERROR && item.getResumeKey().isPresent())
                 .toList();
-        DestinationProbe.Result result;
         try {
-            result = DestinationProbe.probe(candidates.stream().map(item -> item.getResumeKey().orElseThrow()).toList(),
-                    i -> targetDir(candidates.get(i), analyser), Files::isDirectory);
+            return check == DestinationCheck.EVERY_FILE ? everyFile(candidates, analyser) : dichotomy(candidates, analyser);
         } catch (NoTarget e) {
             return noTarget(explicit);
         }
+    }
+
+    private ResumeProposal dichotomy(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
+        DestinationProbe.Result result = DestinationProbe.probe(
+                candidates.stream().map(item -> item.getResumeKey().orElseThrow()).toList(),
+                i -> checkedPath(candidates.get(i), analyser), this::atDestination, match == DestinationMatch.DIRECTORY);
         ResumeSource source = result.point().kind() == ResumePoint.Kind.AFTER ? ResumeSource.DESTINATION : ResumeSource.NONE;
         return new ResumeProposal(result.point(), source, result.warning() == null ? List.of() : List.of(result.warning()));
+    }
+
+    /**
+     * Every file decided by its own target (spec execution-mode §2): the ones found are remembered for
+     * {@link #apply}. A fixed target directory selects everything with a warning: declared by the out step, or
+     * guessed when it cannot tell (at least two targets, all in the same directory).
+     */
+    private ResumeProposal everyFile(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
+        Map<WorkItemExecution, Path> checked = new LinkedHashMap<>();
+        for (WorkItemExecution item : candidates) {
+            checkedPath(item, analyser).ifPresent(path -> checked.put(item, path));
+        }
+        atDestination.clear();
+        if (match == DestinationMatch.DIRECTORY && !checked.isEmpty()) {
+            Path first = checked.values().iterator().next();
+            boolean fixed = out.targetDirectoryVaries()
+                    .map(varies -> !varies)
+                    .orElseGet(() -> checked.size() > 1 && checked.values().stream().allMatch(first::equals));
+            if (fixed) {
+                return everything(List.of(ResourcesEngine.getString("resume.warn.single-directory", first)));
+            }
+        }
+        checked.forEach((item, path) -> {
+            if (atDestination(path)) {
+                atDestination.put(item, path);
+            }
+        });
+        return atDestination.isEmpty()
+                ? everything(List.of())
+                : new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, List.of());
     }
 
     /** The out step cannot tell where it writes (no target path at all): the destination cannot be probed. */
@@ -234,23 +305,124 @@ public final class ResumeResolver {
         }
     }
 
-    /** @throws NoTarget the out step resolves no target path */
-    private Optional<Path> targetDir(WorkItemExecution item, Analyser analyser) throws InterruptedException {
+    /**
+     * What tells whether the item is at the destination: its target directory, or its target file
+     * ({@code destinationMatch}).
+     *
+     * @throws NoTarget the out step resolves no target path
+     */
+    private Optional<Path> checkedPath(WorkItemExecution item, Analyser analyser) throws InterruptedException {
         if (!analyser.analyse(item)) {
             return Optional.empty();
         }
+        Optional<Path> target = target(item);
+        if (target == null) {
+            throw new NoTarget();
+        }
+        return target.map(this::checkedPath);
+    }
+
+    /**
+     * The target of an analysed item, absolute; empty when it cannot be resolved (e.g. no value for a pattern
+     * expression: it stays selected and fails or is skipped at the execution, by its own onMissingKey, spec
+     * pattern-helper §2); null when the out step resolves no target path at all.
+     */
+    private Optional<Path> target(WorkItemExecution item) {
         Optional<Path> target;
         try {
             target = out.resolveTarget(item.getWorkItem());
         } catch (CopybotException e) {
-            // e.g. no value for a pattern expression: this item cannot be probed, it stays selected and
-            // fails or is skipped at the execution, by its own onMissingKey (spec pattern-helper §2)
             return Optional.empty();
         }
-        if (target.isEmpty()) {
-            throw new NoTarget();
+        return target.isEmpty() ? null : Optional.of(target.get().toAbsolutePath().normalize());
+    }
+
+    private Path checkedPath(Path target) {
+        return match == DestinationMatch.FILE ? target : target.getParent();
+    }
+
+    private boolean atDestination(Path checked) {
+        return match == DestinationMatch.FILE ? Files.isRegularFile(checked) : Files.isDirectory(checked);
+    }
+
+    private static String atDestinationReason(Path checked) {
+        return ResourcesEngine.getString("resume.skip.at-destination", checked);
+    }
+
+    // ---- streaming (spec execution-mode §3) ----
+
+    /**
+     * The resume point of a run that processes each file as soon as it is listed: known before the listing. After
+     * the cursor in the modes that start from it when there is one; with a destination-based mode, every file is
+     * checked by {@link #checkDestination} once analysed (the dichotomy needs every file listed: a warning says it is
+     * not used).
+     *
+     * @throws CopybotException the state file cannot be understood, or mode destination without target to probe
+     */
+    public ResumeProposal streamingProposal() {
+        if (mode == ResumeMode.NONE) {
+            return everything(List.of());
         }
-        return Optional.of(target.get().toAbsolutePath().normalize().getParent());
+        readCursorOnce();
+        if (mode != ResumeMode.DESTINATION && previousCursor.isPresent()) {
+            return fromState().orElseThrow();
+        }
+        if (mode == ResumeMode.STATE) {
+            return everything(List.of());
+        }
+        if (out == null) {
+            return noTarget(mode == ResumeMode.DESTINATION);
+        }
+        List<String> warnings = check == DestinationCheck.DICHOTOMY
+                ? List.of(ResourcesEngine.getString("execution.streaming.dichotomy")) : List.of();
+        return new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, warnings);
+    }
+
+    /**
+     * While streaming with the point {@link ResumePoint.Kind#NOT_AT_DESTINATION}: whether this analysed item is at
+     * the destination, the skip reason when it is. A fixed target directory skips nothing: declared by the out step
+     * (with a warning, once), or while it cannot tell, as long as fewer than two target directories were seen (in
+     * doubt the file is copied: the conflict policy of the out step avoids duplicates). Thread-safe.
+     */
+    public Optional<String> checkDestination(WorkItemExecution item) {
+        Optional<Path> target = target(item);
+        if (target == null || target.isEmpty()) {
+            return Optional.empty(); // it cannot be checked: copied
+        }
+        Path checked = checkedPath(target.get());
+        if (match == DestinationMatch.DIRECTORY && !directoryVaries(checked)) {
+            return Optional.empty();
+        }
+        if (!atDestination(checked)) {
+            return Optional.empty();
+        }
+        atDestination.put(item, checked);
+        return Optional.of(atDestinationReason(checked));
+    }
+
+    private boolean directoryVaries(Path directory) {
+        Optional<Boolean> declared = out.targetDirectoryVaries();
+        if (declared.isPresent()) {
+            if (!declared.get() && fixedDirectoryWarned.compareAndSet(false, true)) {
+                streamingWarnings.add(ResourcesEngine.getString("resume.warn.single-directory", directory));
+            }
+            return declared.get();
+        }
+        synchronized (seenDirectories) {
+            if (seenDirectories.size() < 2) {
+                seenDirectories.add(directory);
+            }
+            return seenDirectories.size() > 1;
+        }
+    }
+
+    /** The warnings {@link #checkDestination} found since the last call (to publish). */
+    public List<String> drainWarnings() {
+        List<String> warnings = new ArrayList<>();
+        for (String warning = streamingWarnings.poll(); warning != null; warning = streamingWarnings.poll()) {
+            warnings.add(warning);
+        }
+        return warnings;
     }
 
     private ResumeProposal noTarget(boolean explicit) {

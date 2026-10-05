@@ -49,6 +49,7 @@ final class PlanPrinter {
     private static String describe(ResumePoint point) {
         return switch (point.kind()) {
             case ALL -> ResourcesEngine.getString("cli.plan.resume.all");
+            case NOT_AT_DESTINATION -> ResourcesEngine.getString("cli.plan.resume.missing");
             case AFTER -> ResourcesEngine.getString("cli.plan.resume.after", named(point), DATE.format(point.key().date()));
             case FROM -> ResourcesEngine.getString("cli.plan.resume.from", named(point), DATE.format(point.key().date()));
         };

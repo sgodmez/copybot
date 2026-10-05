@@ -30,4 +30,13 @@ public interface IOutAction extends IAction {
     default Optional<Path> resolveTarget(WorkItem workItem) {
         return Optional.empty();
     }
+
+    /**
+     * Whether the directory of the targets ({@link #resolveTarget}) depends on the item: a fixed directory (e.g. a
+     * pattern {@code out/{name}}) tells nothing about what was already imported, the resume from the destination then
+     * selects every file. Empty when the action cannot tell (the default).
+     */
+    default Optional<Boolean> targetDirectoryVaries() {
+        return Optional.empty();
+    }
 }

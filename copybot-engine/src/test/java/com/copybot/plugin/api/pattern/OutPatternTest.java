@@ -23,6 +23,18 @@ public class OutPatternTest {
         assertEquals("//nas/photo/x.jpg", resolve("//nas/photo/x.jpg", PHOTO));
     }
 
+    /** The resume guard of the fixed directory (spec execution-mode §2). */
+    @Test
+    public void theDirectoryVariesWhenAnExpressionComesBeforeTheLastSeparator() {
+        assertTrue(OutPattern.parse("//nas/{captureDate.Y}/{name}").directoryVaries());
+        assertTrue(OutPattern.parse("{captureDate.Y}-{name}/x.jpg").directoryVaries());
+        assertTrue(OutPattern.parse("c:\\nas\\{lastModified.D}\\{name}").directoryVaries());
+        assertFalse(OutPattern.parse("//nas/out/{name}").directoryVaries());
+        assertFalse(OutPattern.parse("//nas/out/{lastModified.Y}-{name}").directoryVaries());
+        assertFalse(OutPattern.parse("//nas/{'fixed'}/{name}").directoryVaries(), "a fixed value does not vary");
+        assertFalse(OutPattern.parse("{name}").directoryVaries());
+    }
+
     @Test
     public void aKeyIsReplacedByItsValue() {
         assertEquals("//nas/2026/DSC_1.NEF", resolve("//nas/{captureDate.Y}/{name}", PHOTO));

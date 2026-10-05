@@ -16,6 +16,7 @@ import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
@@ -33,8 +34,11 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -75,9 +79,12 @@ public class MainExecutor implements Runnable {
     private List<PipelineStep<IInAction>> inSteps;
     /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
     private volatile List<PipelineStep<?>> itemSteps;
-    private boolean startProcessingWhileListing;
+    private boolean processWhileListing;
 
-    /** null: single-phase run without barrier nor resume (historical behaviour of run()). */
+    /**
+     * null: single-phase run without barrier nor resume (historical behaviour of run(), and {@link #stream()} without
+     * resume).
+     */
     private final ResumeContext resume;
 
     /** Number of item steps before the preparation barrier (the analyse steps). */
@@ -112,6 +119,16 @@ public class MainExecutor implements Runnable {
      * items it does not select are skipped as soon as they are listed, without analysis. null otherwise.
      */
     private volatile ResumePoint listingPoint;
+
+    /** {@link #stream()}: processing while listing, the resume applied at the listing. */
+    private volatile boolean streaming;
+    /** While streaming with resume: the keys are frozen at the listing, a file without date is an error there. */
+    private volatile boolean resumeAtTheListing;
+    /** While streaming with the point NOT_AT_DESTINATION: each file is checked once analysed. */
+    private volatile boolean checkEachFile;
+    /** While streaming with resume: the listed files (not the forks), for the cursor. */
+    private final Queue<WorkItemExecution> listedItems = new ConcurrentLinkedQueue<>();
+    private final Object warningsLock = new Object();
 
     /**
      * While preparing, true when the resume point comes from the destination probe: the items are not analysed at
@@ -168,13 +185,13 @@ public class MainExecutor implements Runnable {
 
     // visible for tests: runs with pre-resolved steps, bypassing PluginEngine, without barrier
     MainExecutor(List<PipelineStep<IInAction>> inSteps, List<PipelineStep<?>> itemSteps,
-                 boolean startProcessingWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry) {
-        this(inSteps, itemSteps, itemSteps.size(), startProcessingWhileListing, watcher, registry, null);
+                 boolean processWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry) {
+        this(inSteps, itemSteps, itemSteps.size(), processWhileListing, watcher, registry, null);
     }
 
     // visible for tests: pre-resolved steps, the first barrierIndex item steps run before the barrier
     MainExecutor(List<PipelineStep<IInAction>> inSteps, List<PipelineStep<?>> itemSteps, int barrierIndex,
-                 boolean startProcessingWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry,
+                 boolean processWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry,
                  ResumeContext resume) {
         this.pipelineConfig = null;
         this.watcher = watcher;
@@ -183,7 +200,7 @@ public class MainExecutor implements Runnable {
         this.inSteps = inSteps;
         this.itemSteps = itemSteps;
         this.barrierIndex = barrierIndex;
-        this.startProcessingWhileListing = startProcessingWhileListing;
+        this.processWhileListing = processWhileListing;
         this.state = new PipelineState(List.of());
         this.state.setRegistry(registry);
     }
@@ -202,6 +219,20 @@ public class MainExecutor implements Runnable {
         if (state.getStatus() == PipelineStatus.PREPARED) {
             execute(null);
         }
+    }
+
+    /**
+     * The streaming run ({@code "execution": "streaming"}, spec execution-mode §3): one phase, every step, each file
+     * processed as soon as it is listed. With resume, the point is known before the listing
+     * ({@link ResumeResolver#streamingProposal}): the files before the cursor are skipped at the listing, with a
+     * destination-based mode each file is skipped once analysed when it is at the destination; the cursor is written
+     * at the end like {@link #execute} does (not after a listing failure: the files not listed would be skipped
+     * next time). Never prepared first.
+     */
+    public void stream() {
+        streaming = true;
+        processWhileListing = true;
+        runSinglePhase();
     }
 
     /**
@@ -351,20 +382,62 @@ public class MainExecutor implements Runnable {
             // failed run (status ERROR + watcher notified), not as an exception out of a state-less run.
             // It is this run's preparation: its failure is a preparation failure.
             resolveStepsIfNeeded();
+            ResumeProposal streamed = streaming && resume != null ? resumeAtTheListing() : null;
             preparing = false;
             phaseEnd = itemSteps.size();
             finalPhase = true;
             runListings();
             commitPhase();
-            state.setStatus(resolveFinalStatus());
+            // like execute(): the final status is published once, after the cursor save
+            PipelineStatus finalStatus = resolveFinalStatus();
+            if (streamed != null) {
+                orderedItems = ResumeResolver.order(listedItems); // the keys are frozen since the listing
+                if (!listingFailed.get() && !saveCursor(streamed.point(), streamed.source())) {
+                    finalStatus = PipelineStatus.ERROR;
+                }
+            }
+            state.setStatus(finalStatus);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
             onPhaseFailed(e, preparing);
         } finally {
+            listingPoint = null;
             state.setListingInProgress(false);
             endPhase();
         }
+    }
+
+    /**
+     * Streaming with resume: the point known before the listing, published for the view (its warnings with the
+     * others: the CLI prints them too), applied to each file as it is listed.
+     *
+     * @throws com.copybot.exception.CopybotException the state file cannot be understood, mode destination without
+     *                                                target to probe
+     */
+    private ResumeProposal resumeAtTheListing() {
+        resolver = new ResumeResolver(resume, findOutAction());
+        ResumeProposal streamed = resolver.streamingProposal();
+        addWarnings(streamed.warnings());
+        proposal = new ResumeProposal(streamed.point(), streamed.source(), List.of());
+        state.setResumeProposal(proposal);
+        listingPoint = streamed.point().kind() == ResumePoint.Kind.AFTER ? streamed.point() : null;
+        checkEachFile = streamed.point().kind() == ResumePoint.Kind.NOT_AT_DESTINATION;
+        resumeAtTheListing = true;
+        return streamed;
+    }
+
+    /** Adds warnings to the published ones (from several threads while streaming). */
+    private void addWarnings(List<String> warnings) {
+        if (warnings.isEmpty()) {
+            return;
+        }
+        synchronized (warningsLock) {
+            List<String> all = new ArrayList<>(state.getWarnings());
+            all.addAll(warnings);
+            state.setWarnings(all);
+        }
+        notifyWatcher();
     }
 
     /**
@@ -390,7 +463,7 @@ public class MainExecutor implements Runnable {
             phaseEnd = barrierIndex;
             finalPhase = false;
             dryRunSteps = processSteps();
-            resolver = new ResumeResolver(resume.mode(), resume.store(), findOutAction());
+            resolver = new ResumeResolver(resume, findOutAction());
             listingPoint = resolver.listingPoint().orElse(null);
             analysisOnDemand = listingPoint == null && resolver.probesTheDestination();
             runListings();
@@ -733,7 +806,6 @@ public class MainExecutor implements Runnable {
             inSteps = StepResolver.in(pipelineConfig);
             itemSteps = StepResolver.itemSteps(pipelineConfig);
             barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
-            startProcessingWhileListing = Boolean.TRUE.equals(pipelineConfig.startProcessingWhileListing());
         }
         registerStepCapacities();
         collectConfigWarnings();
@@ -937,12 +1009,19 @@ public class MainExecutor implements Runnable {
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
         deferAtTheListing(exec);
         state.getWorkItems().add(exec);
+        if (resumeAtTheListing) {
+            listedItems.add(exec);
+        }
         notifyWatcher();
-        if (exec.isAnalysisDeferred()) {
+        if (exec.isAnalysisDeferred() || exec.getStatus() == ItemStatus.ERROR) {
             return;
         }
         try {
-            submitItem(exec, 0, phaseEnd);
+            if (checkEachFile) {
+                submitTask(() -> streamItem(exec));
+            } else {
+                submitItem(exec, 0, phaseEnd);
+            }
         } catch (RejectedExecutionException e) {
             if (taskExecutor.isShutdown()) {
                 // the phase shut its executor down (cancel, interrupt) while this listing was emitting
@@ -958,6 +1037,14 @@ public class MainExecutor implements Runnable {
      * demand, leaves every item unanalysed for now.
      */
     private void deferAtTheListing(WorkItemExecution exec) {
+        if (resumeAtTheListing) {
+            // streaming: no ordering later, the key is frozen before any step may replace the work item
+            exec.setResumeKey(ItemKey.of(exec.getWorkItem()).orElse(null));
+            if (exec.getResumeKey().isEmpty()) { // like ResumeResolver.apply: no place in the resume order
+                exec.setError(CopybotException.ofResource("resume.item.no-date", exec.getWorkItem().getNameDisplay()));
+                return;
+            }
+        }
         ResumePoint point = listingPoint;
         if (point == null) {
             if (analysisOnDemand) {
@@ -972,6 +1059,32 @@ public class MainExecutor implements Runnable {
         }
     }
 
+    /**
+     * Streaming with the point NOT_AT_DESTINATION: the analyses, then the check of the file's own target, then the
+     * rest of the steps unless it is at the destination (skipped by the resume point).
+     */
+    private void streamItem(WorkItemExecution exec) {
+        runItem(exec, 0, barrierIndex);
+        if (exec.getStatus() != ItemStatus.PENDING || Thread.currentThread().isInterrupted() || cancelRequested) {
+            return; // failed, filtered, or stopped
+        }
+        Optional<String> found;
+        try {
+            found = resolver.checkDestination(exec);
+        } catch (RuntimeException e) {
+            exec.setError(e);
+            notifyWatcher();
+            return;
+        }
+        addWarnings(resolver.drainWarnings());
+        if (found.isPresent()) {
+            exec.setSkippedByResumePoint(found.get());
+            notifyWatcher();
+            return;
+        }
+        runItem(exec, barrierIndex, itemSteps.size());
+    }
+
     private void submitItem(WorkItemExecution exec, int fromStep, int toStep) {
         submitTask(() -> runItem(exec, fromStep, toStep));
     }
@@ -982,7 +1095,7 @@ public class MainExecutor implements Runnable {
      */
     private void runItem(WorkItemExecution exec, int fromStep, int toStep) {
         try {
-            if (!startProcessingWhileListing) {
+            if (!processWhileListing) {
                 listingGate.await();
             }
             StepOutcome outcome = StepOutcome.CONTINUE;

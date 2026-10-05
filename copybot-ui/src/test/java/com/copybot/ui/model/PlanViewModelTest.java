@@ -4,6 +4,7 @@ import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
 import com.copybot.engine.Projection;
 import com.copybot.engine.TargetProjection;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.WorkItemExecution;
@@ -69,9 +70,16 @@ public class PlanViewModelTest {
         return new ResumeProposal(point, source, List.of(warnings));
     }
 
+    /** A model whose "automatic execution" box is checked or not. */
+    private static PlanViewModel model(boolean autoExecute) {
+        PlanViewModel model = new PlanViewModel();
+        model.setAutoExecute(autoExecute);
+        return model;
+    }
+
     /** A model with a prepared plan of these items (resume: everything). */
     private static PlanViewModel prepared(boolean autoExecute, WorkItemExecution... items) {
-        PlanViewModel model = new PlanViewModel(autoExecute);
+        PlanViewModel model = model(autoExecute);
         model.startPreparing();
         PipelineState state = state(PipelineStatus.PREPARED, items);
         state.setResumeProposal(proposal(ResumePoint.all(), ResumeSource.NONE));
@@ -88,7 +96,7 @@ public class PlanViewModelTest {
 
     @Test
     public void nothingIsPreparedAtOpening() {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
 
         assertEquals(Phase.NOT_PREPARED, model.phase());
         assertTrue(model.canPrepare());
@@ -101,7 +109,7 @@ public class PlanViewModelTest {
 
     @Test
     public void thePreparationListsTheRowsAndLocksTheView() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         WorkItemExecution a = item("a.jpg", 1);
 
         model.startPreparing();
@@ -119,7 +127,7 @@ public class PlanViewModelTest {
 
     @Test
     public void thePreparationBarListsThenAnalysesThenResolves() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         WorkItemExecution a = item("a.jpg", 1);
         WorkItemExecution b = item("b.jpg", 1);
         model.startPreparing();
@@ -160,7 +168,7 @@ public class PlanViewModelTest {
 
     @Test
     public void aFailedOrCancelledPreparation() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState failed = state(PipelineStatus.ERROR);
         failed.setFailure(new IllegalStateException("card removed"));
@@ -323,7 +331,7 @@ public class PlanViewModelTest {
 
     @Test
     public void aPipelineWithoutInputCannotBePreparedAndSaysWhy() {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
 
         model.setPreparationRefusal(Optional.of("nothing to list"));
 
@@ -339,7 +347,7 @@ public class PlanViewModelTest {
 
     @Test
     public void aRunningPreparationIsNoWarning() {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
 
         model.startPreparing();
 
@@ -371,7 +379,7 @@ public class PlanViewModelTest {
         WorkItemExecution first = item("a.jpg", 1);
         WorkItemExecution second = item("b.jpg", 1);
         WorkItemExecution forked = item("a-small.jpg", 1);
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
 
         model.update(state(PipelineStatus.PREPARED, forked, second, first), List.of(first, second));
@@ -462,7 +470,7 @@ public class PlanViewModelTest {
         WorkItemExecution c = item("c.jpg", 1);
         c.setIgnored("ignored by the user");
         WorkItemExecution d = item("d.jpg", 1);
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState state = state(PipelineStatus.PREPARED, a, b, c, d);
         state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "b.jpg")), ResumeSource.DESTINATION));
@@ -492,7 +500,7 @@ public class PlanViewModelTest {
 
     @Test
     public void theWarningsAreTheConfigurationOnesThenTheResumeOnes() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState state = state(PipelineStatus.PREPARED, item("a.jpg", 1));
         state.setWarnings(List.of("sources deleted"));
@@ -505,7 +513,7 @@ public class PlanViewModelTest {
 
     @Test
     public void theResumeLineNamesThePointAndItsOrigin() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState state = state(PipelineStatus.PREPARED, item("DSC_4822.JPG", 1));
         state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "DSC_4821.JPG")), ResumeSource.STATE));
@@ -627,16 +635,133 @@ public class PlanViewModelTest {
     public void theAutomaticExecutionFollowsTheSessionBox() throws IOException {
         assertFalse(prepared(false, item("a.jpg", 1)).consumeAutoExecute());
 
-        PlanViewModel unchecked = new PlanViewModel(true);
+        PlanViewModel unchecked = model(true);
         unchecked.setAutoExecute(false);
         unchecked.startPreparing();
         unchecked.update(state(PipelineStatus.PREPARED, item("b.jpg", 1)), List.of());
         assertFalse(unchecked.consumeAutoExecute());
     }
 
+    // ---- execution modes (spec execution-mode §5) ----
+
+    @Test
+    public void theAutomaticExecutionBoxIsUncheckedByDefault() throws IOException {
+        assertFalse(new PlanViewModel().isAutoExecute());
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, item("a.jpg", 1)), List.of());
+        assertFalse(model.consumeAutoExecute());
+    }
+
+    @Test
+    public void eachModeHasItsOwnButtonLabel() {
+        PlanViewModel model = new PlanViewModel();
+        assertEquals(ExecutionMode.PLAN, model.executionMode());
+        assertEquals(ResourcesEngine.getString("plan.prepare"), model.prepareLabel());
+        model.setExecutionMode(ExecutionMode.AUTO);
+        assertEquals(ResourcesEngine.getString("plan.prepare-and-copy"), model.prepareLabel());
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        assertEquals(ResourcesEngine.getString("plan.stream"), model.prepareLabel());
+        for (ExecutionMode mode : ExecutionMode.values()) {
+            model.setExecutionMode(mode);
+            assertTranslated(model.prepareLabel());
+        }
+    }
+
+    @Test
+    public void onlyThePlanModeShowsTheAutomaticExecutionBox() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        assertTrue(model.showsAutoExecuteBox());
+        model.setExecutionMode(ExecutionMode.AUTO);
+        assertFalse(model.showsAutoExecuteBox());
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        assertFalse(model.showsAutoExecuteBox());
+
+        PlanViewModel executing = prepared(false, item("a.jpg", 1));
+        executing.startExecuting();
+        assertFalse(executing.showsAutoExecuteBox(), "not while copying");
+    }
+
+    @Test
+    public void theAutoModeCopiesAsSoonAsThePlanIsReadyWhateverTheBox() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.AUTO);
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, item("a.jpg", 1)), List.of());
+
+        assertTrue(model.consumeAutoExecute());
+        assertFalse(model.consumeAutoExecute(), "once");
+    }
+
+    @Test
+    public void theStreamingRunIsAnExecutionFromTheStart() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        WorkItemExecution old = item("old.jpg", 1000);
+        old.deferAnalysis("before the cursor");
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 300);
+
+        model.startStreaming();
+        assertEquals(Phase.RUNNING, model.phase());
+        assertTrue(model.isExecutionActive());
+        assertTrue(model.canPause());
+        assertTrue(model.canStop());
+        assertFalse(model.canPrepare());
+
+        PipelineState state = state(PipelineStatus.RUNNING, old, a, b);
+        state.setListingInProgress(true);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "old.jpg")), ResumeSource.STATE));
+        a.setDone();
+        model.update(state, List.of());
+
+        assertEquals(Phase.RUNNING, model.phase());
+        assertEquals(new Progress(1, 2, 100, 400), model.progress(), "the files the resume point skips are not counted");
+        assertEquals(PlanViewModel.INDETERMINATE, model.executionFraction(), "the total grows while listing");
+        assertTrue(model.resumeText().isPresent(), "the resume banner shows the point");
+
+        state.setListingInProgress(false);
+        model.update(state, List.of());
+        assertEquals(0.25, model.executionFraction());
+
+        b.setDone();
+        state.setStatus(PipelineStatus.SUCCESS);
+        model.update(state, List.of());
+        assertEquals(Phase.FINISHED, model.phase());
+        assertTrue(model.consumeFinishedRun(Instant.now()).isPresent());
+        assertTrue(model.canPrepare(), "it can be run again");
+    }
+
+    @Test
+    public void aStreamingRunFailingBeforeTheListingIsAPreparationFailure() {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        model.startStreaming();
+        PipelineState state = state(PipelineStatus.RUNNING);
+        state.setFailure(new IllegalStateException("invalid state file"));
+        state.setPreparationFailed(true);
+        state.setStatus(PipelineStatus.ERROR);
+
+        model.update(state, List.of());
+
+        assertEquals(Phase.PREPARE_FAILED, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.prepare-failed", "invalid state file"), model.statusLine());
+    }
+
+    @Test
+    public void theResumeBannerOfTheFilesNotAtTheDestination() throws IOException {
+        PlanViewModel model = prepared(false, item("a.jpg", 1));
+        PipelineState state = state(PipelineStatus.PREPARED, model.items().toArray(WorkItemExecution[]::new));
+        state.setResumeProposal(proposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION));
+        model.update(state, model.items());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.missing",
+                ResourcesEngine.getString("plan.resume.source.DESTINATION"))), model.resumeText());
+    }
+
     @Test
     public void noAutomaticExecutionOfAFailedOrEmptyPlan() throws IOException {
-        PlanViewModel failed = new PlanViewModel(true);
+        PlanViewModel failed = model(true);
         failed.startPreparing();
         failed.update(state(PipelineStatus.ERROR), List.of());
         assertFalse(failed.consumeAutoExecute());
@@ -746,7 +871,7 @@ public class PlanViewModelTest {
         assertTrue(PlanViewModel.statusText(noMessage).contains("IllegalStateException"), PlanViewModel.statusText(noMessage));
         assertTrue(PlanViewModel.statusText(blank).contains("UnsupportedOperationException"), PlanViewModel.statusText(blank));
 
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState failed = state(PipelineStatus.ERROR);
         failed.setFailure(new NullPointerException());
@@ -829,7 +954,7 @@ public class PlanViewModelTest {
 
     @Test
     public void theResumeLineFromANameAndFromTheDestination() throws IOException {
-        PlanViewModel model = new PlanViewModel(false);
+        PlanViewModel model = new PlanViewModel();
         model.startPreparing();
         PipelineState state = state(PipelineStatus.PREPARED, item("DSC_4822.JPG", 1));
         ItemKey key = new ItemKey(SHOT, "DSC_4821.JPG");

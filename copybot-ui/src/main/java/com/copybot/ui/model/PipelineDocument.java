@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
@@ -76,6 +77,12 @@ public final class PipelineDocument {
 
     /** The mode of a "resume" block without mode (see {@code ResumeConfig.effectiveMode}). */
     private static final String DEFAULT_RESUME_MODE = "stateThenDestination";
+
+    /** The destination checks, as written ("resume.destinationCheck"), the default first (spec execution-mode §2). */
+    public static final List<String> DESTINATION_CHECKS = List.of("dichotomy", "everyFile");
+
+    /** What counts as imported at the destination, as written ("resume.destinationMatch"), the default first. */
+    public static final List<String> DESTINATION_MATCHES = List.of("directory", "file");
 
     /** A required field left empty: the step at index of the section, the field path in its actionConfig. */
     public record Problem(Section section, int index, String fieldPath) {
@@ -255,51 +262,6 @@ public final class PipelineDocument {
 
     // ---- pipeline ----
 
-    public boolean startProcessingWhileListing() {
-        return bool(root, "startProcessingWhileListing");
-    }
-
-    /** true is written; false removes a member that was true (false is the engine default). */
-    public void setStartProcessingWhileListing(boolean value) {
-        if (value == startProcessingWhileListing()) {
-            return;
-        }
-        if (value) {
-            root.addProperty("startProcessingWhileListing", true);
-        } else {
-            root.remove("startProcessingWhileListing");
-        }
-        modified = true;
-    }
-
-    /** "ui.autoExecute" (spec desktop-ui §2), false when absent. */
-    public boolean autoExecute() {
-        JsonElement ui = root.get("ui");
-        return ui != null && ui.isJsonObject() && bool(ui.getAsJsonObject(), "autoExecute");
-    }
-
-    /** true is written; false removes it, and the "ui" block when nothing else is left in it. */
-    public void setAutoExecute(boolean value) {
-        if (value == autoExecute()) {
-            return;
-        }
-        JsonElement ui = root.get("ui");
-        if (value) {
-            if (ui == null || !ui.isJsonObject()) {
-                ui = new JsonObject();
-                root.add("ui", ui);
-            }
-            ui.getAsJsonObject().addProperty("autoExecute", true);
-        } else {
-            JsonObject uiObject = ui.getAsJsonObject();
-            uiObject.remove("autoExecute");
-            if (uiObject.isEmpty()) {
-                root.remove("ui");
-            }
-        }
-        modified = true;
-    }
-
     /** The effective resume mode: empty without "resume" block, stateThenDestination for a block without mode. */
     public Optional<String> resumeMode() {
         JsonElement resume = root.get("resume");
@@ -344,9 +306,86 @@ public final class PipelineDocument {
         modified = true;
     }
 
-    private static boolean bool(JsonObject object, String member) {
-        JsonElement value = object.get(member);
-        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean() && value.getAsBoolean();
+    /** "resume.destinationCheck" (spec execution-mode §2), the dichotomy when absent or unknown. */
+    public String destinationCheck() {
+        return resumeOption("destinationCheck", DESTINATION_CHECKS);
+    }
+
+    /**
+     * @param check one of {@link #DESTINATION_CHECKS}; the default (dichotomy) removes the member
+     * @throws IllegalStateException without resume block: writing one would turn the resume on
+     */
+    public void setDestinationCheck(String check) {
+        setResumeOption("destinationCheck", DESTINATION_CHECKS, check);
+    }
+
+    /** "resume.destinationMatch" (spec execution-mode §2), the target directory when absent or unknown. */
+    public String destinationMatch() {
+        return resumeOption("destinationMatch", DESTINATION_MATCHES);
+    }
+
+    /**
+     * @param match one of {@link #DESTINATION_MATCHES}; the default (directory) removes the member
+     * @throws IllegalStateException without resume block
+     */
+    public void setDestinationMatch(String match) {
+        setResumeOption("destinationMatch", DESTINATION_MATCHES, match);
+    }
+
+    private String resumeOption(String member, List<String> values) {
+        JsonElement resume = root.get("resume");
+        JsonElement value = resume != null && resume.isJsonObject() ? resume.getAsJsonObject().get(member) : null;
+        String name = value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+        return name != null && values.contains(name) ? name : values.getFirst();
+    }
+
+    private void setResumeOption(String member, List<String> values, String value) {
+        if (value == null || !values.contains(value)) {
+            throw new IllegalArgumentException(value);
+        }
+        JsonElement resume = root.get("resume");
+        if (resume == null || !resume.isJsonObject()) {
+            throw new IllegalStateException("no resume block");
+        }
+        JsonObject block = resume.getAsJsonObject();
+        if (value.equals(values.getFirst())) {
+            if (block.remove(member) != null) {
+                modified = true;
+            }
+            return;
+        }
+        if (value.equals(resumeOption(member, values)) && block.has(member)) {
+            return;
+        }
+        block.addProperty(member, value);
+        modified = true;
+    }
+
+    /** "execution" (spec execution-mode §1), plan when absent or unknown (the engine refuses an unknown one). */
+    public ExecutionMode executionMode() {
+        JsonElement value = root.get("execution");
+        String name = value != null && value.isJsonPrimitive() ? value.getAsString() : null;
+        for (ExecutionMode mode : ExecutionMode.values()) {
+            if (mode.jsonName().equals(name)) {
+                return mode;
+            }
+        }
+        return ExecutionMode.PLAN;
+    }
+
+    /** Plan, the default, removes the member; the other modes are written. */
+    public void setExecutionMode(ExecutionMode mode) {
+        if (mode == ExecutionMode.PLAN) {
+            if (root.remove("execution") != null) {
+                modified = true;
+            }
+            return;
+        }
+        if (mode == executionMode()) {
+            return;
+        }
+        root.addProperty("execution", mode.jsonName());
+        modified = true;
     }
 
     // ---- sampling (spec pattern-helper §5) ----

@@ -174,6 +174,25 @@ public final class OutPattern {
         return List.copyOf(keys);
     }
 
+    /**
+     * True when the directory part depends on the item: an expression with a key comes before the last separator
+     * ({@code /} or {@code \}). A fixed value does not vary.
+     */
+    public boolean directoryVaries() {
+        boolean variable = false;
+        for (Part part : parts) {
+            switch (part) {
+                case Expression expression -> variable |= expression.alternatives().stream().anyMatch(a -> a instanceof String);
+                case Text text -> {
+                    if (variable && (text.text().contains("/") || text.text().contains("\\"))) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     /** The text before the first expression (the whole pattern without expression). */
     public String staticPrefix() {
         return !parts.isEmpty() && parts.getFirst() instanceof Text text ? text.text() : "";

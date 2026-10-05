@@ -1,5 +1,6 @@
 package com.copybot.ui;
 
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
@@ -31,7 +32,6 @@ import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
-import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Dialog;
 import javafx.scene.control.Label;
@@ -415,11 +415,31 @@ public class EditorController {
         }
     }
 
-    /** startProcessingWhileListing, resume.mode, ui.autoExecute (spec desktop-ui §3). */
+    /**
+     * execution, resume.mode, then for a destination-based mode resume.destinationCheck and resume.destinationMatch
+     * (spec desktop-ui §3, spec execution-mode §5).
+     */
     private void pipelineForm() {
-        CheckBox startProcessing = new CheckBox(ResourcesEngine.getString("editor.startProcessingWhileListing"));
-        startProcessing.setSelected(document.startProcessingWhileListing());
-        startProcessing.setOnAction(e -> document.setStartProcessingWhileListing(startProcessing.isSelected()));
+        ComboBox<ExecutionMode> execution = new ComboBox<>();
+        execution.getItems().addAll(ExecutionMode.values());
+        execution.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(ExecutionMode mode) {
+                return mode == null ? "" : ResourcesEngine.getString("editor.execution." + mode.jsonName());
+            }
+
+            @Override
+            public ExecutionMode fromString(String s) {
+                return null; // not editable
+            }
+        });
+        execution.setValue(document.executionMode());
+        Label executionWarning = new Label("⚠ " + ResourcesEngine.getString("editor.execution.streaming-dichotomy"));
+        executionWarning.setWrapText(true);
+        executionWarning.setStyle("-fx-text-fill: #c87f0a;");
+
+        ComboBox<String> destinationCheck = optionBox("editor.destination-check.", PipelineDocument.DESTINATION_CHECKS);
+        ComboBox<String> destinationMatch = optionBox("editor.destination-match.", PipelineDocument.DESTINATION_MATCHES);
 
         ComboBox<String> resumeMode = new ComboBox<>();
         resumeMode.getItems().add("");
@@ -436,15 +456,68 @@ public class EditorController {
             }
         });
         resumeMode.setValue(document.resumeMode().orElse(""));
-        resumeMode.valueProperty().addListener((obs, old, mode) ->
-                document.setResumeMode(mode == null || mode.isEmpty() ? null : mode));
 
-        CheckBox autoExecute = new CheckBox(ResourcesEngine.getString("editor.autoExecute"));
-        autoExecute.setSelected(document.autoExecute());
-        autoExecute.setOnAction(e -> document.setAutoExecute(autoExecute.isSelected()));
+        // the destination options only mean something for the destination-based modes
+        Runnable sync = () -> {
+            boolean destination = destinationBased(document.resumeMode().orElse(null));
+            destinationCheck.setDisable(!destination);
+            destinationMatch.setDisable(!destination);
+            destinationCheck.setValue(document.destinationCheck());
+            destinationMatch.setValue(document.destinationMatch());
+            boolean warn = destination && document.executionMode() == ExecutionMode.STREAMING
+                    && PipelineDocument.DESTINATION_CHECKS.getFirst().equals(document.destinationCheck());
+            executionWarning.setVisible(warn);
+            executionWarning.setManaged(warn);
+        };
+        sync.run();
+        execution.valueProperty().addListener((obs, old, mode) -> {
+            document.setExecutionMode(mode == null ? ExecutionMode.PLAN : mode);
+            sync.run();
+        });
+        resumeMode.valueProperty().addListener((obs, old, mode) -> {
+            document.setResumeMode(mode == null || mode.isEmpty() ? null : mode);
+            sync.run();
+        });
+        destinationCheck.valueProperty().addListener((obs, old, check) -> {
+            if (check != null && !destinationCheck.isDisabled() && !check.equals(document.destinationCheck())) {
+                document.setDestinationCheck(check);
+                sync.run();
+            }
+        });
+        destinationMatch.valueProperty().addListener((obs, old, match) -> {
+            if (match != null && !destinationMatch.isDisabled() && !match.equals(document.destinationMatch())) {
+                document.setDestinationMatch(match);
+            }
+        });
 
-        formBox.getChildren().addAll(title(ResourcesEngine.getString("editor.section.PIPELINE")), startProcessing,
-                new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode), autoExecute);
+        formBox.getChildren().addAll(title(ResourcesEngine.getString("editor.section.PIPELINE")),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.execution")), execution, executionWarning),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-check")), destinationCheck),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch));
+    }
+
+    /** The resume modes that look at the destination: destination, and stateThenDestination without cursor. */
+    private static boolean destinationBased(String resumeMode) {
+        return "destination".equals(resumeMode) || "stateThenDestination".equals(resumeMode);
+    }
+
+    /** A list of the values of a resume option, each shown by its label (prefix + value). */
+    private static ComboBox<String> optionBox(String labelPrefix, List<String> values) {
+        ComboBox<String> box = new ComboBox<>();
+        box.getItems().addAll(values);
+        box.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(String value) {
+                return value == null ? "" : ResourcesEngine.getString(labelPrefix + value);
+            }
+
+            @Override
+            public String fromString(String s) {
+                return s; // not editable
+            }
+        });
+        return box;
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.config.CopybotConfig;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
@@ -10,6 +11,7 @@ import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.engine.plugin.report.PluginReports;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resources.ResourceSettings;
+import com.copybot.engine.resume.ResumeConfig;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumePoint;
@@ -206,8 +208,10 @@ public final class CopybotEngine implements AutoCloseable {
     }
 
     /**
-     * Prepares then executes the pipeline on a background thread (a single phase when the pipeline has
-     * no resume block). Failures end in the final state, never as an exception of the background thread.
+     * The fully automatic run (the CLI's), on a background thread: with {@code "execution": "streaming"}, each file
+     * processed as soon as it is listed ({@link MainExecutor#stream}, spec execution-mode §3); otherwise prepared
+     * then executed (a single phase, after the listing, when the pipeline has no resume block). Failures end in the
+     * final state, never as an exception of the background thread.
      *
      * @param watcher optional progress observer, invoked from a background thread, at most ~10 times
      *                per second (notifications are coalesced, so the observer sees the latest state
@@ -226,7 +230,8 @@ public final class CopybotEngine implements AutoCloseable {
                     ? null
                     : resumeContext(pipelinePath, pipelineConfig);
             MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
-            return start(mainExecutor, mainExecutor::run);
+            return start(mainExecutor, pipelineConfig.executionMode() == ExecutionMode.STREAMING
+                    ? mainExecutor::stream : mainExecutor::run);
         });
     }
 
@@ -441,6 +446,10 @@ public final class CopybotEngine implements AutoCloseable {
         }
         // before Gson: its enum adapter may fail on a non-string mode, which would read as "not a JSON"
         checkResumeModeType(tree);
+        JsonElement resume = tree.isJsonObject() ? tree.getAsJsonObject().get("resume") : null;
+        checkEnumType(tree, "execution", "execution.unknown");
+        checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
+        checkEnumType(resume, "destinationMatch", "resume.destination-match.unknown");
         PipelineConfig pipelineConfig;
         try {
             pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
@@ -451,7 +460,41 @@ public final class CopybotEngine implements AutoCloseable {
             throw CopybotException.ofResource("pipeline.not-json", pipelinePath);
         }
         checkResumeModeName(tree, pipelineConfig);
+        checkEnumName(tree, "execution", pipelineConfig.execution(), "execution.unknown");
+        checkEnumName(resume, "destinationCheck",
+                pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationCheck(),
+                "resume.destination-check.unknown");
+        checkEnumName(resume, "destinationMatch",
+                pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationMatch(),
+                "resume.destination-match.unknown");
         return pipelineConfig;
+    }
+
+    /** Before Gson, like the resume mode: a present, non-null member that is not a string is an unknown name. */
+    private static void checkEnumType(JsonElement object, String member, String resourceKey) {
+        if (object == null || !object.isJsonObject()) {
+            return;
+        }
+        JsonElement value = object.getAsJsonObject().get(member);
+        if (value == null || value.isJsonNull() || value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
+            return;
+        }
+        throw CopybotException.ofResource(resourceKey, value.isJsonPrimitive() ? value.getAsString() : value.toString());
+    }
+
+    /**
+     * A present, non-null member that Gson read as null (an unknown name, or not a string: spec execution-mode §1)
+     * would silently mean the default.
+     */
+    private static void checkEnumName(JsonElement object, String member, Object read, String resourceKey) {
+        if (read != null || object == null || !object.isJsonObject()) {
+            return;
+        }
+        JsonElement value = object.getAsJsonObject().get(member);
+        if (value != null && !value.isJsonNull()) {
+            throw CopybotException.ofResource(resourceKey,
+                    value.isJsonPrimitive() ? value.getAsString() : value.toString());
+        }
     }
 
     /** A present, non-null resume mode that is not a string (number, boolean, object, array) is unknown. */
@@ -485,6 +528,8 @@ public final class CopybotEngine implements AutoCloseable {
     }
 
     private static ResumeContext resumeContext(Path pipelinePath, PipelineConfig pipelineConfig) {
-        return new ResumeContext(pipelineConfig.resumeMode(), ResumeStateStore.forPipeline(pipelinePath));
+        ResumeConfig resume = pipelineConfig.resume();
+        return new ResumeContext(pipelineConfig.resumeMode(), ResumeStateStore.forPipeline(pipelinePath),
+                resume == null ? null : resume.destinationCheck(), resume == null ? null : resume.destinationMatch());
     }
 }

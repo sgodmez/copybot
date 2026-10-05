@@ -4,6 +4,7 @@ import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
 import com.copybot.engine.Projection;
 import com.copybot.engine.TargetProjection;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
@@ -23,6 +24,7 @@ import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
@@ -104,9 +106,49 @@ public final class PlanViewModel {
     /** The files being analysed in {@link Phase#ANALYSING}, empty otherwise. */
     private List<WorkItemExecution> analysing = List.of();
 
-    /** @param autoExecute "ui.autoExecute" of the pipeline: copy as soon as the plan is ready */
-    public PlanViewModel(boolean autoExecute) {
-        this.autoExecute = autoExecute;
+    /** The "execution" of the pipeline (spec execution-mode §5): what the button does. */
+    private ExecutionMode executionMode = ExecutionMode.PLAN;
+    /** The current execution is a streaming run, started without plan ({@link #startStreaming()}). */
+    private boolean streaming;
+    /** The current run failed before anything was done (its preparation: steps, state file). */
+    private boolean preparationFailed;
+
+    /** The automatic execution box unchecked, mode plan. */
+    public PlanViewModel() {
+    }
+
+    public void setExecutionMode(ExecutionMode executionMode) {
+        this.executionMode = executionMode;
+    }
+
+    public ExecutionMode executionMode() {
+        return executionMode;
+    }
+
+    /** The label of the button that starts the run: "Prepare the plan", "Prepare and copy", "Copy as files are listed". */
+    public String prepareLabel() {
+        return ResourcesEngine.getString(switch (executionMode) {
+            case PLAN -> "plan.prepare";
+            case AUTO -> "plan.prepare-and-copy";
+            case STREAMING -> "plan.stream";
+        });
+    }
+
+    /** The "automatic execution" box: only in mode plan (auto copies anyway, streaming has no plan), not while copying. */
+    public boolean showsAutoExecuteBox() {
+        return executionMode == ExecutionMode.PLAN && !isExecutionActive();
+    }
+
+    /**
+     * A streaming run starts ({@code "execution": "streaming"}): an execution from the start, without plan; the
+     * files are counted as they are listed.
+     */
+    public void startStreaming() {
+        clear();
+        executing = true;
+        streaming = true;
+        listing = true; // until the engine says otherwise
+        phase = Phase.RUNNING;
     }
 
     // ---- feeding ----
@@ -148,6 +190,8 @@ public final class PlanViewModel {
 
     private void clear() {
         executing = false;
+        streaming = false;
+        preparationFailed = false;
         autoExecuteArmed = false;
         finishedReported = false;
         items = List.of();
@@ -173,6 +217,7 @@ public final class PlanViewModel {
         listing = state.isListingInProgress();
         proposal = state.getResumeProposal();
         failure = state.getFailure();
+        preparationFailed = state.isPreparationFailed();
         List<String> all = new ArrayList<>(state.getWarnings());
         if (proposal != null) {
             all.addAll(proposal.warnings());
@@ -194,7 +239,9 @@ public final class PlanViewModel {
         if (executing) {
             phase = switch (status) {
                 case PAUSED -> Phase.PAUSED;
-                case SUCCESS, ERROR, CANCELLED -> Phase.FINISHED;
+                // a streaming run failing before the listing (steps, state file): told like a preparation
+                case ERROR -> streaming && preparationFailed ? Phase.PREPARE_FAILED : Phase.FINISHED;
+                case SUCCESS, CANCELLED -> Phase.FINISHED;
                 default -> Phase.RUNNING;
             };
         } else if (!analysing.isEmpty() && (status == PipelineStatus.RUNNING || status == PipelineStatus.PAUSED)) {
@@ -227,7 +274,7 @@ public final class PlanViewModel {
         return filter;
     }
 
-    /** The "automatic execution" box: this session only (spec desktop-ui §2). */
+    /** The "automatic execution" box of mode plan: a one-shot toggle of the view, never stored (spec execution-mode §1). */
     public void setAutoExecute(boolean autoExecute) {
         this.autoExecute = autoExecute;
     }
@@ -237,11 +284,12 @@ public final class PlanViewModel {
     }
 
     /**
-     * True once per preparation, when the plan just became ready, the box is checked and there is
-     * something to copy: the controller then starts the copy.
+     * True once per preparation, when the plan just became ready, the box is checked (or the mode is auto) and
+     * there is something to copy: the controller then starts the copy.
      */
     public boolean consumeAutoExecute() {
-        if (autoExecuteArmed && autoExecute && phase == Phase.PREPARED && counts().selected() > 0) {
+        if (autoExecuteArmed && (autoExecute || executionMode == ExecutionMode.AUTO) && phase == Phase.PREPARED
+                && counts().selected() > 0) {
             autoExecuteArmed = false;
             return true;
         }
@@ -431,11 +479,18 @@ public final class PlanViewModel {
         return Plan.Counts.of(items);
     }
 
+    /**
+     * Among the files selected when the copy started; while streaming (nothing selected at the start), among the
+     * files listed so far that the resume point does not skip.
+     */
     public Progress progress() {
         int done = 0;
         long doneBytes = 0;
         long totalBytes = 0;
-        for (WorkItemExecution item : selectedAtStart) {
+        Collection<WorkItemExecution> counted = streaming
+                ? items.stream().filter(i -> !i.isSkippedByResumePoint()).toList()
+                : selectedAtStart;
+        for (WorkItemExecution item : counted) {
             long size = size(item);
             totalBytes += size;
             ItemStatus s = item.getStatus();
@@ -444,7 +499,12 @@ public final class PlanViewModel {
                 doneBytes += size;
             }
         }
-        return new Progress(done, selectedAtStart.size(), doneBytes, totalBytes);
+        return new Progress(done, counted.size(), doneBytes, totalBytes);
+    }
+
+    /** The bar of the execution: {@link #progress()}, {@link #INDETERMINATE} while a streaming run still lists (the total grows). */
+    public double executionFraction() {
+        return streaming && listing ? INDETERMINATE : progress().fraction();
     }
 
     /** Where the preparation is (only meaningful in PREPARING). */
@@ -597,6 +657,9 @@ public final class PlanViewModel {
         ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
         String sourceText = label("plan.resume.source." + source.name(), source.name());
         ItemKey key = point.key();
+        if (point.kind() == ResumePoint.Kind.NOT_AT_DESTINATION) {
+            return Optional.of(ResourcesEngine.getString("plan.resume.missing", sourceText));
+        }
         if (point.kind() == ResumePoint.Kind.ALL || key == null) {
             return Optional.of(ResourcesEngine.getString("plan.resume.all", sourceText));
         }

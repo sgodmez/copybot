@@ -23,6 +23,24 @@ public class ResumeConfigTest {
     }
 
     @Test
+    public void theDestinationOptionsDefaultToTheDichotomyOnTheDirectory() {
+        ResumeConfig config = parse("{\"resume\":{\"mode\":\"destination\"}}").resume();
+        assertEquals(DestinationCheck.DICHOTOMY, config.effectiveDestinationCheck());
+        assertEquals(DestinationMatch.DIRECTORY, config.effectiveDestinationMatch());
+    }
+
+    @Test
+    public void theDestinationOptionsAreReadFromTheirJsonNames() {
+        ResumeConfig config = parse("{\"resume\":{\"destinationCheck\":\"everyFile\",\"destinationMatch\":\"file\"}}").resume();
+        assertEquals(DestinationCheck.EVERY_FILE, config.effectiveDestinationCheck());
+        assertEquals(DestinationMatch.FILE, config.effectiveDestinationMatch());
+        assertEquals(DestinationCheck.DICHOTOMY,
+                parse("{\"resume\":{\"destinationCheck\":\"dichotomy\"}}").resume().effectiveDestinationCheck());
+        assertEquals(DestinationMatch.DIRECTORY,
+                parse("{\"resume\":{\"destinationMatch\":\"directory\"}}").resume().effectiveDestinationMatch());
+    }
+
+    @Test
     public void modesAreReadFromTheirJsonNames() {
         assertEquals(ResumeMode.NONE, parse("{\"resume\":{\"mode\":\"none\"}}").resumeMode());
         assertEquals(ResumeMode.STATE, parse("{\"resume\":{\"mode\":\"state\"}}").resumeMode());

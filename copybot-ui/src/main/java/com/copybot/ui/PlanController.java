@@ -3,6 +3,7 @@ package com.copybot.ui;
 import com.copybot.engine.Execution;
 import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
@@ -122,7 +123,7 @@ public class PlanController {
 
     private MainController main;
     private Path pipelinePath;
-    private PlanViewModel model = new PlanViewModel(false);
+    private PlanViewModel model = new PlanViewModel();
     private PipelineSummary summary;
     /** The pipeline file is being read (background): no preparation meanwhile. */
     private boolean loading;
@@ -215,7 +216,7 @@ public class PlanController {
         plan = null;
         preparingPlan = null;
         execution = null;
-        model = new PlanViewModel(false);
+        model = new PlanViewModel();
         model.setFilter(filterCombo.getValue() == null ? Filter.ALL : filterCombo.getValue());
         autoExecuteBox.setSelected(false);
         summary = null;
@@ -263,7 +264,7 @@ public class PlanController {
         loading = false;
         model.setPreparationRefusal(document.gaps().contains(PipelineDocument.Gap.NO_INPUT)
                 ? Optional.of(PipelineDocument.Gap.NO_INPUT.message()) : Optional.empty());
-        model.setAutoExecute(document.autoExecute());
+        model.setExecutionMode(document.executionMode()); // the box stays a one-shot toggle, unchecked
         autoExecuteBox.setSelected(model.isAutoExecute());
         summary = loaded;
         renderSummary();
@@ -411,9 +412,17 @@ public class PlanController {
         }
     }
 
+    /**
+     * The button of the mode (spec execution-mode §5): "Prepare the plan" (plan), "Prepare and copy" (auto: the copy
+     * starts once prepared), "Copy as files are listed" (streaming: no plan, see {@link #startStreaming}).
+     */
     @FXML
     protected void onPrepareClick() {
         if (loading || busy() || !model.canPrepare()) {
+            return;
+        }
+        if (model.executionMode() == ExecutionMode.STREAMING) {
+            startStreaming();
             return;
         }
         Object op = new Object();
@@ -452,10 +461,46 @@ public class PlanController {
         release(hold); // prepare() has returned (thrown)
         if (op == operation) {
             preparingPlan = null;
+            execution = null; // a refused streaming run
             model.reset();
         }
         refresh();
         PopinUtil.showError(asException(failure));
+    }
+
+    /**
+     * The streaming run ({@code "execution": "streaming"}, spec execution-mode §5): the engine runs the pipeline
+     * directly, each file processed as soon as it is listed; the watcher feeds the table as for a copy, Pause and
+     * Stop act on it. No plan: no resume point to change, no target shown. A refused run (invalid pipeline, engine
+     * busy) brings the view back to "not prepared".
+     */
+    private void startStreaming() {
+        Object op = new Object();
+        operation = op;
+        Object hold = hold();
+        plan = null;
+        preparingPlan = null;
+        model.startStreaming();
+        CompletableFuture<Execution> future = new CompletableFuture<>();
+        execution = future;
+        refresh();
+        try {
+            CopybotMainUi.executor.submit(() -> {
+                Execution run;
+                try {
+                    run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state));
+                } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
+                    future.completeExceptionally(t);
+                    Platform.runLater(() -> onPrepareRefused(op, hold, t));
+                    return;
+                }
+                future.complete(run);
+                awaitThenRelease(op, hold, future, run);
+            });
+        } catch (RejectedExecutionException e) {
+            future.completeExceptionally(e);
+            onPrepareRefused(op, hold, e); // the application is closing
+        }
     }
 
     /** An Error (e.g. a LinkageError of a plugin) shown like an exception. */
@@ -539,30 +584,7 @@ public class PlanController {
                     return;
                 }
                 future.complete(run);
-                Throwable awaitFailure = null;
-                try {
-                    run.await(); // returns once the engine has released the operation
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt(); // the application is closing: release anyway
-                } catch (Throwable t) {
-                    awaitFailure = t;
-                }
-                Throwable failure = awaitFailure;
-                Platform.runLater(() -> { // never leave the view held, whatever happened
-                    release(hold);
-                    if (failure != null && op == operation && future == execution) {
-                        model.update(run.getState(), ordered());
-                        if (model.isActive()) { // no terminal state will come: the plan is dropped
-                            model.reset();
-                            plan = null;
-                            execution = null;
-                        }
-                    }
-                    refresh();
-                    if (failure != null) {
-                        PopinUtil.showError(asException(failure));
-                    }
-                });
+                awaitThenRelease(op, hold, future, run);
             });
         } catch (RejectedExecutionException e) {
             future.completeExceptionally(e);
@@ -570,12 +592,42 @@ public class PlanController {
         }
     }
 
+    /** On the background thread of a copy or a streaming run: waits for its real end, then frees the view. */
+    private void awaitThenRelease(Object op, Object hold, CompletableFuture<Execution> future, Execution run) {
+        Throwable awaitFailure = null;
+        try {
+            run.await(); // returns once the engine has released the operation
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // the application is closing: release anyway
+        } catch (Throwable t) {
+            awaitFailure = t;
+        }
+        Throwable failure = awaitFailure;
+        Platform.runLater(() -> { // never leave the view held, whatever happened
+            release(hold);
+            if (failure != null && op == operation && future == execution) {
+                model.update(run.getState(), ordered());
+                if (model.isActive()) { // no terminal state will come: the plan is dropped
+                    model.reset();
+                    plan = null;
+                    execution = null;
+                }
+            }
+            refresh();
+            if (failure != null) {
+                PopinUtil.showError(asException(failure));
+            }
+        });
+    }
+
     private void onExecuteRefused(Object op, Object hold, CompletableFuture<Execution> future, Plan toRun,
                                   ResumePoint override, Throwable e) {
         release(hold);
         if (op == operation && future == execution) {
             // a fresh model on the same plan: the phase follows the plan's state again (PREPARED, not locked)
-            PlanViewModel back = new PlanViewModel(model.isAutoExecute());
+            PlanViewModel back = new PlanViewModel();
+            back.setExecutionMode(model.executionMode());
+            back.setAutoExecute(model.isAutoExecute());
             back.setFilter(model.filter());
             back.setOverride(override);
             back.update(toRun.getState(), toRun.getOrderedItems());
@@ -1084,12 +1136,13 @@ public class PlanController {
         boolean busy = busy();
         backButton.setDisable(busy || !model.canGoBack());
         editButton.setDisable(busy || !model.canGoBack());
+        prepareButton.setText(model.prepareLabel());
         prepareButton.setDisable(loading || busy || !model.canPrepare());
 
         show(copyButton, phase == Phase.PREPARED || phase == Phase.ANALYSING); // disabled while analysing
         copyButton.setText(model.copyLabel());
         copyButton.setDisable(busy || !model.canCopy());
-        show(autoExecuteBox, !model.isExecutionActive());
+        show(autoExecuteBox, model.showsAutoExecuteBox());
         // text, not a tooltip: a disabled button gets no mouse event, so its tooltip never shows
         Optional<String> warning = model.warning();
         warningLabel.setText(warning.map(w -> "⚠ " + w).orElse(""));
@@ -1102,7 +1155,7 @@ public class PlanController {
 
         boolean preparing = phase == Phase.PREPARING || phase == Phase.ANALYSING; // the same bar
         show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);
-        progressBar.setProgress(preparing ? model.prepareFraction() : model.progress().fraction());
+        progressBar.setProgress(preparing ? model.prepareFraction() : model.executionFraction());
         progressLabel.setText(model.progressText());
         statusLine.setText(model.statusLine());
 

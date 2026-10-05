@@ -52,6 +52,15 @@ public final class DestinationProbe {
      * @param ordered the keys of the items, sorted
      */
     public static Result probe(List<ItemKey> ordered, Targets targets, Predicate<Path> dirExists) throws InterruptedException {
+        return probe(ordered, targets, dirExists, true);
+    }
+
+    /**
+     * @param singleDirectoryGuard false when the targets are the files themselves ({@code destinationMatch: file},
+     *                             spec execution-mode §2): a fixed directory is fine, each file is checked
+     */
+    public static Result probe(List<ItemKey> ordered, Targets targets, Predicate<Path> dirExists,
+                               boolean singleDirectoryGuard) throws InterruptedException {
         Map<Integer, Optional<Path>> resolved = new HashMap<>();
         Targets cached = i -> {
             Optional<Path> dir = resolved.get(i);
@@ -67,7 +76,7 @@ public final class DestinationProbe {
         }
         int last = previousProbeable(cached, ordered.size() - 1, first);
         Path firstDir = cached.dirOf(first).orElseThrow();
-        if (last != first && firstDir.equals(cached.dirOf(last).orElseThrow())) {
+        if (singleDirectoryGuard && last != first && firstDir.equals(cached.dirOf(last).orElseThrow())) {
             // the out pattern has no variable directory: existence of the only directory tells nothing
             return new Result(ResumePoint.all(), ResourcesEngine.getString("resume.warn.single-directory", firstDir));
         }

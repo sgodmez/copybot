@@ -12,10 +12,10 @@ public record PipelineConfig(
         PipelineStepConfig outStep,
 
         /**
-         * true: items are processed while listing is still running (pipelining).
-         * false or absent: all listings complete before any processing starts (two phases).
+         * How the pipeline is run (spec execution-mode §1): plan then confirmation, plan then copy, or each file
+         * processed as soon as it is listed. Absent: plan.
          */
-        Boolean startProcessingWhileListing,
+        ExecutionMode execution,
 
         /**
          * Resume detection. Absent: no resume (every listed file is processed, no state file).
@@ -26,5 +26,9 @@ public record PipelineConfig(
 
     public ResumeMode resumeMode() {
         return resume == null ? ResumeMode.NONE : resume.effectiveMode();
+    }
+
+    public ExecutionMode executionMode() {
+        return execution == null ? ExecutionMode.PLAN : execution;
     }
 }

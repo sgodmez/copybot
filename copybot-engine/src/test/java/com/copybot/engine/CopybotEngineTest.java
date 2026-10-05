@@ -426,6 +426,32 @@ public class CopybotEngineTest {
         }
     }
 
+    /** Gson would read an unknown execution mode as null, that is silently "plan": it is refused instead. */
+    @Test
+    public void anUnknownExecutionModeIsRefused() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("alpha.txt"), "alpha");
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            for (String mode : List.of("\"stream\"", "true", "{}")) {
+                Path pipeline = pipeline("x.json", in, dir("out"), "file.write", ",\"execution\":" + mode);
+                CopybotException prepare = assertThrows(CopybotException.class, () -> engine.prepare(pipeline, null), mode);
+                assertTrue(prepare.getMessage().contains("streaming"), mode + " -> " + prepare.getMessage());
+                assertThrows(CopybotException.class, () -> engine.run(pipeline, null), mode);
+            }
+            for (String option : List.of("\"destinationCheck\":\"all\"", "\"destinationCheck\":1",
+                    "\"destinationMatch\":\"name\"", "\"destinationMatch\":[]")) {
+                Path pipeline = pipeline("d.json", in, dir("out"), "file.write",
+                        ",\"resume\":{\"mode\":\"destination\"," + option + "}");
+                CopybotException prepare = assertThrows(CopybotException.class, () -> engine.prepare(pipeline, null), option);
+                assertTrue(prepare.getMessage().contains(option.contains("Check") ? "everyFile" : "directory"),
+                        option + " -> " + prepare.getMessage());
+            }
+            Path known = pipeline("k.json", in, dir("out"), "file.write", ",\"execution\":\"streaming\"");
+            assertEquals(PipelineStatus.SUCCESS, engine.run(known, null).await(), "the engine is not left busy");
+            assertTrue(Files.exists(tempDir.resolve("out").resolve("alpha.txt")));
+        }
+    }
+
     /** Any present, non-null mode that is not a string is an unknown resume mode, never "not a JSON". */
     @Test
     public void aNonStringResumeModeIsAnUnknownMode() throws Exception {

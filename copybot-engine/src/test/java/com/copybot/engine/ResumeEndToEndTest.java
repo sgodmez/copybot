@@ -329,6 +329,102 @@ public class ResumeEndToEndTest {
         assertFalse(Files.exists(card.resolve("IMG_01.JPG")), "deleteSource: the source is gone once copied and verified");
     }
 
+    /** The pipeline of {@link #pipeline} with {@code "execution": "streaming"} (spec execution-mode §3). */
+    private Path streaming(String mode, String outPattern) throws IOException {
+        Path pipeline = pipeline(mode, outPattern);
+        String json = Files.readString(pipeline);
+        return Files.writeString(pipeline, json.replaceFirst("\\{", "{ \"execution\": \"streaming\","));
+    }
+
+    @Test
+    public void aStreamingRunImportsOnlyTheDeltaAndAdvancesTheCursor() throws IOException {
+        Path pipeline = streaming("state", "{name}");
+
+        String[] first = capture(pipeline);
+        assertEquals("0", first[0], first[2]);
+        assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
+        assertFalse(hasWarning(first[2]), "no fallback with the state mode: " + first[2]);
+
+        Files.delete(nas.resolve("IMG_01.JPG"));
+        photo("IMG_03.JPG", "2026-09-03T10:00:00Z");
+        assertEquals(0, cli(pipeline));
+
+        assertFalse(Files.exists(nas.resolve("IMG_01.JPG")), "skipped at the listing: before the cursor");
+        assertTrue(Files.exists(nas.resolve("IMG_03.JPG")));
+    }
+
+    @Test
+    public void aStreamingRunWithTheDestinationDichotomyChecksEveryFileAndSaysSo() throws IOException {
+        Path pipeline = streaming("destination", "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}");
+        Files.createDirectories(nas.resolve("2026-09-01"));
+
+        String[] result = capture(pipeline);
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[2].contains(ResourcesEngine.getString("execution.streaming.dichotomy")), result[2]);
+        assertFalse(Files.exists(nas.resolve("2026-09-01").resolve("IMG_01.JPG")), "day 1 counts as imported");
+        assertTrue(Files.exists(nas.resolve("2026-09-02").resolve("IMG_02.JPG")));
+    }
+
+    /** {@code "resume": {...}} with these extra members (spec execution-mode §2). */
+    private Path withResumeOptions(Path pipeline, String options) throws IOException {
+        String json = Files.readString(pipeline);
+        return Files.writeString(pipeline, json.replace("\"resume\":{", "\"resume\":{" + options + ","));
+    }
+
+    @Test
+    public void everyFileImportsAMissingDayInTheMiddle() throws IOException {
+        photo("IMG_03.JPG", "2026-09-03T10:00:00Z");
+        Path pipeline = withResumeOptions(pipeline("destination",
+                "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}"), "\"destinationCheck\":\"everyFile\"");
+        Files.createDirectories(nas.resolve("2026-09-01"));
+        Files.createDirectories(nas.resolve("2026-09-03"));
+
+        String[] result = capture(pipeline);
+
+        assertEquals("0", result[0], result[2]);
+        assertFalse(Files.exists(nas.resolve("2026-09-01").resolve("IMG_01.JPG")));
+        assertTrue(Files.exists(nas.resolve("2026-09-02").resolve("IMG_02.JPG")), "the missing day is imported");
+        assertFalse(Files.exists(nas.resolve("2026-09-03").resolve("IMG_03.JPG")));
+    }
+
+    @Test
+    public void theFileMatchReimportsAFileDeletedFromAnImportedDirectory() throws IOException {
+        Path pipeline = withResumeOptions(pipeline("destination",
+                "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}"), "\"destinationMatch\":\"file\"");
+        Files.createDirectories(nas.resolve("2026-09-01"));
+        Files.createDirectories(nas.resolve("2026-09-02"));
+        Files.writeString(nas.resolve("2026-09-02").resolve("IMG_02.JPG"), "IMG_02.JPG");
+
+        String[] result = capture(pipeline);
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(Files.exists(nas.resolve("2026-09-01").resolve("IMG_01.JPG")),
+                "its directory exists, not its file: imported again");
+    }
+
+    @Test
+    public void everyFileWithAFixedDirectoryCopiesEverythingWithTheWarning() throws IOException {
+        Path pipeline = withResumeOptions(pipeline("destination", "{name}"), "\"destinationCheck\":\"everyFile\"");
+        Files.createDirectories(nas);
+
+        String[] result = capture(pipeline, "--dry-run");
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_01.JPG")), result[1]);
+        assertTrue(result[1].contains(ResourcesEngine.getString("cli.plan.copy", "IMG_02.JPG")), result[1]);
+    }
+
+    @Test
+    public void aDryRunOfAStreamingPipelineWritesNothing() throws IOException {
+        Path pipeline = streaming("state", "{name}");
+
+        assertEquals(0, cli(pipeline, "--dry-run"));
+
+        assertFalse(Files.exists(nas));
+        assertFalse(Files.exists(tempDir.resolve("sd.state.json")));
+    }
+
     @Test
     public void aSafeConfigurationPrintsNoWarning() throws IOException {
         Path pipeline = pipelineWithOut("state", ", \"deleteSource\": true, \"verify\": \"readBack\"");
