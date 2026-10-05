@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # This demo plugin keeps an old metadata-extractor on purpose: it shows that each plugin is
+  # isolated with its own library versions. Never bump it, security updates included.
+  - package-ecosystem: "maven"
+    directory: "/copybot-plugin-demo/copybot-plugin-demo-module-old-dependency"
+    schedule:
+      interval: "monthly"
+    # 0 disables version updates here: this entry only exists to carry the ignore rule below
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "com.drewnoakes:metadata-extractor"
