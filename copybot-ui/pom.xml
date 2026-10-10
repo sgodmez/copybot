@@ -77,7 +77,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
                     <!-- tests never reach the user's real preferences: every Preferences root is in-memory -->
-                    <argLine>--add-exports com.copybot.ui/com.copybot.ui.util=java.prefs --enable-native-access=com.copybot.engine</argLine>
+                    <argLine>--add-exports com.copybot.ui/com.copybot.ui.util=java.prefs --enable-native-access=com.copybot.engine,javafx.graphics</argLine>
                     <systemPropertyVariables>
                         <java.util.prefs.PreferencesFactory>com.copybot.ui.util.GuardedPreferencesFactory</java.util.prefs.PreferencesFactory>
                     </systemPropertyVariables>
@@ -159,8 +159,8 @@
                             <icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.ico</icon>
                             <javaOptions>
                                 <option>-Dfile.encoding=UTF-8</option>
-                                <!-- the disk lookup of Windows calls kernel32 -->
-                                <option>--enable-native-access=com.copybot.engine</option>
+                                <!-- the disk lookup of Windows calls kernel32, JavaFX loads its own libraries -->
+                                <option>--enable-native-access=com.copybot.engine,javafx.graphics</option>
                             </javaOptions>
                         </configuration>
                     </execution>
