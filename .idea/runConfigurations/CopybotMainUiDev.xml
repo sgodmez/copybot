@@ -1,0 +1,17 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="CopybotMainUiDev" type="Application" factoryName="Application">
+    <option name="MAIN_CLASS_NAME" value="com.copybot.ui.CopybotMainUiDev" />
+    <module name="copybot-ui" />
+    <option name="VM_PARAMETERS" value="--enable-native-access=com.copybot.engine" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+    <extension name="coverage">
+      <pattern>
+        <option name="PATTERN" value="com.copybot.ui.*" />
+        <option name="ENABLED" value="true" />
+      </pattern>
+    </extension>
+    <method v="2">
+      <option name="Make" enabled="true" />
+    </method>
+  </configuration>
+</component>
