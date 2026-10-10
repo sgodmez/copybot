@@ -97,6 +97,8 @@
             <Label fx:id="progressLabel" />
          </children>
       </HBox>
+      <FlowPane fx:id="resourcesFlow" alignment="CENTER_LEFT" hgap="18.0" managed="false" vgap="6.0" visible="false" />
+
       <HBox alignment="CENTER_LEFT" spacing="10.0">
          <children>
             <Button fx:id="prepareButton" mnemonicParsing="false" onAction="#onPrepareClick" text="%plan.prepare" />

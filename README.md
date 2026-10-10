@@ -76,6 +76,9 @@ libraries.
   physical disk behind each folder, on Windows and Linux, so two drive letters
   or partitions of one disk share one budget. That budget follows the kind of
   disk: an NVMe or SSD disk takes more actions at once than a hard disk.
+  While a plan is prepared or run, the plan view shows the CPU load (the
+  whole machine, and the part of Copybot) and each resource the pipeline
+  uses: how many actions hold it, and how many wait for it.
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the

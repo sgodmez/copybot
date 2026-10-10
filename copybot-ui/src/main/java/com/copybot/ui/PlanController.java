@@ -6,6 +6,8 @@ import com.copybot.engine.Plan;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.resources.DiskInventory;
+import com.copybot.engine.resources.ResourceSnapshot;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
@@ -16,9 +18,14 @@ import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.PlanViewModel.Filter;
 import com.copybot.ui.model.PlanViewModel.Phase;
 import com.copybot.ui.model.RecentPipelines;
+import com.copybot.ui.model.ResourceGauges;
 import com.copybot.ui.model.StepCatalog;
 import com.copybot.ui.util.PopinUtil;
+import com.copybot.ui.util.SystemLoad;
 import com.copybot.ui.util.UiPreferences;
+import javafx.animation.Animation;
+import javafx.animation.KeyFrame;
+import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
 import javafx.beans.property.ReadOnlyObjectWrapper;
@@ -51,8 +58,11 @@ import javafx.scene.control.TableView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
+import javafx.geometry.Pos;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
@@ -113,6 +123,7 @@ public class PlanController {
     @FXML private HBox progressBox;
     @FXML private ProgressBar progressBar;
     @FXML private Label progressLabel;
+    @FXML private FlowPane resourcesFlow;
     @FXML private Button prepareButton;
     @FXML private Button copyButton;
     @FXML private CheckBox autoExecuteBox;
@@ -533,9 +544,101 @@ public class PlanController {
             if (op != operation || (plan != null && state != plan.getState())) {
                 return; // an earlier run: it must not change the phase
             }
+            liveState = state;
             model.update(state, ordered());
             afterUpdate();
         });
+    }
+
+    // ---- the resources, live ----
+
+    /** The last state notified for the current operation: its registry gives the resources in use. */
+    private PipelineState liveState;
+    /** The volumes of the machine, to name the disks; read once, off the JavaFX thread. */
+    private List<DiskInventory.Volume> volumes = List.of();
+    private boolean volumesAsked;
+    /** Once a second while a plan is prepared or run: the CPU load moves between two notifications. */
+    private Timeline resourcesTimer;
+
+    private void refreshResources(boolean live) {
+        show(resourcesFlow, live);
+        if (!live) {
+            if (resourcesTimer != null) {
+                resourcesTimer.stop();
+            }
+            return;
+        }
+        if (!volumesAsked) {
+            volumesAsked = true;
+            try {
+                CopybotMainUi.executor.submit(() -> {
+                    List<DiskInventory.Volume> read = DiskInventory.volumes(); // a share may answer slowly
+                    Platform.runLater(() -> {
+                        volumes = read;
+                        renderResources();
+                    });
+                });
+            } catch (RejectedExecutionException e) {
+                // the application is stopping
+            }
+        }
+        if (resourcesTimer == null) {
+            resourcesTimer = new Timeline(new KeyFrame(Duration.seconds(1), e -> renderResources()));
+            resourcesTimer.setCycleCount(Animation.INDEFINITE);
+        }
+        if (resourcesTimer.getStatus() != Animation.Status.RUNNING) {
+            resourcesTimer.play();
+        }
+        renderResources();
+    }
+
+    private void renderResources() {
+        if (resourcesFlow.getScene() == null) {
+            resourcesTimer.stop(); // the view was replaced
+            return;
+        }
+        List<ResourceSnapshot> snapshot = liveState == null ? List.of() : liveState.getResourceSnapshot();
+        List<Node> gauges = new ArrayList<>();
+        Label title = new Label(ResourcesEngine.getString("plan.resources"));
+        title.setStyle("-fx-font-weight: bold;");
+        gauges.add(title);
+        for (ResourceGauges.Gauge gauge : ResourceGauges.of(snapshot, SystemLoad.machine(), SystemLoad.process(), volumes)) {
+            Label label = new Label(gauge.label());
+            Label text = new Label(gauge.text());
+            text.setStyle("-fx-text-fill: #6b7280; -fx-font-size: 11px;");
+            gauges.add(new VBox(2, label, gaugeBar(gauge), text));
+        }
+        resourcesFlow.getChildren().setAll(gauges);
+    }
+
+    private static final double GAUGE_WIDTH = 150;
+
+    /**
+     * A bar: how full the resource is (orange when it is full and actions wait for it); for the CPU, the load of
+     * the machine in light blue and, inside it, the part of Copybot in dark blue.
+     */
+    private static Node gaugeBar(ResourceGauges.Gauge gauge) {
+        StackPane bar = new StackPane(gaugeLayer(1, "#e5e7eb"));
+        bar.setAlignment(Pos.CENTER_LEFT);
+        bar.setMaxWidth(GAUGE_WIDTH);
+        boolean split = gauge.part() >= 0;
+        String fill = gauge.saturated() ? "#d97706" : split ? "#93c5fd" : "#3b82f6";
+        bar.getChildren().add(gaugeLayer(Math.max(gauge.fraction(), 0), fill));
+        if (split) {
+            bar.getChildren().add(gaugeLayer(gauge.part(), "#1d4ed8"));
+            Tooltip.install(bar, new Tooltip(ResourcesEngine.getString("plan.resources.cpu.legend")));
+        }
+        return bar;
+    }
+
+    private static Region gaugeLayer(double fraction, String color) {
+        Region layer = new Region();
+        double width = Math.round(GAUGE_WIDTH * Math.min(fraction, 1));
+        layer.setMinSize(width, 10);
+        layer.setPrefSize(width, 10);
+        layer.setMaxSize(width, 10);
+        layer.setStyle("-fx-background-color: " + color + "; -fx-background-radius: 3;");
+        return layer;
     }
 
     private void onPrepared(Object op, Object hold, Plan prepared) {
@@ -1252,6 +1355,7 @@ public class PlanController {
 
         boolean preparing = phase == Phase.PREPARING || phase == Phase.ANALYSING; // the same bar
         show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);
+        refreshResources(preparing || model.isExecutionActive());
         progressBar.setProgress(preparing ? model.prepareFraction() : model.executionFraction());
         progressLabel.setText(model.progressText());
         statusLine.setText(model.statusLine());
