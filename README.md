@@ -70,10 +70,12 @@ libraries.
   a file for this copy only, or always ignore it: that adds an exclude to the
   pipeline.
 - **Parallel, but polite to your disks.** Each file is processed on a virtual
-  thread. Named resources (`cpu`, `gpu`, `disk:<volume>` and your own) cap how
+  thread. Named resources (`cpu`, `gpu`, `disk:<disk>` and your own) cap how
   many actions run at once. Resources are acquired all at once or not at all,
-  so actions do not deadlock and none waits forever. Two folders on the same
-  physical disk can share one budget.
+  so actions do not deadlock and none waits forever. Copybot finds the
+  physical disk behind each folder, on Windows and Linux, so two drive letters
+  or partitions of one disk share one budget. That budget follows the kind of
+  disk: an NVMe or SSD disk takes more actions at once than a hard disk.
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
@@ -182,7 +184,8 @@ the plugin). It produces:
 To run a pipeline from the command line with the jlink image:
 
 ```sh
-copybot-ui/target/copybot/bin/java -m com.copybot.engine/com.copybot.Copybot \
+copybot-ui/target/copybot/bin/java --enable-native-access=com.copybot.engine \
+    -m com.copybot.engine/com.copybot.Copybot \
     -p photos.json -c config.json --dry-run
 ```
 
@@ -199,10 +202,22 @@ capacities:
 ```json
 {
   "pluginPath": "./plugins",
-  "resources": { "disk:*": 2, "gpu": 1 },
-  "resourceGroups": [["disk:D:\\", "disk:E:\\"]]
+  "resources": { "disk:D:\\": 1, "gpu": 1 },
+  "resourceGroups": [["disk:D:\\", "disk:\\\\nas\\photos\\"]]
 }
 ```
+
+A disk resource is named after the physical disk: `disk:PhysicalDrive1` on
+Windows, `disk:sda` or `disk:nvme0n1` on Linux. In the configuration you can
+name it by any folder or drive on it instead (`disk:D:\`, `disk:D:`,
+`disk:/home`; in JSON, `"disk:D:\\"`). If two volumes of one disk get different capacities, the
+smaller one is kept. When no physical disk can be found, the resource is the
+volume itself (`disk:\\server\share\`, `disk:/mnt/nas`). That happens for
+network shares, for volumes spread over several disks (RAID, spanned volumes,
+LVM over several disks, Storage Spaces), and on other systems. Put such
+volumes in a `resourceGroups` entry to make them share one budget. The default
+capacity is 8 for an NVMe disk, 4 for an SSD, and 2 for a hard disk or a disk
+of unknown kind. A `disk:*` entry replaces these defaults.
 
 **Development:** run `com.copybot.ui.CopybotMainUiDev` with the repository
 root as working directory. It uses `copybot-ui/src/dev/config.json`, which

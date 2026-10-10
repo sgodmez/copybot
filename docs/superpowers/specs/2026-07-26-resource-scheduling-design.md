@@ -24,7 +24,7 @@ L'ancienne ébauche partait vers un scheduler central événementiel (callbacks,
 
 Une ressource = un nom + une capacité (nombre de permis). Conventions :
 
-- `disk:<volume>` — fournies par le moteur (détection automatique) ;
+- `disk:<disque>` — fournies par le moteur (détection automatique du disque physique, voir la fin du document) ;
 - `cpu`, `gpu` — noms standards ;
 - noms custom de plugins (ex. `net:flickr` pour un quota d'appels API).
 
@@ -105,7 +105,16 @@ Exception dans un step → item `ERROR` avec cause, ressources relâchées (`fin
 ## Hors périmètre v1 → idées v2
 
 - **Priorités** : brancher `PipelineStepConfig.priority` dans le registre (réveil par priorité au lieu de first-fit) ; heuristique « tâches longues d'abord » pour réduire le temps de drain en fin de run.
-- **Auto-détection du disque physique** (Windows d'abord) : volume → disque physique, et type SSD/HDD pour choisir la capacité par défaut intelligemment ; remplace le `resourceGroups` manuel quand fiable.
+- ~~**Auto-détection du disque physique**~~ — fait le 2026-10-10, voir ci-dessous.
+
+## Disque physique (2026-10-10)
+
+- `DiskResolver` nomme la ressource d'après le disque physique : `disk:PhysicalDriveN` sous Windows (FFM sur kernel32 : `GetVolumePathNameW` → `GetVolumeNameForVolumeMountPointW` → `IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`, sans droits admin), `disk:sda` / `disk:nvme0n1` sous Linux (`st_dev` → `/sys/block`, en suivant `slaves/` quand un dm/md ne repose que sur un disque ; btrfs via `/proc/self/mountinfo`).
+- Repli sur un nom de volume **stable** (plus l'étiquette de `FileStore.toString()`, qui rendait les noms de la config introuvables) : `disk:D:\`, `disk:\\serveur\partage\`, `disk:/mnt/nas`. Cas laissés au repli : partages réseau, volumes sur plusieurs disques (RAID, LVM multi-disques, volumes fractionnés, Storage Spaces), autres OS.
+- Type de disque (`DiskKind`) → capacité par défaut : NVMe 8, SSD 4, HDD 2, inconnu 2. Windows : `IOCTL_STORAGE_QUERY_PROPERTY` (BusType NVMe, puis pénalité de seek) ; Linux : nom `nvme*`, puis `queue/rotational`. Un `disk:*` configuré reste prioritaire.
+- Config : un nom `disk:` qui est un chemin existant (`disk:D:\`, `disk:D:`, `disk:/home`) est traduit vers son disque ; deux capacités sur le même disque → la plus petite. `resourceGroups` reste pour les cas de repli.
+- Cache 30 s par volume (Windows) / par `st_dev` (Linux) : un disque amovible peut revenir sous un autre numéro. Coût mesuré identique à l'ancien `getFileStore` (~0,2 ms par chemin).
+- Lancement : `--enable-native-access=com.copybot.engine` (jpackage, surefire) ; sans, la JVM avertit seulement, et si l'accès natif est refusé on retombe sur la racine du volume.
 - **Ressources pondérées** : une tâche prend N permis (ex. transcodage 4K = 4 slots `cpu`) ; couvre aussi la bande passante réseau.
 - **Pause / reprise** du pipeline (le registre gèle les grants).
 - **Stop-on-error configurable** par pipeline.

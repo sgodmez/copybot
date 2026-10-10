@@ -10,13 +10,14 @@ public record CopybotConfig(
         Path devPluginPaths,
 
         /**
-         * Resource capacities. Exact name ("disk:C:\\") or prefix pattern ("disk:*").
+         * Resource capacities. Exact name ("disk:sda", or a folder of the disk: "disk:C:\\") or prefix
+         * pattern ("disk:*").
          */
         Map<String, Integer> resources,
 
         /**
          * Groups of resource names that alias to a single resource
-         * (e.g. two partitions of the same physical disk).
+         * (e.g. volumes spread over several disks, which are not joined to a physical disk).
          */
         List<List<String>> resourceGroups
 ) {
