@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-plugin-demo</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <!--
+        Version 1.0 of the demo library: an old style jar, no module-info and no Automatic-Module-Name, so it is
+        an automatic module named after its file (copybot.plugin.demo.lib), not com.copybot.plugin.demo.lib
+    -->
+    <artifactId>copybot-plugin-demo-lib</artifactId>
+    <version>1.0</version>
+</project>

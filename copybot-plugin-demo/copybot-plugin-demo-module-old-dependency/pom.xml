@@ -15,11 +15,14 @@
 
     <dependencies>
 
-        <!-- used for demo purpose only, this version is not safe anymore -->
+        <!--
+            the older version of the library: version 2.0 of this plugin embeds version 2.0 of it, under another
+            module name and with another API, and both plugins run side by side
+        -->
         <dependency>
-            <groupId>com.drewnoakes</groupId>
-            <artifactId>metadata-extractor</artifactId>
-            <version>2.18.0</version>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-plugin-demo-lib</artifactId>
+            <version>1.0</version>
         </dependency>
     </dependencies>
 

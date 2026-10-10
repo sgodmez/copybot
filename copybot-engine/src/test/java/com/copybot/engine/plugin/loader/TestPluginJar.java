@@ -15,7 +15,8 @@ import java.util.stream.Stream;
 /**
  * Builds a real module for the plugin loader tests: compiled by javac against the engine module, so that the
  * loader resolves it as it resolves a shipped plugin. A plugin module provides IPlugin (code: the module name,
- * one ANALYZE action "act"); a library module only exports a package. Written as a jar of a plugin directory
+ * one ANALYZE action "act"); a library module only exports a package, or is an old style jar without
+ * module-info ({@link #automatic}). Written as a jar of a plugin directory
  * ({@link #writeTo}) or as a development directory ({@link #writeDevDir}).
  */
 public final class TestPluginJar {
@@ -25,6 +26,7 @@ public final class TestPluginJar {
     private final String moduleName;
     private final String packageName;
     private boolean plugin;
+    private boolean automatic;
     private String version;
     private boolean failingConstructor;
     private boolean failingActions;
@@ -70,6 +72,15 @@ public final class TestPluginJar {
         return this;
     }
 
+    /**
+     * A library without module-info: the loader sees an automatic module, its name and version taken from the jar
+     * name ({@code <module>-<version>.jar}).
+     */
+    public TestPluginJar automatic() {
+        this.automatic = true;
+        return this;
+    }
+
     /** The plugin constructor throws: its service provider cannot be instantiated. */
     public TestPluginJar failingConstructor() {
         this.failingConstructor = true;
@@ -105,7 +116,7 @@ public final class TestPluginJar {
             Path classes = compile();
             Path jarFile = dir.resolve(moduleName + (version != null ? "-" + version : "") + ".jar");
             List<String> jar = new ArrayList<>(List.of("--create", "--file", jarFile.toString()));
-            if (version != null) {
+            if (version != null && !automatic) {
                 jar.addAll(List.of("--module-version", version));
             }
             jar.addAll(List.of("-C", classes.toString(), "."));
@@ -147,7 +158,9 @@ public final class TestPluginJar {
         Files.createDirectories(pkgDir);
 
         List<Path> sources = new ArrayList<>();
-        sources.add(write(src.resolve("module-info.java"), moduleInfo()));
+        if (!automatic) {
+            sources.add(write(src.resolve("module-info.java"), moduleInfo()));
+        }
         if (plugin) {
             sources.add(write(pkgDir.resolve("TestPlugin.java"), pluginClass()));
             sources.add(write(pkgDir.resolve("TestAction.java"), actionClass()));
@@ -156,7 +169,7 @@ public final class TestPluginJar {
         }
 
         List<String> javac = new ArrayList<>(List.of("-d", classes.toString(), "--module-path", modulePath()));
-        if (version != null) {
+        if (version != null && !automatic) {
             javac.addAll(List.of("--module-version", version));
         }
         sources.forEach(s -> javac.add(s.toString()));

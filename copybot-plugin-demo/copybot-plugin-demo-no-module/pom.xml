@@ -14,21 +14,19 @@
     <version>1.0</version>
 
     <dependencies>
+        <!--
+            not a module either: the jar with dependencies stays an automatic module (a library with a module-info
+            would make it that module); the engine is provided by the parent, so it is not in the jar
+        -->
         <dependency>
-            <groupId>com.drewnoakes</groupId>
-            <artifactId>metadata-extractor</artifactId>
-            <version>2.21.0</version>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-plugin-demo-lib</artifactId>
+            <version>1.0</version>
         </dependency>
         <dependency>
             <groupId>com.google.auto.service</groupId>
             <artifactId>auto-service-annotations</artifactId>
             <version>1.1.1</version>
-        </dependency>
-        <dependency>
-            <groupId>com.copybot</groupId>
-            <artifactId>copybot-engine</artifactId>
-            <version>1.0-SNAPSHOT</version>
-            <scope>compile</scope>
         </dependency>
     </dependencies>
 

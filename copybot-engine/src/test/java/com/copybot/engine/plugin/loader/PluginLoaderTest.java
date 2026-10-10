@@ -13,6 +13,7 @@ import java.io.InputStream;
 import java.lang.module.ModuleDescriptor;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Properties;
@@ -202,6 +203,34 @@ public class PluginLoaderTest {
 
         loaded(definitions, "test.base");
         assertEquals(List.of("test.base 1.2"), loaded(definitions, "test.child").getPluginDependencies());
+    }
+
+    @Test
+    public void twoMajorsOfAPluginEachRunOnTheirOwnVersionOfALibrary() throws Exception {
+        // like the demo plugins: 1.0 embeds an old style jar (automatic module), 2.0 the named module that replaced it
+        Path old = plugins.resolve("old");
+        Path oldLib = TestPluginJar.library("test.lib", "test.lib").version("1.0").automatic().writeTo(old.resolve("lib"));
+        TestPluginJar.plugin("test.isolated").version("1.0").requires("test.lib", oldLib).writeTo(old);
+        Path recent = plugins.resolve("recent");
+        Path recentLib = TestPluginJar.library("test.lib", "test.lib").version("2.0").writeTo(recent.resolve("lib"));
+        TestPluginJar.plugin("test.isolated").version("2.0").requires("test.lib", recentLib).writeTo(recent);
+
+        List<PluginDefinition> isolated = load(old, recent).stream().filter(d -> "test.isolated".equals(d.getName())).toList();
+
+        assertEquals(2, isolated.size(), isolated.toString());
+        List<Class<?>> libClasses = new ArrayList<>();
+        for (PluginDefinition definition : isolated) {
+            assertTrue(definition.isActive(), definition.getErrorMessage());
+            ModuleEntry lib = definition.getModules().stream().filter(m -> m.name().equals("test.lib")).findFirst().orElseThrow();
+            assertEquals(definition.getVersion(), lib.version());
+            assertEquals(definition.getVersion().equals("1.0"), lib.automatic());
+            Path folder = definition.getVersion().equals("1.0") ? old : recent;
+            assertTrue(lib.location().startsWith(folder), lib.location().toString());
+
+            ModuleLayer layer = definition.getPluginInstance().getClass().getModule().getLayer();
+            libClasses.add(layer.findLoader("test.lib").loadClass("test.lib.Lib"));
+        }
+        assertNotSame(libClasses.get(0), libClasses.get(1), "each plugin has its own copy of the library");
     }
 
     @Test

@@ -168,7 +168,11 @@ configuration warnings, and describe what it would do in a dry run.
 
 The [`copybot-plugin-demo`](copybot-plugin-demo) modules are worked examples:
 a standard module plugin, the same plugin built on an older library, a
-plugin that depends on two others, and a plain (non-module) jar.
+plugin that depends on two others, and a plain (non-module) jar. The library
+they embed is a demo library of the project, `copybot-plugin-demo-lib`, in two
+versions with incompatible APIs: 2.0 is a module, 1.0 an old style jar (an
+automatic module named after its file). Each plugin prints which version
+answered and from which jar.
 
 ## Quick start
 

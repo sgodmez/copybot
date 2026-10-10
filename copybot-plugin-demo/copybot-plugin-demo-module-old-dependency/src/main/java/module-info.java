@@ -3,7 +3,7 @@ import com.copybot.plugin.demo.module.DemoModulePlugin;
 
 module com.copybot.plugin.demo.module {
     requires com.copybot.engine;
-    requires metadata.extractor;
+    requires copybot.plugin.demo.lib; // version 1.0 is not a module: named after its jar
 
     exports com.copybot.plugin.demo.module;
     exports com.copybot.plugin.demo.module.actions;

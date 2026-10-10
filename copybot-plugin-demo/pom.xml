@@ -10,6 +10,8 @@
     <packaging>pom</packaging>
 
     <modules>
+        <module>copybot-plugin-demo-lib</module>
+        <module>copybot-plugin-demo-lib-old</module>
         <module>copybot-plugin-demo-module</module>
         <module>copybot-plugin-demo-module-old-dependency</module>
         <module>copybot-plugin-demo-module-2</module>
