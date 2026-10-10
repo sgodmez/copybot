@@ -4,12 +4,14 @@
 <?import javafx.scene.control.Button?>
 <?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.TableColumn?>
+<?import javafx.scene.control.TableView?>
 <?import javafx.scene.control.TextField?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox prefWidth="520.0" spacing="10.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.PreferencesController">
+<VBox prefWidth="740.0" spacing="10.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.PreferencesController">
    <padding>
       <Insets bottom="15.0" left="15.0" right="15.0" top="15.0" />
    </padding>
@@ -31,6 +33,31 @@
                </children>
             </HBox>
             <Label fx:id="pluginPathResolved" style="-fx-text-fill: #666666;" />
+         </children>
+      </VBox>
+      <VBox spacing="4.0" VBox.vgrow="ALWAYS">
+         <children>
+            <Label text="%pref.disks" />
+            <Label style="-fx-text-fill: #666666;" text="%pref.disks.hint" wrapText="true" />
+            <TableView fx:id="disksTable" prefHeight="190.0" VBox.vgrow="ALWAYS">
+               <columns>
+                  <TableColumn fx:id="volumesColumn" prefWidth="190.0" text="%pref.disks.volumes" />
+                  <TableColumn fx:id="diskColumn" prefWidth="150.0" text="%pref.disks.disk" />
+                  <TableColumn fx:id="kindColumn" prefWidth="80.0" text="%pref.disks.kind" />
+                  <TableColumn fx:id="capacityColumn" prefWidth="130.0" text="%pref.disks.capacity" />
+                  <TableColumn fx:id="groupColumn" prefWidth="150.0" text="%pref.disks.group" />
+               </columns>
+               <placeholder>
+                  <Label fx:id="disksPlaceholder" text="%pref.disks.loading" wrapText="true" />
+               </placeholder>
+            </TableView>
+            <HBox alignment="CENTER_LEFT" spacing="6.0">
+               <children>
+                  <Button fx:id="addFolderButton" onAction="#onAddFolderClick" text="%pref.disks.add-folder" />
+                  <Button fx:id="groupButton" onAction="#onGroupClick" text="%pref.disks.group-with" />
+                  <Button fx:id="ungroupButton" onAction="#onUngroupClick" text="%pref.disks.ungroup" />
+               </children>
+            </HBox>
          </children>
       </VBox>
       <HBox alignment="CENTER_RIGHT" spacing="10.0">

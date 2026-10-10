@@ -3,8 +3,10 @@ package com.copybot.engine.resources;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
@@ -50,7 +52,7 @@ final class LinuxDiskProbe implements DiskProbe {
     private record Block(String name, String disk) {
     }
 
-    record Mount(String device, String point, String source) {
+    record Mount(String device, String point, String type, String source) {
     }
 
     LinuxDiskProbe() {
@@ -185,7 +187,37 @@ final class LinuxDiskProbe implements DiskProbe {
         if (fields.length < 5 || separator < 0 || separator + 2 >= fields.length) {
             return null;
         }
-        return new Mount(fields[2], unescape(fields[4]), unescape(fields[separator + 2]));
+        return new Mount(fields[2], unescape(fields[4]), fields[separator + 1], unescape(fields[separator + 2]));
+    }
+
+    /** File systems of the kernel or of the session, which hold no files of the user. */
+    private static final Set<String> PSEUDO_TYPES = Set.of("proc", "sysfs", "devtmpfs", "devpts", "tmpfs", "ramfs",
+            "cgroup", "cgroup2", "securityfs", "pstore", "bpf", "debugfs", "tracefs", "configfs", "fusectl", "mqueue",
+            "hugetlbfs", "autofs", "binfmt_misc", "efivarfs", "squashfs", "overlay", "nsfs", "rpc_pipefs", "selinuxfs",
+            "fuse.gvfsd-fuse", "fuse.portal");
+    private static final List<String> SYSTEM_POINTS = List.of("/proc", "/sys", "/dev", "/run");
+
+    /** The mount points that hold files of the user (disks, shares), in the order of /proc/self/mountinfo. */
+    static List<String> userMountPoints(List<String> mountInfoLines) {
+        Set<String> points = new LinkedHashSet<>();
+        for (String line : mountInfoLines) {
+            Mount mount = parseMountInfo(line);
+            if (mount == null || PSEUDO_TYPES.contains(mount.type())) {
+                continue;
+            }
+            boolean system = SYSTEM_POINTS.stream()
+                    .anyMatch(p -> mount.point().equals(p) || mount.point().startsWith(p + "/"));
+            if (!system) {
+                points.add(mount.point());
+            }
+        }
+        return List.copyOf(points);
+    }
+
+    /** The mount points of this system that hold files of the user. */
+    static List<String> userMountPoints() throws IOException {
+        Path mountInfo = Path.of("/proc/self/mountinfo");
+        return Files.isReadable(mountInfo) ? userMountPoints(Files.readAllLines(mountInfo)) : List.of();
     }
 
     /** Mountinfo writes a space, tab, newline or backslash of a path as an octal escape ("\040"). */

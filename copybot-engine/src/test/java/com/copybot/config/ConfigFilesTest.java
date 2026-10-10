@@ -7,6 +7,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -154,5 +156,42 @@ public class ConfigFilesTest {
         assertThrows(CopybotException.class, () -> ConfigFiles.readPluginPath(config));
         assertThrows(CopybotException.class, () -> ConfigFiles.writePluginPath(config, Path.of("p")));
         assertEquals("not json", Files.readString(config));
+    }
+
+    @Test
+    public void resourcesAreReadBack() throws Exception {
+        Path config = tempDir.resolve("config.json");
+        Files.writeString(config, "{\"pluginPath\": \"p\"}");
+
+        ConfigFiles.writeResources(config, new ConfigFiles.Resources(
+                Map.of("cpu", 4, "disk:D:\\", 1), List.of(List.of("disk:D:\\", "disk:\\\\nas\\photos\\"))));
+
+        ConfigFiles.Resources read = ConfigFiles.readResources(config);
+        assertEquals(Map.of("cpu", 4, "disk:D:\\", 1), read.capacities());
+        assertEquals(List.of(List.of("disk:D:\\", "disk:\\\\nas\\photos\\")), read.groups());
+        assertEquals(Optional.of(Path.of("p")), ConfigFiles.readPluginPath(config));
+    }
+
+    @Test
+    public void emptyResourcesRemoveTheirKeys() throws Exception {
+        Path config = tempDir.resolve("config.json");
+        Files.writeString(config, "{\"pluginPath\": \"p\", \"resources\": {\"cpu\": 2}, \"resourceGroups\": [[\"a\", \"b\"]]}");
+
+        ConfigFiles.writeResources(config, new ConfigFiles.Resources(Map.of(), List.of()));
+
+        String text = Files.readString(config);
+        assertFalse(text.contains("resources"), text);
+        assertFalse(text.contains("resourceGroups"), text);
+        assertTrue(text.contains("pluginPath"), text);
+        assertEquals(new ConfigFiles.Resources(Map.of(), List.of()), ConfigFiles.readResources(config));
+    }
+
+    @Test
+    public void aCapacityThatIsNoNumberIsRefused() throws Exception {
+        Path config = tempDir.resolve("config.json");
+        Files.writeString(config, "{\"resources\": {\"cpu\": \"many\"}}");
+
+        CopybotException e = assertThrows(CopybotException.class, () -> ConfigFiles.readResources(config));
+        assertEquals(ResourcesEngine.getString("config.not-json", config), e.getMessage());
     }
 }

@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -115,8 +116,23 @@ public class LinuxDiskProbeTest {
     public void mountInfoLinesAreParsed() {
         LinuxDiskProbe.Mount mount = LinuxDiskProbe.parseMountInfo(
                 "36 35 98:0 /mnt1 /mnt/a\\040b rw,noatime master:1 shared:2 - ext3 /dev/root rw,errors=continue");
-        assertEquals(new LinuxDiskProbe.Mount("98:0", "/mnt/a b", "/dev/root"), mount);
+        assertEquals(new LinuxDiskProbe.Mount("98:0", "/mnt/a b", "ext3", "/dev/root"), mount);
         assertNull(LinuxDiskProbe.parseMountInfo("garbage"));
+    }
+
+    @Test
+    public void onlyTheMountsHoldingFilesOfTheUserAreListed() throws IOException {
+        List<String> lines = new java.util.ArrayList<>(Files.readAllLines(mountInfo));
+        lines.addAll(List.of(
+                "23 22 0:5 / /proc rw - proc proc rw",
+                "24 22 0:6 / /sys/fs/cgroup rw - cgroup2 cgroup2 rw",
+                "25 22 0:7 / /run/user/1000 rw - tmpfs tmpfs rw",
+                "26 22 7:0 / /snap/core/1 ro - squashfs /dev/loop0 ro",
+                "27 22 8:17 / /media/me/USB\\040KEY rw - vfat /dev/sdb1 rw",
+                "28 22 0:50 / /dev/shm rw - ext4 /dev/sdz rw",
+                "29 22 8:1 / / rw - ext4 /dev/sda1 rw"));
+        assertEquals(List.of("/", "/home", "/mnt/nas photos", "/media/me/USB KEY"),
+                LinuxDiskProbe.userMountPoints(lines));
     }
 
     private DiskIdentity on(String path, long major, long minor) throws IOException {

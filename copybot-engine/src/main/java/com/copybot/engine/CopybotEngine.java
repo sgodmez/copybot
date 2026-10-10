@@ -28,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -58,7 +59,8 @@ public final class CopybotEngine implements AutoCloseable {
     /** Used when the config declares no pluginPath; a missing directory simply loads no plugins. */
     private static final Path DEFAULT_PLUGIN_PATH = Path.of("./plugins");
 
-    private final CopybotConfig config;
+    /** Replaced when the preferences save the disks ({@link #updateResources}); the plugins keep the first one. */
+    private volatile CopybotConfig config;
     private final Path configFile;
 
     /**
@@ -107,6 +109,15 @@ public final class CopybotEngine implements AutoCloseable {
     /** The configuration file read at startup, absolute. */
     public Path configFile() {
         return configFile;
+    }
+
+    /**
+     * The resource capacities and groups saved by the preferences: they apply from the next plan prepared or run
+     * started, without a restart (each one builds its resource registry from them). A run under way keeps its own.
+     */
+    public void updateResources(Map<String, Integer> resources, List<List<String>> resourceGroups) {
+        CopybotConfig current = config;
+        config = new CopybotConfig(current.pluginPath(), current.devPluginPaths(), resources, resourceGroups);
     }
 
     /** How the plugins of this JVM were loaded (spec plugins-view §1). */

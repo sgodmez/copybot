@@ -15,12 +15,18 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 
 /** Reads and rewrites single keys of the configuration file, the other keys left as they are. */
 public final class ConfigFiles {
 
     private static final String PLUGIN_PATH = "pluginPath";
+    private static final String RESOURCES = "resources";
+    private static final String RESOURCE_GROUPS = "resourceGroups";
 
     /** Writes "&amp;", "&lt;"... literally: a path is no HTML. */
     private static final Gson WRITER = GsonUtil.getGson().newBuilder().disableHtmlEscaping().create();
@@ -54,13 +60,57 @@ public final class ConfigFiles {
      * the line endings of the original file. On failure the file is left as it was.
      */
     public static void writePluginPath(Path configFile, Path pluginPath) {
+        rewrite(configFile, json -> {
+            if (pluginPath == null) {
+                json.remove(PLUGIN_PATH);
+            } else {
+                json.addProperty(PLUGIN_PATH, pluginPath.toString());
+            }
+        });
+    }
+
+    /** The resource capacities and groups written in the file (empty when there are none). */
+    public record Resources(Map<String, Integer> capacities, List<List<String>> groups) {
+    }
+
+    public static Resources readResources(Path configFile) {
+        CopybotConfig config;
+        try {
+            config = GsonUtil.getGson().fromJson(readText(configFile), CopybotConfig.class);
+        } catch (JsonParseException e) {
+            throw CopybotException.ofResource(e, "config.not-json", configFile);
+        }
+        if (config == null) {
+            throw CopybotException.ofResource("config.not-json", configFile);
+        }
+        Map<String, Integer> capacities = config.resources() != null ? config.resources() : Map.of();
+        List<List<String>> groups = config.resourceGroups() != null ? config.resourceGroups() : List.of();
+        return new Resources(new LinkedHashMap<>(capacities), groups.stream().map(List::copyOf).toList());
+    }
+
+    /**
+     * Writes resources and resourceGroups (each one removed when empty) the way {@link #writePluginPath} writes
+     * its key, the other keys left as they are.
+     */
+    public static void writeResources(Path configFile, Resources resources) {
+        rewrite(configFile, json -> {
+            if (resources.capacities().isEmpty()) {
+                json.remove(RESOURCES);
+            } else {
+                json.add(RESOURCES, WRITER.toJsonTree(resources.capacities()));
+            }
+            if (resources.groups().isEmpty()) {
+                json.remove(RESOURCE_GROUPS);
+            } else {
+                json.add(RESOURCE_GROUPS, WRITER.toJsonTree(resources.groups()));
+            }
+        });
+    }
+
+    private static void rewrite(Path configFile, Consumer<JsonObject> change) {
         String original = readText(configFile);
         JsonObject json = parse(configFile, original);
-        if (pluginPath == null) {
-            json.remove(PLUGIN_PATH);
-        } else {
-            json.addProperty(PLUGIN_PATH, pluginPath.toString());
-        }
+        change.accept(json);
         String text = WRITER.toJson(json);
         if (original.contains("\r\n")) {
             text = text.replace("\r\n", "\n").replace("\n", "\r\n");
