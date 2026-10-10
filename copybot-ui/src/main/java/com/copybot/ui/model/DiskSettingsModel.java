@@ -7,9 +7,11 @@ import com.copybot.engine.resources.DiskKind;
 import com.copybot.engine.resources.ResourceSettings;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 
 /**
@@ -24,11 +26,12 @@ public final class DiskSettingsModel {
     private static final String DISK = ResourceSettings.DISK_PREFIX;
 
     /**
-     * A disk resource: its volumes (none for a disk named in the configuration and not there now), its kind, the
-     * capacity in force, whether that capacity is the default one, and the other disks of its group.
+     * A disk resource: its volumes (none for a disk named in the configuration only), its kind, the capacity in
+     * force, whether that capacity is the default one, the other disks of its group, whether it is there now, and
+     * the pipelines using it.
      */
     public record Row(String resource, List<String> volumes, DiskKind kind, int capacity, boolean defaultCapacity,
-                      List<String> groupedWith) {
+                      List<String> groupedWith, boolean present, List<String> usedBy) {
     }
 
     private final UnaryOperator<String> resourceFor;
@@ -39,6 +42,10 @@ public final class DiskSettingsModel {
     /** Disk resource -> its volumes and kind, in the order of the volumes of the machine. */
     private final Map<String, List<String>> volumesOf = new LinkedHashMap<>();
     private final Map<String, DiskKind> kindOf = new LinkedHashMap<>();
+    /** The disks there now: a volume of the machine is on them. */
+    private final Set<String> present = new HashSet<>();
+    /** Disk resource -> the pipelines reading or writing on it. */
+    private final Map<String, List<String>> usedBy = new LinkedHashMap<>();
 
     /**
      * @param resourceFor the disk resource of a name of the configuration (DiskResolver.resourceForConfigName)
@@ -72,6 +79,41 @@ public final class DiskSettingsModel {
             onDisk.add(volume.path());
         }
         kindOf.merge(volume.resource(), volume.kind(), (old, added) -> old == DiskKind.UNKNOWN ? added : old);
+        present.add(volume.resource());
+    }
+
+    /**
+     * A folder the pipeline reads or writes. Its disk says it is used by the pipeline; a disk not shown yet (a share
+     * switched off, a card not inserted) gets a row, written to the configuration only once it is set.
+     */
+    public void addPipelinePath(String pipeline, DiskInventory.Use use) {
+        DiskInventory.Volume volume = use.volume();
+        String resource = volume.resource();
+        if (!volumesOf.containsKey(resource)) {
+            if (use.present()) {
+                addVolume(volume); // a share reached by its name, which no drive letter shows
+            } else {
+                volumesOf.put(resource, new ArrayList<>(List.of(volume.path())));
+                kindOf.put(resource, volume.kind());
+            }
+        }
+        List<String> pipelines = usedBy.computeIfAbsent(resource, r -> new ArrayList<>());
+        if (!pipelines.contains(pipeline)) {
+            pipelines.add(pipeline);
+        }
+    }
+
+    /**
+     * Forgets the settings of a disk that is not there: its capacity, and its place in a group (the others of the
+     * group keep theirs). Its row goes too, unless the pipeline uses it.
+     */
+    public void forget(String resource) {
+        ungroup(resource);
+        setCapacity(resource, null);
+        if (!usedBy.containsKey(resource) && !present.contains(resource)) {
+            volumesOf.remove(resource);
+            kindOf.remove(resource);
+        }
     }
 
     public List<Row> rows() {
@@ -82,7 +124,8 @@ public final class DiskSettingsModel {
             String canonical = settings.canonical(resource);
             List<String> groupedWith = groupOf(resource).stream().filter(r -> !r.equals(resource)).toList();
             rows.add(new Row(resource, List.copyOf(disk.getValue()), kindOf.get(resource),
-                    settings.capacityFor(canonical), explicitCapacity(canonical) == null, groupedWith));
+                    settings.capacityFor(canonical), explicitCapacity(canonical) == null, groupedWith,
+                    present.contains(resource), List.copyOf(usedBy.getOrDefault(resource, List.of()))));
         }
         return rows;
     }

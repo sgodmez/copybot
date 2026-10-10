@@ -72,6 +72,23 @@ public class CopybotEngineTest {
                 """.formatted(json(in), outAction, json(out), extra));
     }
 
+    @Test
+    public void theFoldersOfAPipelineAreTheOnesItsStepsReadAndWrite() throws IOException {
+        Path in = tempDir.resolve("card").resolve("DCIM"); // not there: the card is not inserted
+        Path out = tempDir.resolve("nas").resolve("photos");
+        Path pipeline = Files.writeString(tempDir.resolve("p.json"), """
+                {
+                  "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
+                  "actionSteps": [ { "action": "no.such.action", "actionConfig": {} } ],
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{date:yyyy}/{name}" } }
+                }
+                """.formatted(json(in), json(out)));
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null, null, null))) {
+            assertEquals(List.of(in.toAbsolutePath().normalize(), out.toAbsolutePath().normalize()),
+                    engine.pipelinePaths(pipeline), "the step that cannot be resolved is left out");
+        }
+    }
+
     /** A message read from the bundles, not the "%key" placeholder of a missing key. */
     private static void assertTranslated(Throwable e) {
         assertNotNull(e.getMessage());

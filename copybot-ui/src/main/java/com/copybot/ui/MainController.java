@@ -92,11 +92,15 @@ public class MainController {
         }
     }
 
-    /** The resources window: the disks, their capacity and their groups (taken from the next plan). */
+    /**
+     * The resources window: the disks, their capacity and their groups (taken from the next plan), with those of the
+     * pipeline open in the plan view.
+     */
     @FXML
     protected void onResourcesClick() {
         try {
             Views.Loaded<ResourcesController> resources = Views.load("resources-view.fxml");
+            resources.controller().open(shownPipeline); // its disks shown too, when a pipeline is open
             Stage dialog = new Stage();
             dialog.setTitle(ResourcesEngine.getString("resources.title"));
             dialog.setScene(new Scene(resources.root()));

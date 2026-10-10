@@ -5,6 +5,12 @@ import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.plugin.api.action.IAction;
+import com.copybot.plugin.api.action.IAnalyzeAction;
+import com.copybot.plugin.api.action.IInAction;
+import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.plugin.report.PluginReport;
@@ -27,9 +33,11 @@ import com.google.gson.JsonSyntaxException;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -118,6 +126,43 @@ public final class CopybotEngine implements AutoCloseable {
     public void updateResources(Map<String, Integer> resources, List<List<String>> resourceGroups) {
         CopybotConfig current = config;
         config = new CopybotConfig(current.pluginPath(), current.devPluginPaths(), resources, resourceGroups);
+    }
+
+    /**
+     * The folders the steps of a pipeline read or write (the folder of file.read, the fixed start of the pattern of
+     * file.write, those of the plugins), absolute, for the resources window: a disk of the pipeline can be set
+     * before it is there. A step that cannot be resolved (plugin missing, invalid configuration) is left out.
+     *
+     * @throws CopybotException pipeline.not-found / pipeline.not-json
+     */
+    public List<Path> pipelinePaths(Path pipelinePath) {
+        PipelineConfig pipeline = readPipeline(pipelinePath);
+        Set<Path> paths = new LinkedHashSet<>();
+        addTouchedPaths(paths, pipeline.inSteps(), IInAction.class);
+        addTouchedPaths(paths, pipeline.analyseSteps(), IAnalyzeAction.class);
+        addTouchedPaths(paths, pipeline.actionSteps(), IProcessAction.class);
+        if (pipeline.outStep() != null) {
+            addTouchedPaths(paths, List.of(pipeline.outStep()), IOutAction.class);
+        }
+        return List.copyOf(paths);
+    }
+
+    private static void addTouchedPaths(Set<Path> paths, List<PipelineStepConfig> steps,
+                                        Class<? extends IAction> kind) {
+        if (steps == null) {
+            return;
+        }
+        for (PipelineStepConfig step : steps) {
+            try {
+                for (Path path : PluginEngine.resolve(step, kind).getAction().touchedPaths(null)) {
+                    if (!path.toString().isEmpty()) {
+                        paths.add(path.toAbsolutePath().normalize());
+                    }
+                }
+            } catch (RuntimeException e) {
+                // this step tells nothing: the others still do
+            }
+        }
     }
 
     /** How the plugins of this JVM were loaded (spec plugins-view §1). */

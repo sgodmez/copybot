@@ -6,6 +6,7 @@ import com.copybot.engine.resources.DiskResolver;
 import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.DiskSettingsModel;
+import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.util.PopinUtil;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
@@ -20,6 +21,9 @@ import javafx.scene.control.Label;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableView;
+import javafx.scene.control.Tooltip;
+import javafx.scene.paint.Color;
+import javafx.scene.shape.Circle;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
 import javafx.util.StringConverter;
@@ -34,7 +38,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.IntStream;
 
 /**
- * The resources window (Tools menu): the disks of the machine, their capacity and their groups, saved to the
+ * The resources window (Edit menu): the disks of the machine, their capacity and their groups, saved to the
  * configuration file and taken by the engine from the next plan.
  */
 public class ResourcesController {
@@ -45,7 +49,7 @@ public class ResourcesController {
     @FXML
     private TableView<DiskSettingsModel.Row> disksTable;
     @FXML
-    private TableColumn<DiskSettingsModel.Row, String> volumesColumn;
+    private TableColumn<DiskSettingsModel.Row, DiskSettingsModel.Row> volumesColumn;
     @FXML
     private TableColumn<DiskSettingsModel.Row, String> diskColumn;
     @FXML
@@ -63,6 +67,8 @@ public class ResourcesController {
     @FXML
     private Button ungroupButton;
     @FXML
+    private Button forgetButton;
+    @FXML
     private Button saveButton;
 
     /** Null until the drives and the configuration are read, or when they cannot be. */
@@ -70,7 +76,8 @@ public class ResourcesController {
 
     @FXML
     public void initialize() {
-        volumesColumn.setCellValueFactory(c -> new ReadOnlyStringWrapper(volumesText(c.getValue())));
+        volumesColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
+        volumesColumn.setCellFactory(c -> new VolumesCell());
         diskColumn.setCellValueFactory(c -> new ReadOnlyStringWrapper(diskText(c.getValue().resource())));
         kindColumn.setCellValueFactory(c -> new ReadOnlyStringWrapper(
                 ResourcesEngine.getString("pref.disks.kind." + c.getValue().kind().name())));
@@ -80,15 +87,25 @@ public class ResourcesController {
                 c.getValue().groupedWith().stream().map(this::labelOf).toList())));
         disksTable.getSelectionModel().selectedItemProperty().addListener((o, old, row) -> updateButtons());
         updateButtons();
+    }
+
+    /**
+     * Reads the drives, the configuration and, when a pipeline is open (null: none), the folders it reads and
+     * writes: its disks are shown even when they are not there, and written only once they are set.
+     */
+    void open(Path pipeline) {
         Path configFile = CopybotMainUi.ENGINE.configFile();
         try {
-            // the drives (a share may not answer) and the configuration file: off the JavaFX thread
+            // the drives (a share may not answer) and the files: off the JavaFX thread
             CopybotMainUi.executor.submit(() -> {
                 DiskSettingsModel model;
                 String error = null;
                 try {
                     model = new DiskSettingsModel(DiskInventory.volumes(), ConfigFiles.readResources(configFile),
                             DiskResolver::resourceForConfigName);
+                    if (pipeline != null) {
+                        addPipeline(model, pipeline);
+                    }
                 } catch (Throwable t) {
                     model = null;
                     error = t.getMessage();
@@ -105,6 +122,20 @@ public class ResourcesController {
             });
         } catch (RejectedExecutionException e) {
             // the application is stopping
+        }
+    }
+
+    /** A pipeline that cannot be read now (moved, invalid) adds nothing: the disks of the machine are still shown. */
+    private static void addPipeline(DiskSettingsModel model, Path pipeline) {
+        List<Path> paths;
+        try {
+            paths = CopybotMainUi.ENGINE.pipelinePaths(pipeline);
+        } catch (RuntimeException e) {
+            return;
+        }
+        String name = RecentPipelines.displayName(pipeline);
+        for (Path path : paths) {
+            model.addPipelinePath(name, DiskInventory.use(path));
         }
     }
 
@@ -126,16 +157,16 @@ public class ResourcesController {
         addFolderButton.setDisable(disks == null);
         groupButton.setDisable(disks == null || row == null || disksTable.getItems().size() < 2);
         ungroupButton.setDisable(disks == null || row == null || row.groupedWith().isEmpty());
+        forgetButton.setDisable(disks == null || row == null || row.present());
         saveButton.setDisable(disks == null);
     }
 
-    /** The volumes of a disk; for a disk of the configuration that is not there now, its name. */
+    /** The volumes of a disk (its name for a disk of the configuration only), and whether it is there now. */
     private static String volumesText(DiskSettingsModel.Row row) {
-        if (row.volumes().isEmpty()) {
-            return row.resource().substring(ResourceSettings.DISK_PREFIX.length()) + "  "
-                    + ResourcesEngine.getString("pref.disks.absent");
-        }
-        return String.join("  ", row.volumes());
+        String volumes = row.volumes().isEmpty()
+                ? row.resource().substring(ResourceSettings.DISK_PREFIX.length())
+                : String.join("  ", row.volumes());
+        return row.present() ? volumes : volumes + "  " + ResourcesEngine.getString("pref.disks.absent");
     }
 
     /** The physical disk, or a word saying that the volume is its own resource (share, RAID...). */
@@ -152,6 +183,30 @@ public class ResourcesController {
                 .findFirst()
                 .map(r -> String.join(" ", r.volumes()))
                 .orElse(resource.substring(ResourceSettings.DISK_PREFIX.length()));
+    }
+
+    /** The volumes of a disk, after a blue dot when the open pipeline reads or writes on it (named in the tooltip). */
+    private static final class VolumesCell extends TableCell<DiskSettingsModel.Row, DiskSettingsModel.Row> {
+        private final Circle dot = new Circle(4, Color.web("#2563eb"));
+        private final Tooltip tip = new Tooltip();
+
+        @Override
+        protected void updateItem(DiskSettingsModel.Row row, boolean empty) {
+            super.updateItem(row, empty);
+            if (empty || row == null) {
+                setText(null);
+                setGraphic(null);
+                setTooltip(null);
+                return;
+            }
+            setText(volumesText(row));
+            boolean used = !row.usedBy().isEmpty();
+            setGraphic(used ? dot : null);
+            if (used) {
+                tip.setText(ResourcesEngine.getString("pref.disks.used-by", String.join(", ", row.usedBy())));
+            }
+            setTooltip(used ? tip : null);
+        }
     }
 
     /** The capacity of a disk, chosen in a list: its default one, or a number of actions at once. */
@@ -258,6 +313,15 @@ public class ResourcesController {
         DiskSettingsModel.Row row = disksTable.getSelectionModel().getSelectedItem();
         if (row != null && disks != null) {
             disks.ungroup(row.resource());
+            showDisks();
+        }
+    }
+
+    @FXML
+    protected void onForgetClick() {
+        DiskSettingsModel.Row row = disksTable.getSelectionModel().getSelectedItem();
+        if (row != null && disks != null && !row.present()) {
+            disks.forget(row.resource());
             showDisks();
         }
     }

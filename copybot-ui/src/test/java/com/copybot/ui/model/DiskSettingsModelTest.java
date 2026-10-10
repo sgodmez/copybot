@@ -1,6 +1,7 @@
 package com.copybot.ui.model;
 
 import com.copybot.config.ConfigFiles;
+import com.copybot.engine.resources.DiskInventory;
 import com.copybot.engine.resources.DiskInventory.Volume;
 import com.copybot.engine.resources.DiskKind;
 import org.junit.jupiter.api.Test;
@@ -154,6 +155,64 @@ public class DiskSettingsModelTest {
         assertEquals(List.of(), row(model, "disk:sdx").volumes());
         assertEquals(1, row(model, "disk:sdx").capacity());
         assertEquals(List.of(SSD), row(model, "disk:\\\\old\\share\\").groupedWith());
+    }
+
+    @Test
+    public void theDisksOfThePipelineAreShownAndLeaveNoTraceUnlessSet() {
+        DiskSettingsModel model = model(Map.of(), List.of());
+
+        model.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("F:\\", "disk:F:\\", DiskKind.UNKNOWN), false));
+        model.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("D:\\", SSD, DiskKind.SSD), true));
+        model.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("\\\\nas\\photos\\", NAS, DiskKind.UNKNOWN), false));
+
+        DiskSettingsModel.Row card = row(model, "disk:F:\\");
+        assertEquals(List.of("F:\\"), card.volumes());
+        assertFalse(card.present());
+        assertEquals(List.of("Photos SD"), card.usedBy());
+        assertEquals(List.of("Photos SD"), row(model, SSD).usedBy());
+        assertEquals(List.of("D:\\", "E:\\"), row(model, SSD).volumes(), "a folder on a disk shown adds no volume");
+        assertTrue(row(model, NAS).present(), "the share is a volume of the machine");
+        assertTrue(row(model, NVME).usedBy().isEmpty());
+        assertFalse(model.changed(), "shown only: nothing to write");
+
+        model.setCapacity("disk:F:\\", 1);
+        assertEquals(Map.of("disk:F:\\", 1), model.resources().capacities());
+    }
+
+    @Test
+    public void aShareReachedByItsNameOnlyIsThere() {
+        DiskSettingsModel model = model(Map.of(), List.of());
+
+        model.addPipelinePath("Backup", new DiskInventory.Use(
+                new Volume("\\\\nas\\videos\\", "disk:\\\\nas\\videos\\", DiskKind.UNKNOWN), true));
+
+        assertTrue(row(model, "disk:\\\\nas\\videos\\").present());
+    }
+
+    @Test
+    public void forgettingADiskThatIsNotThereRemovesItsSettings() {
+        DiskSettingsModel model = model(Map.of("disk:sdx", 1, "disk:\\\\old\\share\\", 2),
+                List.of(List.of("disk:\\\\old\\share\\", "disk:D:\\")));
+        assertFalse(row(model, "disk:sdx").present());
+
+        model.forget("disk:sdx");
+        model.forget("disk:\\\\old\\share\\");
+
+        assertEquals(Map.of("disk:D:\\", 2), model.resources().capacities(), "the disk of the group keeps its capacity");
+        assertEquals(List.of(), model.resources().groups());
+        assertTrue(model.rows().stream().noneMatch(r -> r.resource().equals("disk:sdx")));
+        assertTrue(model.rows().stream().noneMatch(r -> r.resource().equals("disk:\\\\old\\share\\")));
+    }
+
+    @Test
+    public void aForgottenDiskOfThePipelineStaysShown() {
+        DiskSettingsModel model = model(Map.of("disk:F:\\", 1), List.of());
+        model.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("F:\\", "disk:F:\\", DiskKind.UNKNOWN), false));
+
+        model.forget("disk:F:\\");
+
+        assertEquals(Map.of(), model.resources().capacities());
+        assertTrue(row(model, "disk:F:\\").defaultCapacity());
     }
 
     @Test

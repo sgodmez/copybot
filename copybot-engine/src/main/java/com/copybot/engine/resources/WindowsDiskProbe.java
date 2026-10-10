@@ -9,6 +9,7 @@ import java.lang.foreign.SymbolLookup;
 import java.lang.invoke.MethodHandle;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -37,6 +38,8 @@ final class WindowsDiskProbe implements DiskProbe {
     private static final int EXTENT_SIZE = 24;     // DISK_EXTENT: DiskNumber + padding, StartingOffset, ExtentLength
     private static final int MAX_EXTENTS = 32;
     private static final int PATH_CHARS = 1024;
+    private static final int NO_ERROR = 0;
+    private static final int ERROR_CONNECTION_UNAVAIL = 1201;
     private static final long CACHE_MILLIS = 30_000; // a removable disk may come back under another number
 
     private final MethodHandle getVolumePathName;
@@ -44,6 +47,7 @@ final class WindowsDiskProbe implements DiskProbe {
     private final MethodHandle createFile;
     private final MethodHandle deviceIoControl;
     private final MethodHandle closeHandle;
+    private final MethodHandle getConnection;
     private final Map<String, Cached> byVolume = new ConcurrentHashMap<>();
 
     private record Cached(DiskIdentity identity, long at) {
@@ -64,6 +68,44 @@ final class WindowsDiskProbe implements DiskProbe {
                         ADDRESS));
         closeHandle = linker.downcallHandle(kernel32.findOrThrow("CloseHandle"),
                 FunctionDescriptor.of(JAVA_INT, ADDRESS));
+        SymbolLookup mpr = SymbolLookup.libraryLookup("mpr", Arena.global());
+        getConnection = linker.downcallHandle(mpr.findOrThrow("WNetGetConnectionW"),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS));
+    }
+
+    @Override
+    public String unreachableId(Path root) {
+        try (Arena arena = Arena.ofConfined()) {
+            return shareId(arena, root.toString());
+        } catch (Throwable t) {
+            return share(root.toString());
+        }
+    }
+
+    /**
+     * A drive letter mapped to a share ("Z:\") and the share itself ("\\NAS\Photos\") are one resource: the share,
+     * written in lower case (Windows does not tell the case apart). A subst drive stays its letter.
+     */
+    private String shareId(Arena arena, String volume) throws Throwable {
+        if (volume.matches("[A-Za-z]:\\\\?")) {
+            MemorySegment remote = arena.allocate((long) PATH_CHARS * 2);
+            MemorySegment length = arena.allocate(JAVA_INT);
+            length.set(JAVA_INT, 0, PATH_CHARS);
+            int status = (int) getConnection.invokeExact(wide(arena, volume.substring(0, 2)), remote, length);
+            if (status == NO_ERROR || status == ERROR_CONNECTION_UNAVAIL) { // a mapping remembered while offline too
+                return share(remote.getString(0, StandardCharsets.UTF_16LE));
+            }
+        }
+        return share(volume);
+    }
+
+    /** "\\nas\photos\" for a share, whatever its case or trailing backslash; any other volume as it is. */
+    static String share(String volume) {
+        if (!volume.startsWith("\\\\")) {
+            return volume;
+        }
+        String lower = volume.toLowerCase(Locale.ROOT);
+        return lower.endsWith("\\") ? lower : lower + "\\";
     }
 
     @Override
@@ -108,7 +150,7 @@ final class WindowsDiskProbe implements DiskProbe {
         MemorySegment out = arena.allocate((long) PATH_CHARS * 2);
         int ok = (int) getVolumeNameForVolumeMountPoint.invokeExact(wide(arena, volume), out, PATH_CHARS);
         if (ok == 0) {
-            return ownVolume; // network share, subst drive
+            return new DiskIdentity(shareId(arena, volume), DiskKind.UNKNOWN); // network share, subst drive
         }
         String guidPath = out.getString(0, StandardCharsets.UTF_16LE); // "\\?\Volume{...}\"
         Integer disk = singleDisk(arena, guidPath.substring(0, guidPath.length() - 1));

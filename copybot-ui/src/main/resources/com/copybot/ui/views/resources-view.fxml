@@ -9,7 +9,7 @@
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.VBox?>
 
-<VBox prefHeight="420.0" prefWidth="760.0" spacing="8.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.ResourcesController">
+<VBox prefHeight="420.0" prefWidth="780.0" spacing="8.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.ResourcesController">
    <padding>
       <Insets bottom="15.0" left="15.0" right="15.0" top="15.0" />
    </padding>
@@ -18,7 +18,7 @@
       <Label minHeight="-Infinity" style="-fx-text-fill: #666666;" text="%pref.disks.hint" wrapText="true" />
       <TableView fx:id="disksTable" VBox.vgrow="ALWAYS">
          <columns>
-            <TableColumn fx:id="volumesColumn" prefWidth="190.0" text="%pref.disks.volumes" />
+            <TableColumn fx:id="volumesColumn" prefWidth="210.0" text="%pref.disks.volumes" />
             <TableColumn fx:id="diskColumn" prefWidth="150.0" text="%pref.disks.disk" />
             <TableColumn fx:id="kindColumn" prefWidth="80.0" text="%pref.disks.kind" />
             <TableColumn fx:id="capacityColumn" prefWidth="130.0" text="%pref.disks.capacity" />
@@ -33,6 +33,7 @@
             <Button fx:id="addFolderButton" onAction="#onAddFolderClick" text="%pref.disks.add-folder" />
             <Button fx:id="groupButton" onAction="#onGroupClick" text="%pref.disks.group-with" />
             <Button fx:id="ungroupButton" onAction="#onUngroupClick" text="%pref.disks.ungroup" />
+            <Button fx:id="forgetButton" onAction="#onForgetClick" text="%pref.disks.forget" />
             <Region HBox.hgrow="ALWAYS" />
             <Button cancelButton="true" onAction="#onCancelClick" text="%pref.cancel" />
             <Button fx:id="saveButton" defaultButton="true" onAction="#onSaveClick" text="%resources.save" />

@@ -223,10 +223,14 @@ volumes in a `resourceGroups` entry to make them share one budget. The default
 capacity is 8 for an NVMe disk, 4 for an SSD, and 2 for a hard disk or a disk
 of unknown kind. A `disk:*` entry replaces these defaults.
 
-You do not have to write these by hand: **Tools › Resources** lists the
+You do not have to write these by hand: **Edit › Resources** lists the
 volumes of the machine with their physical disk, kind and capacity. There you
 can set the capacity of a disk, add a share, and group it with a disk. The
-changes apply from the next plan, without a restart.
+changes apply from the next plan, without a restart. When a pipeline is open,
+its disks are marked with a blue dot and listed even when they are not there
+(a card not inserted, a NAS switched off), so you can set them beforehand;
+they are written only once you set them. A drive letter mapped to a share and
+the share itself (`Z:\` and `\\nas\photos\`) are one resource.
 
 **Development:** run `com.copybot.ui.CopybotMainUiDev` with the repository
 root as working directory. It uses `copybot-ui/src/dev/config.json`, which

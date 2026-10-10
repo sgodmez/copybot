@@ -45,6 +45,23 @@ public final class DiskInventory {
         return paths.stream().map(p -> of(Path.of(p))).toList();
     }
 
+    /** A folder a pipeline reads or writes: the volume it lies on, named by its root, and whether it is there now. */
+    public record Use(Volume volume, boolean present) {
+    }
+
+    /**
+     * The volume of a folder of a pipeline, there or not (a share switched off, a card not inserted): named by its
+     * root ("F:\", "\\nas\photos\"), or by the folder itself where every path has the same root ("/mnt/nas").
+     */
+    public static Use use(Path path) {
+        Path absolute = path.toAbsolutePath().normalize();
+        Path root = absolute.getRoot();
+        boolean present = root != null && Files.exists(root);
+        String resource = DiskResolver.diskResource(absolute);
+        String name = root != null && root.toString().length() > 1 ? root.toString() : absolute.toString();
+        return new Use(new Volume(name, resource, DiskResolver.kindOf(resource)), present);
+    }
+
     /** A folder chosen by the user (a share that is no drive): it stands for the volume holding it. */
     public static Volume of(Path path) {
         String resource = DiskResolver.diskResource(path);

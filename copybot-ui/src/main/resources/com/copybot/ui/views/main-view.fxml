@@ -17,10 +17,6 @@
             <Menu mnemonicParsing="false" text="%menu.edit">
                <items>
                   <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
-               </items>
-            </Menu>
-            <Menu mnemonicParsing="false" text="%menu.tools">
-               <items>
                   <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
                   <MenuItem mnemonicParsing="false" onAction="#onResourcesClick" text="%menu.tools.resources" />
                </items>

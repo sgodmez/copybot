@@ -35,7 +35,14 @@ public final class DiskResolver {
             }
         }
         Path root = absolute.getRoot();
-        return ResourceSettings.DISK_PREFIX + (root != null ? root : absolute);
+        if (root == null) {
+            return ResourceSettings.DISK_PREFIX + absolute;
+        }
+        try {
+            return ResourceSettings.DISK_PREFIX + probe().unreachableId(root); // "Z:\" mapped: its share, offline too
+        } catch (Exception | LinkageError e) {
+            return ResourceSettings.DISK_PREFIX + root;
+        }
     }
 
     /** The kind of a disk named by {@link #diskResource}; UNKNOWN for a name it has not given. */
@@ -46,7 +53,8 @@ public final class DiskResolver {
     /**
      * The resource a disk name of the configuration stands for: a volume or folder written as a path ("disk:D:\",
      * "disk:D:", "disk:/home") becomes the disk that holds it, so that the user can name disks by what they see;
-     * any other name ("disk:sda", "disk:*", "cpu") or a path that does not exist (yet) is kept as written.
+     * a path that does not exist now is named by its volume ("disk:F:\", a share in lower case), the way it will be
+     * once there; any other name ("disk:sda", "disk:*", "cpu") is kept as written.
      */
     public static String resourceForConfigName(String name) {
         if (name == null || !name.startsWith(ResourceSettings.DISK_PREFIX) || name.endsWith("*")) {
@@ -58,10 +66,7 @@ public final class DiskResolver {
         }
         try {
             Path path = Path.of(location);
-            if (!path.isAbsolute() || existingAncestor(path) == null) {
-                return name;
-            }
-            return diskResource(path);
+            return path.isAbsolute() ? diskResource(path) : name;
         } catch (InvalidPathException e) {
             return name;
         }
@@ -93,7 +98,8 @@ public final class DiskResolver {
         String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
         if (os.startsWith("windows")) {
             // the label of a volume is not stable: its root is ("D:\", "\\server\share\")
-            DiskProbe byRoot = existing -> new DiskIdentity(String.valueOf(existing.getRoot()), DiskKind.UNKNOWN);
+            DiskProbe byRoot = existing -> new DiskIdentity(WindowsDiskProbe.share(String.valueOf(existing.getRoot())),
+                    DiskKind.UNKNOWN);
             try {
                 return new FallbackProbe(new WindowsDiskProbe(), byRoot);
             } catch (Exception | LinkageError e) {
@@ -113,6 +119,15 @@ public final class DiskResolver {
                 return primary.identify(existing);
             } catch (Exception | LinkageError e) {
                 return fallback.identify(existing);
+            }
+        }
+
+        @Override
+        public String unreachableId(Path root) {
+            try {
+                return primary.unreachableId(root);
+            } catch (Exception | LinkageError e) {
+                return fallback.unreachableId(root);
             }
         }
     }
