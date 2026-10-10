@@ -78,7 +78,8 @@ libraries.
   disk: an NVMe or SSD disk takes more actions at once than a hard disk.
   While a plan is prepared or run, the plan view shows the CPU load (the
   whole machine, and the part of Copybot) and each resource the pipeline
-  uses: how many actions hold it, and how many wait for it.
+  uses: how many actions hold it, and how many wait for it. The gauges sit on
+  the line of the progress bar, or in a panel on the right (a preference).
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
@@ -222,7 +223,7 @@ volumes in a `resourceGroups` entry to make them share one budget. The default
 capacity is 8 for an NVMe disk, 4 for an SSD, and 2 for a hard disk or a disk
 of unknown kind. A `disk:*` entry replaces these defaults.
 
-You do not have to write these by hand: **Preferences › Disks** lists the
+You do not have to write these by hand: **Tools › Resources** lists the
 volumes of the machine with their physical disk, kind and capacity. There you
 can set the capacity of a disk, add a share, and group it with a disk. The
 changes apply from the next plan, without a restart.

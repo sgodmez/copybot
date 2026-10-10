@@ -8,9 +8,7 @@ import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 /**
  * The gauges of the resources while a plan is prepared or run: the CPU always (the load of the machine and of
@@ -21,9 +19,10 @@ public final class ResourceGauges {
 
     /**
      * One gauge: what it measures, how full it is (0 to 1, negative when unknown), the part of it that is Copybot's
-     * own (the CPU only, negative for the others), and in words.
+     * own (the CPU only, negative for the others), and in words; the short forms fit the line of the progress bar.
      */
-    public record Gauge(String label, double fraction, double part, String text, boolean saturated) {
+    public record Gauge(String label, String shortLabel, double fraction, double part, String text, String shortText,
+                        boolean saturated) {
     }
 
     private static final String CPU = ResourceSettings.CPU;
@@ -48,8 +47,8 @@ public final class ResourceGauges {
                 systemLoad, processLoad));
         for (ResourceSnapshot resource : sorted) {
             if (!resource.name().equals(CPU)) {
-                gauges.add(new Gauge(label(resource.name(), volumes), fraction(resource), -1, usedText(resource),
-                        saturated(resource)));
+                gauges.add(new Gauge(label(resource.name(), volumes), shortLabel(resource.name(), volumes),
+                        fraction(resource), -1, usedText(resource), shortUsedText(resource), saturated(resource)));
             }
         }
         return gauges;
@@ -65,8 +64,26 @@ public final class ResourceGauges {
         }
         // the load of Copybot is a part of the load of the machine: never drawn longer than it
         double part = systemLoad < 0 || processLoad < 0 ? -1 : Math.min(processLoad, systemLoad);
-        return new Gauge(ResourcesEngine.getString("plan.resources.cpu"), systemLoad, part,
-                text, held != null && saturated(held));
+        String shortText = systemLoad < 0 ? "—" : ResourcesEngine.getString("plan.resources.cpu.short", percent(systemLoad));
+        String cpu = ResourcesEngine.getString("plan.resources.cpu");
+        return new Gauge(cpu, cpu, systemLoad, part, text, shortText, held != null && saturated(held));
+    }
+
+    /** The name on the line of the progress bar: the drives of a disk alone, the others as in full. */
+    private static String shortLabel(String name, List<DiskInventory.Volume> volumes) {
+        return name.startsWith(DISK) ? drives(name, volumes) : label(name, volumes);
+    }
+
+    private static String drives(String disk, List<DiskInventory.Volume> volumes) {
+        List<String> drives = volumes.stream().filter(v -> v.resource().equals(disk)).map(DiskInventory.Volume::path)
+                .toList();
+        return drives.isEmpty() ? disk.substring(DISK.length()) : String.join(" ", drives);
+    }
+
+    /** "4/4", and "· 37" for the actions waiting. */
+    private static String shortUsedText(ResourceSnapshot resource) {
+        String text = resource.used() + "/" + resource.capacity();
+        return resource.waiting() > 0 ? text + " · " + resource.waiting() : text;
     }
 
     private static String label(String name, List<DiskInventory.Volume> volumes) {
@@ -81,16 +98,9 @@ public final class ResourceGauges {
             }
         }
         if (name.startsWith(DISK)) {
-            Map<String, DiskKind> kinds = new LinkedHashMap<>();
-            List<String> drives = new ArrayList<>();
-            for (DiskInventory.Volume volume : volumes) {
-                if (volume.resource().equals(name)) {
-                    drives.add(volume.path());
-                    kinds.put(name, volume.kind());
-                }
-            }
-            String drivesText = drives.isEmpty() ? name.substring(DISK.length()) : String.join(" ", drives);
-            DiskKind kind = kinds.getOrDefault(name, DiskKind.UNKNOWN);
+            String drivesText = drives(name, volumes);
+            DiskKind kind = volumes.stream().filter(v -> v.resource().equals(name)).map(DiskInventory.Volume::kind)
+                    .findFirst().orElse(DiskKind.UNKNOWN);
             return kind == DiskKind.UNKNOWN
                     ? ResourcesEngine.getString("plan.resources.disk", drivesText)
                     : ResourcesEngine.getString("plan.resources.disk.kind", drivesText,

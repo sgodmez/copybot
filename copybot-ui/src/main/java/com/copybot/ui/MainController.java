@@ -92,6 +92,22 @@ public class MainController {
         }
     }
 
+    /** The resources window: the disks, their capacity and their groups (taken from the next plan). */
+    @FXML
+    protected void onResourcesClick() {
+        try {
+            Views.Loaded<ResourcesController> resources = Views.load("resources-view.fxml");
+            Stage dialog = new Stage();
+            dialog.setTitle(ResourcesEngine.getString("resources.title"));
+            dialog.setScene(new Scene(resources.root()));
+            dialog.initModality(Modality.APPLICATION_MODAL);
+            dialog.initOwner(CopybotMainUi.STAGE);
+            dialog.showAndWait();
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+        }
+    }
+
     /** Opens the plugins window, or refreshes it when open (the folder may have changed in the preferences). */
     @FXML
     protected void onPluginsClick() {

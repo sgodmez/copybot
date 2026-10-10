@@ -30,6 +30,40 @@ public final class UiPreferences {
         Real.NODE.put(LANGUAGE_KEY, locale.toLanguageTag());
     }
 
+    /** Where the plan view shows the resources while a plan runs. */
+    public enum ResourcesLayout {
+        /** Compact gauges on the line of the progress bar (the default). */
+        PROGRESS_LINE,
+        /** A panel on the right of the table, always there so that nothing moves. */
+        SIDE_PANEL
+    }
+
+    private static final String RESOURCES_LAYOUT_KEY = "resourcesLayout";
+    /** Read every second by the plan view: kept here rather than read from the OS store each time. */
+    private static volatile ResourcesLayout resourcesLayout;
+
+    public static ResourcesLayout resourcesLayout() {
+        ResourcesLayout layout = resourcesLayout;
+        if (layout == null) {
+            layout = resourcesLayout(Real.NODE);
+            resourcesLayout = layout;
+        }
+        return layout;
+    }
+
+    public static void saveResourcesLayout(ResourcesLayout layout) {
+        Real.NODE.put(RESOURCES_LAYOUT_KEY, layout.name());
+        resourcesLayout = layout;
+    }
+
+    static ResourcesLayout resourcesLayout(Preferences node) {
+        try {
+            return ResourcesLayout.valueOf(node.get(RESOURCES_LAYOUT_KEY, ResourcesLayout.PROGRESS_LINE.name()));
+        } catch (IllegalArgumentException e) {
+            return ResourcesLayout.PROGRESS_LINE; // a value of another version
+        }
+    }
+
     /** The recent pipelines and their last run (spec desktop-ui section 6); empty when none or unreadable. */
     public static RecentPipelines recents() {
         return recents(Real.NODE);

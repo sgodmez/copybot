@@ -78,7 +78,9 @@
             <ComboBox fx:id="filterCombo" />
          </children>
       </HBox>
-      <TableView fx:id="itemsTable" VBox.vgrow="ALWAYS">
+      <HBox spacing="8.0" VBox.vgrow="ALWAYS">
+         <children>
+      <TableView fx:id="itemsTable" HBox.hgrow="ALWAYS">
          <columns>
             <!-- date and size have a fixed width, the name is capped: the room left goes to the target and the status -->
             <TableColumn fx:id="nameColumn" maxWidth="380.0" minWidth="120.0" prefWidth="220.0" text="%table.name" />
@@ -91,13 +93,18 @@
             <TableView fx:constant="CONSTRAINED_RESIZE_POLICY" />
          </columnResizePolicy>
       </TableView>
+            <!-- the resources in a panel (a preference): always there, so that nothing moves when a plan starts -->
+            <VBox fx:id="resourcesPanel" managed="false" minWidth="210.0" prefWidth="210.0" spacing="10.0" visible="false" style="-fx-background-color: white; -fx-border-color: #d0d7de; -fx-border-radius: 8; -fx-background-radius: 8; -fx-padding: 10 12 10 12;" />
+         </children>
+      </HBox>
       <HBox fx:id="progressBox" alignment="CENTER_LEFT" managed="false" spacing="10.0" visible="false">
          <children>
             <ProgressBar fx:id="progressBar" maxWidth="Infinity" progress="0.0" HBox.hgrow="ALWAYS" />
             <Label fx:id="progressLabel" />
+            <!-- the resources on the line of the progress bar (the default): one line, nothing below moves -->
+            <HBox fx:id="inlineGauges" alignment="CENTER_LEFT" managed="false" spacing="14.0" visible="false" />
          </children>
       </HBox>
-      <FlowPane fx:id="resourcesFlow" alignment="CENTER_LEFT" hgap="18.0" managed="false" vgap="6.0" visible="false" />
 
       <HBox alignment="CENTER_LEFT" spacing="10.0">
          <children>

@@ -71,6 +71,20 @@ public class ResourceGaugesTest {
     }
 
     @Test
+    public void theShortFormsFitTheLineOfTheProgressBar() {
+        List<ResourceGauges.Gauge> gauges = ResourceGauges.of(List.of(
+                resource("disk:PhysicalDrive0", 4, 4, 37), resource("step:2", 3, 2, 0)), 0.354, 0.1, MACHINE);
+
+        assertEquals("CPU", gauges.get(0).shortLabel());
+        assertEquals(ResourcesEngine.getString("plan.resources.cpu.short", 35), gauges.get(0).shortText());
+        assertEquals("D:\\ E:\\", gauges.get(1).shortLabel(), "a disk by its drives alone");
+        assertEquals("4/4 \u00b7 37", gauges.get(1).shortText());
+        assertEquals(ResourcesEngine.getString("plan.resources.step", 3), gauges.get(2).shortLabel());
+        assertEquals("2/3", gauges.get(2).shortText());
+        assertEquals("\u2014", ResourceGauges.of(List.of(), -1, -1, MACHINE).getFirst().shortText());
+    }
+
+    @Test
     public void cpuActionsAreAddedWhenAStepHoldsTheCpu() {
         ResourceGauges.Gauge cpu = ResourceGauges.of(List.of(resource("cpu", 8, 3, 0)), 0.5, 0.4, MACHINE)
                 .getFirst();

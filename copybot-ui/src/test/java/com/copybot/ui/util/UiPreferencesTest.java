@@ -74,4 +74,16 @@ public class UiPreferencesTest {
                     "the most recent are kept, in order");
         }
     }
+
+    @Test
+    public void theResourcesAreOnTheProgressLineUnlessChosenOtherwise() {
+        Preferences node = new MemoryPreferences();
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(node));
+
+        node.put("resourcesLayout", "SIDE_PANEL");
+        assertEquals(UiPreferences.ResourcesLayout.SIDE_PANEL, UiPreferences.resourcesLayout(node));
+
+        node.put("resourcesLayout", "FLOATING"); // written by another version
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(node));
+    }
 }

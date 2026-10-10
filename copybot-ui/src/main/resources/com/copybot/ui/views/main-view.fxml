@@ -22,6 +22,7 @@
             <Menu mnemonicParsing="false" text="%menu.tools">
                <items>
                   <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
+                  <MenuItem mnemonicParsing="false" onAction="#onResourcesClick" text="%menu.tools.resources" />
                </items>
             </Menu>
             <Menu mnemonicParsing="false" text="%menu.help">
