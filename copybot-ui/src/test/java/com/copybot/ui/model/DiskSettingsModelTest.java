@@ -216,6 +216,39 @@ public class DiskSettingsModelTest {
     }
 
     @Test
+    public void aRefreshShowsTheCardInsertedAndKeepsWhatIsNotSavedYet() {
+        boolean[] inserted = {false}; // like DiskResolver: F: is its own name until the card is in
+        UnaryOperator<String> resourceFor = name -> name.equals("disk:F:\\") && inserted[0]
+                ? "disk:PhysicalDrive2" : RESOURCE_FOR.apply(name);
+        DiskSettingsModel model = new DiskSettingsModel(MACHINE,
+                new ConfigFiles.Resources(Map.of("disk:C:\\", 6), List.of()), resourceFor);
+        model.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("F:\\", "disk:F:\\", DiskKind.UNKNOWN), false));
+        model.setCapacity("disk:F:\\", 1);
+
+        inserted[0] = true;
+        List<Volume> withCard = new java.util.ArrayList<>(MACHINE);
+        withCard.add(new Volume("F:\\", "disk:PhysicalDrive2", DiskKind.SSD)); // the card, on its own disk now
+        DiskSettingsModel refreshed = model.refreshed(withCard);
+        refreshed.addPipelinePath("Photos SD", new DiskInventory.Use(new Volume("F:\\", "disk:PhysicalDrive2", DiskKind.SSD), true));
+
+        DiskSettingsModel.Row card = row(refreshed, "disk:PhysicalDrive2");
+        assertTrue(card.present());
+        assertEquals(DiskKind.SSD, card.kind());
+        assertEquals(1, card.capacity(), "the capacity set while it was absent applies to it");
+        assertEquals(List.of("Photos SD"), card.usedBy());
+        assertTrue(refreshed.rows().stream().noneMatch(r -> r.resource().equals("disk:F:\\")));
+        assertTrue(refreshed.changed(), "still to save");
+        assertEquals(Map.of("disk:C:\\", 6, "disk:F:\\", 1), refreshed.resources().capacities());
+    }
+
+    @Test
+    public void aRefreshWithNothingSetHasNothingToSave() {
+        DiskSettingsModel model = model(Map.of("disk:C:\\", 6), List.of());
+
+        assertFalse(model.refreshed(MACHINE).changed());
+    }
+
+    @Test
     public void aFolderChosenByTheUserIsAddedToItsDisk() {
         DiskSettingsModel model = model(Map.of(), List.of());
 

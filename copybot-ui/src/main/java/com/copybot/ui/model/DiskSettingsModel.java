@@ -52,11 +52,17 @@ public final class DiskSettingsModel {
      */
     public DiskSettingsModel(List<DiskInventory.Volume> volumes, ConfigFiles.Resources resources,
                              UnaryOperator<String> resourceFor) {
+        this(volumes, resources, resources, resourceFor);
+    }
+
+    /** @param saved what the configuration file holds, to tell whether there is something to write */
+    private DiskSettingsModel(List<DiskInventory.Volume> volumes, ConfigFiles.Resources saved,
+                              ConfigFiles.Resources current, UnaryOperator<String> resourceFor) {
         this.resourceFor = resourceFor;
-        this.initialCapacities = new LinkedHashMap<>(resources.capacities());
-        this.initialGroups = copy(resources.groups());
-        this.capacities = new LinkedHashMap<>(resources.capacities());
-        this.groups = copy(resources.groups());
+        this.initialCapacities = new LinkedHashMap<>(saved.capacities());
+        this.initialGroups = copy(saved.groups());
+        this.capacities = new LinkedHashMap<>(current.capacities());
+        this.groups = copy(current.groups());
         volumes.forEach(this::addVolume);
         // a disk named in the configuration and not there now (unplugged, share not connected) stays shown
         List<String> named = new ArrayList<>(capacities.keySet());
@@ -70,6 +76,16 @@ public final class DiskSettingsModel {
                 }
             }
         }
+    }
+
+    /**
+     * The same settings on the drives as they are now (a card inserted, a share switched on): what is set and not
+     * saved yet is kept. The folders of the pipeline and those chosen by the user are added again by the caller,
+     * since whether they are there has changed too.
+     */
+    public DiskSettingsModel refreshed(List<DiskInventory.Volume> volumes) {
+        return new DiskSettingsModel(volumes, new ConfigFiles.Resources(initialCapacities, initialGroups),
+                resources(), resourceFor);
     }
 
     /** Adds a volume, or a folder chosen by the user (a share that is no drive). */

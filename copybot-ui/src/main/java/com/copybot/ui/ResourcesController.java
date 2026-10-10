@@ -70,9 +70,15 @@ public class ResourcesController {
     private Button forgetButton;
     @FXML
     private Button saveButton;
+    @FXML
+    private Button refreshButton;
 
     /** Null until the drives and the configuration are read, or when they cannot be. */
     private DiskSettingsModel disks;
+    /** The pipeline open in the plan view, null when none: its disks are shown, there or not. */
+    private Path pipeline;
+    /** The folders added by hand (shares that no drive shows): read again on a refresh. */
+    private final List<Path> chosenFolders = new ArrayList<>();
 
     @FXML
     public void initialize() {
@@ -94,20 +100,43 @@ public class ResourcesController {
      * writes: its disks are shown even when they are not there, and written only once they are set.
      */
     void open(Path pipeline) {
+        this.pipeline = pipeline;
+        load(null);
+    }
+
+    /**
+     * Reads the drives again (a card inserted, a share switched on): what is set and not saved yet is kept, the
+     * folders added by hand too.
+     */
+    @FXML
+    protected void onRefreshClick() {
+        if (disks != null) {
+            load(disks);
+        }
+    }
+
+    /** From the configuration file when nothing is shown yet, else from what is shown (previous). */
+    private void load(DiskSettingsModel previous) {
         Path configFile = CopybotMainUi.ENGINE.configFile();
+        List<Path> chosen = List.copyOf(chosenFolders);
+        refreshButton.setDisable(true);
         try {
             // the drives (a share may not answer) and the files: off the JavaFX thread
             CopybotMainUi.executor.submit(() -> {
                 DiskSettingsModel model;
                 String error = null;
                 try {
-                    model = new DiskSettingsModel(DiskInventory.volumes(), ConfigFiles.readResources(configFile),
-                            DiskResolver::resourceForConfigName);
+                    List<DiskInventory.Volume> volumes = new ArrayList<>(DiskInventory.volumes());
+                    chosen.forEach(folder -> volumes.add(DiskInventory.of(folder)));
+                    model = previous == null
+                            ? new DiskSettingsModel(volumes, ConfigFiles.readResources(configFile),
+                                    DiskResolver::resourceForConfigName)
+                            : previous.refreshed(volumes);
                     if (pipeline != null) {
                         addPipeline(model, pipeline);
                     }
                 } catch (Throwable t) {
-                    model = null;
+                    model = previous; // a refresh that fails leaves the rows as they were
                     error = t.getMessage();
                 }
                 DiskSettingsModel read = model;
@@ -116,7 +145,11 @@ public class ResourcesController {
                     disks = read;
                     if (read == null) {
                         disksPlaceholder.setText(ResourcesEngine.getString("pref.disks.unreadable", failure));
+                    } else if (failure != null) {
+                        PopinUtil.showError(new IllegalStateException(
+                                ResourcesEngine.getString("pref.disks.unreadable", failure)));
                     }
+                    refreshButton.setDisable(false);
                     showDisks();
                 });
             });
@@ -265,6 +298,7 @@ public class ResourcesController {
         if (dir == null || disks == null) {
             return;
         }
+        chosenFolders.add(dir.toPath());
         try {
             CopybotMainUi.executor.submit(() -> {
                 DiskInventory.Volume volume = DiskInventory.of(dir.toPath()); // may be a share: off the thread

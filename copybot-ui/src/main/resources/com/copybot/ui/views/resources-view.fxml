@@ -5,6 +5,7 @@
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.TableColumn?>
 <?import javafx.scene.control.TableView?>
+<?import javafx.scene.control.Tooltip?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.VBox?>
@@ -30,6 +31,11 @@
       </TableView>
       <HBox alignment="CENTER_LEFT" spacing="6.0">
          <children>
+            <Button fx:id="refreshButton" disable="true" onAction="#onRefreshClick" text="&#x21BB;">
+               <tooltip>
+                  <Tooltip text="%pref.disks.refresh" />
+               </tooltip>
+            </Button>
             <Button fx:id="addFolderButton" onAction="#onAddFolderClick" text="%pref.disks.add-folder" />
             <Button fx:id="groupButton" onAction="#onGroupClick" text="%pref.disks.group-with" />
             <Button fx:id="ungroupButton" onAction="#onUngroupClick" text="%pref.disks.ungroup" />
