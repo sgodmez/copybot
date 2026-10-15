@@ -1,6 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="CopybotMainUiDev" type="Application" factoryName="Application">
-    <option name="MAIN_CLASS_NAME" value="com.copybot.ui.CopybotMainUiDev" />
+    <option name="MAIN_CLASS_NAME" value="com.copybot.ui.CopybotMainUi" />
+    <option name="PROGRAM_PARAMETERS" value="--config-file=./copybot-ui/src/dev/config.json" />
     <module name="copybot-ui" />
     <option name="VM_PARAMETERS" value="--enable-native-access=com.copybot.engine,javafx.graphics" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />

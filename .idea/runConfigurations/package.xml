@@ -35,7 +35,9 @@
           </option>
           <option name="pomFileName" />
           <option name="profilesMap">
-            <map />
+            <map>
+              <entry key="dist" value="true" />
+            </map>
           </option>
           <option name="projectsCmdOptionValues">
             <list />

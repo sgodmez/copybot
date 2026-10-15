@@ -14,20 +14,8 @@
 
     <dependencies>
         <dependency>
-            <groupId>org.openjfx</groupId>
-            <artifactId>javafx-controls</artifactId>
-            <optional>true</optional>
-        </dependency>
-        <dependency>
-            <groupId>org.openjfx</groupId>
-            <artifactId>javafx-fxml</artifactId>
-            <optional>true</optional>
-        </dependency>
-
-        <dependency>
             <groupId>info.picocli</groupId>
             <artifactId>picocli</artifactId>
-            <version>4.7.7</version>
         </dependency>
         <dependency>
             <groupId>com.google.code.gson</groupId>

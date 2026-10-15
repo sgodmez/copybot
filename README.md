@@ -176,14 +176,21 @@ answered and from which jar.
 
 ## Quick start
 
-You need **JDK 25** and Maven.
+You need **JDK 25** and Maven (3.8.8 or later).
 
 ```sh
-mvn clean package
+mvn verify
 ```
 
-The build runs the test suite (about 775 tests across the engine, the UI and
-the plugin). It produces:
+builds the modules and runs the test suite (about 775 tests across the
+engine, the UI and the plugin). To build the desktop application as well, add
+the `dist` profile:
+
+```sh
+mvn -Pdist package
+```
+
+It produces:
 
 - `copybot-ui/target/dist/Copybot/` — the desktop application (`Copybot.exe` on Windows), as a jpackage app image;
 - `copybot-ui/target/copybot/` — the same as a jlink runtime image, also zipped as `copybot.zip`;
@@ -236,8 +243,10 @@ its disks are marked with a blue dot and listed even when they are not there
 they are written only once you set them. A drive letter mapped to a share and
 the share itself (`Z:\` and `\\nas\photos\`) are one resource.
 
-**Development:** run `com.copybot.ui.CopybotMainUiDev` with the repository
-root as working directory. It uses `copybot-ui/src/dev/config.json`, which
+**Development:** run `com.copybot.ui.CopybotMainUi` with the argument
+`--config-file=./copybot-ui/src/dev/config.json` and the repository root as
+working directory (the shared IntelliJ run configuration `CopybotMainUiDev`
+does that). This config file
 loads the metadata plugin straight from its `target/` folder, so package that
 plugin once first.
 

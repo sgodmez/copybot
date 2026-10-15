@@ -5,7 +5,7 @@ import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 module com.copybot.engine {
     requires java.logging;
     requires info.picocli;
-    requires com.google.gson;
+    requires transitive com.google.gson; // the plugin API exposes JsonElement
 
     exports com.copybot.config to com.google.gson, com.copybot.ui;
     exports com.copybot.exception;
@@ -13,7 +13,7 @@ module com.copybot.engine {
     exports com.copybot.utils;
 
     exports com.copybot.engine to com.copybot.ui;
-    opens com.copybot.engine to javafx.base, info.picocli;
+    opens com.copybot.engine to info.picocli;
 
     exports com.copybot.engine.pipeline to com.google.gson, com.copybot.ui;
     exports com.copybot.engine.resume to com.google.gson, com.copybot.ui;
@@ -27,9 +27,9 @@ module com.copybot.engine {
     exports com.copybot.plugin.api.config;
     exports com.copybot.plugin.api.pattern;
 
-    exports com.copybot.plugin.embedded.actions;
+    exports com.copybot.plugin.embedded.actions to com.google.gson, com.copybot.ui; // gson reads the config records
     exports com.copybot to com.copybot.ui;
-    opens com.copybot to info.picocli, javafx.base;
+    opens com.copybot to info.picocli;
 
     uses IPlugin;
     uses ILanguagePack;
