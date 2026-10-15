@@ -201,7 +201,7 @@ public final class TestPluginJar {
     private String pluginClass() {
         String actions = failingActions
                 ? "throw new IllegalStateException(\"no actions\");"
-                : "return java.util.List.of(new com.copybot.plugin.api.action.ActionDefinition(\"act\", TestAction.class, true));";
+                : "return java.util.List.of(new com.copybot.plugin.api.action.ActionDefinition<>(\"act\", TestAction.class));";
         String bundles = missingI18nBundle
                 ? "  @Override public Iterable<String> getI18nBundleNames() { return java.util.List.of(\"" + moduleName + ".missing\"); }\n"
                 : "";

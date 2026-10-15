@@ -65,8 +65,11 @@ public final class SampleSession {
     public Sample list(PipelineConfig config) {
         begin();
         Thread lister = null;
+        List<WorkItem> received = Collections.synchronizedList(new ArrayList<>());
+        // set once the listing is over for this sample (timeout, cancel, failure): a lister that ignores its interrupt
+        // and keeps emitting is refused from then on, nothing more is kept
+        AtomicBoolean closed = new AtomicBoolean();
         try {
-            List<WorkItem> received = Collections.synchronizedList(new ArrayList<>());
             AtomicBoolean full = new AtomicBoolean();
             AtomicReference<Throwable> failure = new AtomicReference<>();
             List<PipelineStep<IInAction>> inSteps = steps.in(config); // resolution failure: caught below
@@ -75,6 +78,9 @@ public final class SampleSession {
                     for (PipelineStep<IInAction> step : inSteps) {
                         step.getAction().listFiles(item -> {
                             synchronized (received) {
+                                if (closed.get()) {
+                                    throw new StopSampling(); // too late: the sample is taken
+                                }
                                 if (received.size() >= maxListed) {
                                     full.set(true);
                                     throw new StopSampling();
@@ -89,12 +95,14 @@ public final class SampleSession {
                 } catch (StopSampling e) {
                     // the cap is reached: normal end
                 } catch (Throwable t) {
-                    if (!full.get() && !Thread.currentThread().isInterrupted()) {
+                    // a lister failing once the sample is taken (timeout, cancel) fails nothing
+                    if (!full.get() && !closed.get() && !Thread.currentThread().isInterrupted()) {
                         failure.set(t);
                     }
                 }
             });
             lister.join(listingTimeout.toMillis());
+            close(received, closed);
             boolean timedOut = lister.isAlive();
             if (timedOut) {
                 lister.interrupt(); // not waited for: a daemon, it ends when the plugin gives up
@@ -118,10 +126,18 @@ public final class SampleSession {
         } catch (Throwable e) {
             return Sample.failed(message(e));
         } finally {
+            close(received, closed); // the cancel and failure paths
             if (lister != null && lister.isAlive()) {
                 lister.interrupt(); // safety net: the cancel and failure paths
             }
             end();
+        }
+    }
+
+    /** No item is kept any more: under the lock of received, so that no item is added once the sample is taken. */
+    private static void close(List<WorkItem> received, AtomicBoolean closed) {
+        synchronized (received) {
+            closed.set(true);
         }
     }
 

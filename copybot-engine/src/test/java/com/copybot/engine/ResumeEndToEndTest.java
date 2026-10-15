@@ -210,13 +210,14 @@ public class ResumeEndToEndTest {
 
     @Test
     public void defaultRunReportsACursorWriteFailureOnStderr() throws IOException {
-        Path pipeline = pipeline("state", "{name}");
-        Files.createDirectories(tempDir.resolve("sd.state.json.tmp")); // the temporary state file cannot be written
+        // a state file name of 251 characters: read fine, but its temporary file (a longer name) cannot be created
+        String base = "sd" + "x".repeat(238);
+        Path pipeline = Files.move(pipeline("state", "{name}"), tempDir.resolve(base + ".json"));
 
         String[] result = capture(pipeline);
 
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")), "the files are copied");
-        assertTrue(result[2].contains("sd.state.json"), "the cursor write failure is reported: " + result[2]);
+        assertTrue(result[2].contains(base + ".state.json"), "the cursor write failure is reported: " + result[2]);
         assertFalse(result[1].contains("PipelineState@"), "no raw state dump: " + result[1]);
     }
 

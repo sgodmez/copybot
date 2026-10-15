@@ -10,6 +10,20 @@ public final class VersionUtil {
     // major, then an optional minor; anything after ("1.", ".3", "-SNAPSHOT", "+9") is ignored
     private static final Pattern versionExtractPattern = Pattern.compile("^([0-9]+)(?:\\.([0-9]+))?(?:[.+-].*)?$");
 
+    /** The name of the engine module, which holds the plugin API (null when the engine runs from the class path). */
+    public static String engineModuleName() {
+        return VersionUtil.class.getModule().getName();
+    }
+
+    /**
+     * The version of the engine module, which is the version of the plugin API: recorded by the build in its
+     * module descriptor. Empty when the engine runs from the class path or was built without version.
+     */
+    public static Optional<String> engineVersion() {
+        ModuleDescriptor descriptor = VersionUtil.class.getModule().getDescriptor();
+        return descriptor == null ? Optional.empty() : descriptor.version().map(Object::toString);
+    }
+
     public static boolean moduleCompatible(ModuleDescriptor module, ModuleDescriptor.Requires requirement) {
         return module.name().equals(requirement.name())
                 && moduleVersionCompatible(module.version(), requirement.compiledVersion(), false);

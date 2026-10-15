@@ -62,7 +62,7 @@ final class FileComparison {
 
     /** The local file of the item, null when it is not a local file (e.g. a URL). */
     static Path localSource(WorkItem item) {
-        return item.isLocal() || item.isTempFile() ? item.getLocalLocation() : null;
+        return item.isLocal() ? item.getLocalLocation() : null;
     }
 
     /** The size of the item: from its metadata, else from its local file, else by reading it. */

@@ -172,7 +172,7 @@ public final class PluginEngine {
      */
     private static Optional<ConfigSchema> schemaOf(PluginDefinition plugin, ActionDefinition<?> definition) {
         try {
-            return definition.getInstance().configSchema();
+            return newAction(plugin, definition).configSchema();
         } catch (LinkageError | RuntimeException e) {
             if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion() + ":" + definition.actionCode())) {
                 LOG.warn(e, "plugin.catalog.no-schema", plugin.getName(), definition.actionCode(), String.valueOf(e));
@@ -199,17 +199,27 @@ public final class PluginEngine {
                 .findFirst()
                 .orElseThrow(() -> new PluginNotFoundException(stepConfig.getDisplayName()));
 
-        var actionDef = pluginDef.findAction(stepConfig.action(), type);
-        IAction actionInstance = actionDef.getInstance();
-        actionInstance.loadConfig(stepConfig.actionConfig());
-        return new PipelineStep(pluginDef.getPluginInstance(), actionInstance, stepConfig);
+        IAction instance = newAction(pluginDef, pluginDef.findAction(stepConfig.action(), type));
+        if (!actionClass.isInstance(instance)) { // an action registered under the wrong step type
+            throw new IllegalStateException(instance.getClass().getName() + " is not a " + actionClass.getSimpleName());
+        }
+        A action = actionClass.cast(instance);
+        action.loadConfig(stepConfig.actionConfig());
+        return new PipelineStep<>(pluginDef.getPluginInstance(), action, stepConfig);
+    }
+
+    /** A new instance of the action, chained with its plugin ({@link IAction#setPlugin}) before anything else. */
+    private static IAction newAction(PluginDefinition plugin, ActionDefinition<?> definition) {
+        IAction action = definition.getInstance();
+        action.setPlugin(plugin.getPluginInstance());
+        return action;
     }
 
     private static boolean pluginMatch(PluginDefinition plugin, PipelineStepConfig stepConfig) {
         String stepPluginName = stepConfig.plugin() == null || stepConfig.plugin().isBlank() ? CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME : stepConfig.plugin();
         return plugin.getName().equals(stepPluginName)
                 && (
-                plugin.getVersion() == null // fixme embedded plugin have no version
+                plugin.getVersion() == null // a plugin built without version, or the engine run without one
                         || VersionUtil.isCompatible(plugin.getVersion(), stepConfig.version(), true)
         );
     }

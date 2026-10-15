@@ -17,7 +17,7 @@ public class DemoModule2Plugin extends AbstractPlugin {
     @Override
     public List<ActionDefinition<? extends IAnalyzeAction>> getAnalyzeActions() {
         return List.of(
-                new ActionDefinition("demo", DemoModule2Action.class, true)
+                new ActionDefinition<>("demo", DemoModule2Action.class)
         );
     }
 }

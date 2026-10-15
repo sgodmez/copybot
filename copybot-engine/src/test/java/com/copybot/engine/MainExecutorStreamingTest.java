@@ -18,6 +18,8 @@ import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.Test;
@@ -121,8 +123,9 @@ public class MainExecutorStreamingTest {
         Optional<Boolean> varies = Optional.of(true);
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             written.add(item.getNameDisplay());
+            return WriteResult.written(null);
         }
 
         @Override
@@ -380,8 +383,9 @@ public class MainExecutorStreamingTest {
         final Set<String> written = ConcurrentHashMap.newKeySet();
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             written.add(item.getNameDisplay());
+            return WriteResult.written(null);
         }
     }
 

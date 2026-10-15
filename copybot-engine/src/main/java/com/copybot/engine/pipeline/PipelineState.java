@@ -9,8 +9,6 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PipelineState {
-    private List<PipelineStepState> stepStates;
-
     // written by the pipeline thread, read by watchers/UI on other threads
     private volatile PipelineStatus status;
 
@@ -28,8 +26,7 @@ public class PipelineState {
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private volatile boolean preparationFailed;
 
-    public PipelineState(List<PipelineStepState> stepStates) {
-        this.stepStates = stepStates;
+    public PipelineState() {
         status = PipelineStatus.NEW;
         workItems = new ConcurrentLinkedQueue<>();
     }
@@ -49,10 +46,6 @@ public class PipelineState {
         }
         status = next;
         return true;
-    }
-
-    public List<PipelineStepState> getStepStates() {
-        return stepStates;
     }
 
     public ConcurrentLinkedQueue<WorkItemExecution> getWorkItems() {

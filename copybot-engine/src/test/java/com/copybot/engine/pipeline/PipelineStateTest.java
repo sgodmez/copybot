@@ -13,7 +13,7 @@ public class PipelineStateTest {
 
     @Test
     public void compareAndSetStatusOnlyReplacesTheExpectedStatus() {
-        PipelineState state = new PipelineState(List.of());
+        PipelineState state = new PipelineState();
         state.setStatus(PipelineStatus.RUNNING);
 
         assertTrue(state.compareAndSetStatus(PipelineStatus.RUNNING, PipelineStatus.PAUSED));
@@ -28,7 +28,7 @@ public class PipelineStateTest {
 
     @Test
     public void onlyTheFirstRecordedFailureIsKept() {
-        PipelineState state = new PipelineState(List.of());
+        PipelineState state = new PipelineState();
         IllegalStateException first = new IllegalStateException("first");
 
         assertTrue(state.recordFailureIfAbsent(first));
@@ -39,7 +39,7 @@ public class PipelineStateTest {
 
     @Test
     public void concurrentFailuresRecordExactlyOne() throws Exception {
-        PipelineState state = new PipelineState(List.of());
+        PipelineState state = new PipelineState();
         AtomicInteger recorded = new AtomicInteger();
         CountDownLatch start = new CountDownLatch(1);
         List<Thread> threads = new ArrayList<>();

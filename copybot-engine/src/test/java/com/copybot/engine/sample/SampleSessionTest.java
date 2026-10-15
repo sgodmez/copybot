@@ -41,10 +41,6 @@ class SampleSessionTest {
 
     abstract static class Fake implements IAction {
         @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
         public void setPlugin(IPlugin plugin) {
         }
     }
@@ -233,6 +229,43 @@ class SampleSessionTest {
         assertTrue(Duration.ofNanos(System.nanoTime() - start).toMillis() < 2000, "returns in less than 2 s");
         assertEquals(1, sample.items().size());
         assertTrue(sample.truncated());
+    }
+
+    @Test
+    void aListingIgnoringItsInterruptIsRefusedEveryItemOnceTimedOut() throws InterruptedException {
+        CountDownLatch sampleTaken = new CountDownLatch(1);
+        CountDownLatch lateEmitDone = new CountDownLatch(1);
+        AtomicInteger refused = new AtomicInteger();
+        AtomicInteger accepted = new AtomicInteger();
+        Steps steps = new Steps().withIn(consumer -> {
+            consumer.accept(item("a.JPG"));
+            boolean waited = false;
+            while (!waited) { // a plugin ignoring its interrupt
+                try {
+                    waited = sampleTaken.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException ignored) {
+                    // carries on, like a careless plugin
+                }
+            }
+            for (int i = 0; i < 50; i++) {
+                try {
+                    consumer.accept(item("late" + i + ".JPG"));
+                    accepted.incrementAndGet();
+                } catch (RuntimeException e) {
+                    refused.incrementAndGet(); // and swallows the stop, still emitting
+                }
+            }
+            lateEmitDone.countDown();
+        });
+
+        Sample sample = new SampleSession(steps, 200, Duration.ofMillis(200), 10).list(CONFIG);
+        sampleTaken.countDown();
+
+        assertTrue(lateEmitDone.await(10, java.util.concurrent.TimeUnit.SECONDS), "the late lister ended");
+        assertEquals(1, sample.listed());
+        assertTrue(sample.truncated());
+        assertEquals(0, accepted.get(), "nothing is kept once the sample is taken");
+        assertEquals(50, refused.get());
     }
 
     @Test

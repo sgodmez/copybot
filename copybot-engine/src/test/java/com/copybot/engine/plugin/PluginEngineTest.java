@@ -1,5 +1,10 @@
 package com.copybot.engine.plugin;
 
+import com.copybot.engine.pipeline.PipelineStep;
+import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.plugin.api.action.AbstractAction;
+import com.copybot.plugin.api.action.IInAction;
+import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -59,6 +64,28 @@ public class PluginEngineTest {
         assertSame(loaded, PluginEngine.getLoadedPlugins(), "a second load must neither reload nor duplicate the plugins");
         assertTrue(records.stream().anyMatch(r -> r.getLevel() == Level.WARNING),
                 "loading other plugin directories in the same JVM is reported");
+    }
+
+    @Test
+    public void aResolvedActionKnowsItsPluginAndItsBundle() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of()); // the embedded one at least
+        PipelineStepConfig write = new PipelineStepConfig(null, "file.write", null, null, null, null, null,
+                com.google.gson.JsonParser.parseString("{\"outPattern\":\"out/{name}\"}"));
+
+        PipelineStep<IOutAction> step = PluginEngine.resolve(write, IOutAction.class);
+
+        AbstractAction action = assertInstanceOf(AbstractAction.class, step.getAction());
+        assertSame(step.getPlugin(), action.getPlugin(), "setPlugin is called when the action is created");
+        assertNotNull(action.getResourceBundle());
+    }
+
+    @Test
+    public void anEmbeddedStepMatchesWhateverTheEngineVersion() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of());
+        PipelineStepConfig read = new PipelineStepConfig("", "file.read", null, null, null, null, null,
+                com.google.gson.JsonParser.parseString("{\"path\":\".\"}"));
+
+        assertNotNull(PluginEngine.resolve(read, IInAction.class).getAction());
     }
 
     @Test

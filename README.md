@@ -164,7 +164,21 @@ record holding the action's configuration. You implement `IInAction`,
 record's fields (`@Required`, `@DefaultValue`, `@AllowedValues`,
 `@DirectoryPath`, `@PatternField`…) give the editor what it needs to build
 the form. An action can also declare the resources it needs, report
-configuration warnings, and describe what it would do in a dry run.
+configuration warnings, and describe what it would do in a dry run. One
+instance of an action serves every file of its step, concurrently: it
+reports the progress of the file it works on with `updateStatus` /
+`updatePercent` (an out action through the `progress()` of its
+`WriteContext`), shown in the plan view, and gets `beforeAll` / `afterAll`
+once per phase (preparation, execution) and `beforeEach` / `afterEach`
+around each file (see the `IAction` javadoc).
+
+The plugin API is the engine module, `com.copybot.engine`: its version is the
+API version. A plugin declares the one it was built for without doing
+anything, since `javac` records the version of the engine it compiles against
+in the plugin's `requires com.copybot.engine`. A plugin built for another
+major version, or for a newer minor version than the running Copybot, is not
+loaded: the plugins window says which API it needs. Rebuild it against this
+version of the engine.
 
 The [`copybot-plugin-demo`](copybot-plugin-demo) modules are worked examples:
 a standard module plugin, the same plugin built on an older library, a

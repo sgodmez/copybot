@@ -17,7 +17,7 @@ public class MetadataExtractorPlugin extends AbstractPlugin {
     @Override
     public List<ActionDefinition<? extends IAnalyzeAction>> getAnalyzeActions() {
         return List.of(
-                new ActionDefinition("extract", ExtractMetadata.class, true)
+                new ActionDefinition<>("extract", ExtractMetadata.class)
         );
     }
 }

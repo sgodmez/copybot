@@ -48,13 +48,13 @@ public class WorkItemExecution {
     private volatile boolean analysisDeferred;
     /** Left out of this run by the user (SKIPPED): a resume point no longer selects it. */
     private volatile boolean ignored;
-    /** The local file this item was created from, null for a remote or temporary one. */
+    /** The local file this item was created from, null for a remote one. */
     private final Path listedPath;
 
     public WorkItemExecution(WorkItem wi, List<PipelineStep<?>> pipelineSteps) {
         this.wi = wi;
         this.pipelineSteps = List.copyOf(pipelineSteps);
-        this.listedPath = wi.isLocal() && !wi.isTempFile() ? wi.getLocalLocation() : null;
+        this.listedPath = wi.isLocal() ? wi.getLocalLocation() : null;
     }
 
     /**
@@ -140,6 +140,7 @@ public class WorkItemExecution {
     public void setRunning(int stepIndex) {
         this.currentStepIndex = stepIndex;
         this.waitingFor = Set.of();
+        this.ws = null; // the progress of the previous step is over
         this.status = ItemStatus.RUNNING;
     }
 
@@ -257,11 +258,25 @@ public class WorkItemExecution {
         return analysisDeferred;
     }
 
+    /**
+     * The last progress the running step reported for this item (shown as "Copying 42 %"); null before its first
+     * report.
+     */
     public WorkStatus getWorkStatus() {
         return ws;
     }
 
-    public void setWorkStatus(WorkStatus ws) {
-        this.ws = ws;
+    /**
+     * A progress report of the step stepIndex for this item (its {@link com.copybot.plugin.api.action.ItemProgress}):
+     * ignored once the item is no longer running that step (a late report of a thread the action started). A null
+     * action name keeps the one of the previous report of the step.
+     */
+    public synchronized void reportProgress(int stepIndex, WorkStatus report) {
+        if (report == null || status != ItemStatus.RUNNING || currentStepIndex != stepIndex) {
+            return;
+        }
+        WorkStatus previous = ws;
+        String name = report.actionName() != null || previous == null ? report.actionName() : previous.actionName();
+        ws = new WorkStatus(name, report.actionPercent());
     }
 }

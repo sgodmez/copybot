@@ -42,10 +42,6 @@ public class FootprintResolverTest {
         }
 
         @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
         public void setPlugin(IPlugin plugin) {
         }
     }

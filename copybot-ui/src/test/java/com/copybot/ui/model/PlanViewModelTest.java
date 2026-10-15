@@ -63,7 +63,7 @@ public class PlanViewModelTest {
     }
 
     private static PipelineState state(PipelineStatus status, WorkItemExecution... items) {
-        PipelineState state = new PipelineState(List.of());
+        PipelineState state = new PipelineState();
         state.setStatus(status);
         state.getWorkItems().addAll(List.of(items));
         return state;
@@ -485,7 +485,7 @@ public class PlanViewModelTest {
         waiting.setWaitingResources(0, Set.of("disk:D"));
         WorkItemExecution running = item("c.jpg", 1);
         running.setRunning(0);
-        running.setWorkStatus(new WorkStatus("copy", 42));
+        running.reportProgress(0, new WorkStatus("copy", 42));
         WorkItemExecution runningUnknown = item("d.jpg", 1);
         runningUnknown.setRunning(0);
         WorkItemExecution done = item("e.jpg", 1);
@@ -503,6 +503,24 @@ public class PlanViewModelTest {
         assertTrue(PlanViewModel.statusText(skipped).contains("already imported (cursor)"));
         assertTrue(PlanViewModel.statusText(failed).contains("disk full"));
         assertNotEquals(PlanViewModel.statusText(pending), PlanViewModel.statusText(done));
+    }
+
+    @Test
+    public void aRunningFileShowsThePercentItsStepReports() throws IOException {
+        WorkItemExecution running = item("a.jpg", 1);
+        running.setRunning(1);
+        String unknown = PlanViewModel.statusText(running);
+
+        running.reportProgress(1, new WorkStatus("copy", -1)); // running, progress unknown
+        assertEquals(unknown, PlanViewModel.statusText(running));
+        running.reportProgress(1, new WorkStatus(null, 42)); // a percent of the same action
+        assertTrue(PlanViewModel.statusText(running).contains("42"), PlanViewModel.statusText(running));
+        assertEquals("copy", running.getWorkStatus().actionName());
+
+        running.reportProgress(0, new WorkStatus("late", 99)); // a late report of an earlier step
+        assertTrue(PlanViewModel.statusText(running).contains("42"), PlanViewModel.statusText(running));
+        running.setRunning(2); // the next step starts without progress
+        assertEquals(unknown, PlanViewModel.statusText(running));
     }
 
     @Test

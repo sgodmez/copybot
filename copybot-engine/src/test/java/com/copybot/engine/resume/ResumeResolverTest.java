@@ -5,6 +5,8 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -30,17 +32,14 @@ public class ResumeResolverTest {
     /** Out action writing to nas/<day>/<name>, day taken from the key date. */
     final class DayOut implements IOutAction {
         @Override
-        public void writeItem(WorkItem workItem) {
+        public WriteResult write(WorkItem workItem, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override
         public Optional<Path> resolveTarget(WorkItem workItem) {
             ItemKey key = ItemKey.of(workItem).orElseThrow();
             return Optional.of(tempDir.resolve("nas").resolve(key.date().toString().substring(0, 10)).resolve(key.name()));
-        }
-
-        @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
         }
 
         @Override

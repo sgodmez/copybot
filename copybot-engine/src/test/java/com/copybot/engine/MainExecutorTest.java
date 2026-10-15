@@ -36,10 +36,6 @@ public class MainExecutorTest {
 
     abstract static class FakeAction implements IAction {
         @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
         public void setPlugin(IPlugin plugin) {
         }
     }

@@ -7,6 +7,8 @@ import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.resources.CombinedResourceBundle;
 import com.copybot.plugin.api.config.ConfigField;
@@ -59,7 +61,8 @@ public class PluginCatalogTest {
         assertEquals(StepType.OUT, write.stepType());
         assertEquals("embedded", read.pluginName());
         assertEquals("embedded", read.pluginCode());
-        assertNull(read.pluginVersion(), "the embedded plugin has no version");
+        assertEquals(com.copybot.utils.VersionUtil.engineVersion().orElse(null), read.pluginVersion(),
+                "the embedded plugin has the version of the engine");
     }
 
     @Test
@@ -124,7 +127,8 @@ public class PluginCatalogTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
         }
     }
 
@@ -181,10 +185,10 @@ public class PluginCatalogTest {
 
     @Test
     public void aLoadedPluginIsListedInPluginThenStepTypeOrder() {
-        IPlugin v2 = plugin("demo", Map.of(), List.of(new ActionDefinition<>("demo.write", Writer.class, false)),
-                List.of(new ActionDefinition<>("demo.list", Lister.class, false)));
+        IPlugin v2 = plugin("demo", Map.of(), List.of(new ActionDefinition<>("demo.write", Writer.class)),
+                List.of(new ActionDefinition<>("demo.list", Lister.class)));
         IPlugin v1 = plugin("demo", Map.of(), List.of(),
-                List.of(new ActionDefinition<>("demo.list", Lister.class, false)));
+                List.of(new ActionDefinition<>("demo.list", Lister.class)));
 
         List<CatalogAction> catalog = PluginEngine.catalogOf(List.of(
                 PluginDefinition.ofLoaded("com.acme.demo", "2.0.0", v2),
@@ -202,7 +206,7 @@ public class PluginCatalogTest {
 
     @Test
     public void anActionWithoutSchemaOrTextsShowsItsCode() {
-        IPlugin demo = plugin("demo", Map.of(), List.of(), List.of(new ActionDefinition<>("demo.list", Lister.class, false)));
+        IPlugin demo = plugin("demo", Map.of(), List.of(), List.of(new ActionDefinition<>("demo.list", Lister.class)));
 
         CatalogAction list = PluginEngine.catalogOf(List.of(PluginDefinition.ofLoaded("com.acme.demo", "1.0.0", demo)))
                 .actions().getFirst();
@@ -218,7 +222,7 @@ public class PluginCatalogTest {
         IPlugin demo = plugin("demo", Map.of(
                         "plugin.demo.demo.write.name", "%Write",
                         "plugin.demo.demo.write.config.target.description", "% of the free space"),
-                List.of(new ActionDefinition<>("demo.write", Writer.class, false)), List.of());
+                List.of(new ActionDefinition<>("demo.write", Writer.class)), List.of());
 
         CatalogAction write = PluginEngine.catalogOf(List.of(PluginDefinition.ofLoaded("com.acme.demo", "1.0.0", demo)))
                 .actions().getFirst();
@@ -232,7 +236,7 @@ public class PluginCatalogTest {
     public void aBrokenPluginOrActionIsWarnedOnce() {
         IPlugin broken = plugin("broken", Map.of(), List.of(), null); // getInActions() fails
         IPlugin unbuildable = plugin("unbuildable", Map.of(), List.of(),
-                List.of(new ActionDefinition<>("demo.list", Unbuildable.class, false)));
+                List.of(new ActionDefinition<>("demo.list", Unbuildable.class)));
         List<PluginDefinition> plugins = List.of(PluginDefinition.ofLoaded("com.acme.broken.once", "1.0.0", broken),
                 PluginDefinition.ofLoaded("com.acme.unbuildable.once", "1.0.0", unbuildable));
         Logger jul = Logger.getLogger(PluginEngine.class.getCanonicalName());
@@ -304,7 +308,7 @@ public class PluginCatalogTest {
     @Test
     public void aLoadedVersionWhoseActionsCannotBeListedIsAFailedPlugin() {
         IPlugin v2 = plugin("demo", Map.of(), List.of(), null); // getInActions() fails
-        IPlugin v1 = plugin("demo", Map.of(), List.of(), List.of(new ActionDefinition<>("demo.list", Lister.class, false)));
+        IPlugin v1 = plugin("demo", Map.of(), List.of(), List.of(new ActionDefinition<>("demo.list", Lister.class)));
 
         PluginCatalog catalog = PluginEngine.catalogOf(List.of(
                 PluginDefinition.ofLoaded("com.acme.failed", "2.0.0", v2),

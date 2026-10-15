@@ -38,10 +38,6 @@ public class ManualPointTest {
 
     abstract static class FakeAction implements IAction {
         @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
         public void setPlugin(IPlugin plugin) {
         }
     }
@@ -135,11 +131,12 @@ public class ManualPointTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             if (item.getNameDisplay().equals(failOn)) {
                 throw new IllegalStateException("write failed");
             }
             written.add(item.getNameDisplay());
+            return WriteResult.written(null);
         }
 
         /** One directory per day, for the destination probe. */
@@ -382,7 +379,7 @@ public class ManualPointTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             entered.countDown();
             try {
                 gate.await();
@@ -390,6 +387,7 @@ public class ManualPointTest {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted");
             }
+            return WriteResult.written(null);
         }
     }
 

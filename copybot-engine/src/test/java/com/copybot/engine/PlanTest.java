@@ -14,6 +14,8 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.Test;
@@ -67,7 +69,8 @@ public class PlanTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override
@@ -114,7 +117,8 @@ public class PlanTest {
     public void aTargetWithoutDirectoryPartIsTheCurrentDirectory() {
         final class NameOnlyOut extends FakeAction implements IOutAction {
             @Override
-            public void writeItem(WorkItem item) {
+            public WriteResult write(WorkItem item, WriteContext context) {
+                return WriteResult.written(null);
             }
 
             @Override

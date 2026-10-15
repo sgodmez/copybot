@@ -5,6 +5,7 @@ import com.copybot.engine.plugin.report.ModuleEntry;
 import com.copybot.engine.plugin.report.PluginSource;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.utils.VersionUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -340,8 +341,8 @@ public class PluginLoaderTest {
                 requires("com.example.noVersion", null));
         List<ModuleDescriptor> loaded = List.of(module("com.example.present", "1.3"), module("com.example.tooOld", "1.4"));
 
-        assertEquals("com.example.absent:2.0, com.example.tooOld:1.5, com.example.noVersion",
-                PluginLoader.missingDependencies(requires, loaded));
+        assertEquals(List.of("com.example.absent:2.0", "com.example.tooOld:1.5", "com.example.noVersion"),
+                PluginLoader.missingDependencyList(requires, loaded));
     }
 
     @Test
@@ -349,14 +350,67 @@ public class PluginLoaderTest {
         // the requirements are those of every module of the plugin folder: two of them may require the same module
         List<ModuleDescriptor.Requires> requires = List.of(requires("com.example.absent", "2.0"), requires("com.example.absent", "2.0"));
 
-        assertEquals("com.example.absent:2.0", PluginLoader.missingDependencies(requires, List.of()));
+        assertEquals(List.of("com.example.absent:2.0"), PluginLoader.missingDependencyList(requires, List.of()));
+    }
+
+    /** A plugin module as javac records it: the version of the engine it was compiled against, null for none. */
+    private static ModuleDescriptor builtFor(String apiVersion) {
+        ModuleDescriptor.Builder builder = ModuleDescriptor.newModule("com.example.plugin");
+        if (apiVersion == null) {
+            builder.requires("com.copybot.engine");
+        } else {
+            builder.requires(Set.of(), "com.copybot.engine", ModuleDescriptor.Version.parse(apiVersion));
+        }
+        return builder.requires("com.example.lib").build();
+    }
+
+    @Test
+    public void aPluginBuiltForAnotherMajorOrANewerMinorOfTheApiIsIncompatible() {
+        assertEquals(Optional.of("2.0"), LayerLoader.incompatibleApi(List.of(builtFor("2.0")), "com.copybot.engine", "1.3"));
+        assertEquals(Optional.of("0.9"), LayerLoader.incompatibleApi(List.of(builtFor("0.9")), "com.copybot.engine", "1.3"));
+        assertEquals(Optional.of("1.4"), LayerLoader.incompatibleApi(List.of(builtFor("1.4")), "com.copybot.engine", "1.3"));
+    }
+
+    @Test
+    public void aPluginBuiltForTheSameMajorAndAnOlderOrEqualMinorIsCompatible() {
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.2")), "com.copybot.engine", "1.3"));
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.3")), "com.copybot.engine", "1.3.2"));
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.0-SNAPSHOT")), "com.copybot.engine", "1.0-SNAPSHOT"));
+    }
+
+    @Test
+    public void anUnknownApiVersionIsNoReasonToRefuseAPlugin() {
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor(null)), "com.copybot.engine", "1.3"),
+                "the plugin was compiled against an engine without version");
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("2.0")), "com.copybot.engine", null),
+                "the engine runs without version");
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("2.0")), null, "1.3"),
+                "the engine runs from the class path");
+    }
+
+    @Test
+    public void theIncompatibilityMessageNamesBothVersions() {
+        String message = ResourcesEngine.getString("plugin.load.api-incompatible", "2.0", "1.3");
+        assertTrue(message.contains("2.0") && message.contains("1.3"), message);
+    }
+
+    @Test
+    public void aPluginCompiledAgainstThisEngineLoadsAndTheEmbeddedPluginHasTheEngineVersion() {
+        Path good = plugins.resolve("good");
+        TestPluginJar.plugin("test.api").version("1.0").writeTo(good); // records the version of the running engine
+
+        List<PluginDefinition> definitions = load(good);
+
+        assertNull(loaded(definitions, "test.api").getErrorMessage());
+        assertTrue(VersionUtil.engineVersion().isPresent(), "the build records the engine version in its module");
+        assertEquals(VersionUtil.engineVersion().get(), loaded(definitions, CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME).getVersion());
     }
 
     @Test
     public void theLoadMessagesExistInBothEngineBundles() throws IOException {
         List<String> keys = List.of("plugin.load.no-module", "plugin.load.many-modules", "plugin.load.newer-revision",
                 "plugin.load.duplicate", "plugin.load.missing-dependencies", "plugin.load.unreadable",
-                "plugin.load.layer", "plugin.load.instantiation", "plugin.load.not-loaded",
+                "plugin.load.layer", "plugin.load.instantiation", "plugin.load.api-incompatible", "plugin.load.not-loaded",
                 "plugin.report.path-missing", "plugin.report.dev-path-missing", "plugin.report.actions-failed");
         for (String file : List.of("engineBundle.properties", "engineBundle_fr.properties")) {
             Properties properties = new Properties();

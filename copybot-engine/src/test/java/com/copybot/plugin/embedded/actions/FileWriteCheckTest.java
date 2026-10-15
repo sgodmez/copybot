@@ -4,6 +4,8 @@ import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -146,11 +148,8 @@ public class FileWriteCheckTest {
     public void anOutActionThatCannotTellAnswersUnknown() {
         IOutAction plugin = new IOutAction() {
             @Override
-            public void writeItem(WorkItem workItem) {
-            }
-
-            @Override
-            public void setStatusWatcher(java.util.function.Consumer<com.copybot.plugin.api.action.WorkStatus> watcher) {
+            public WriteResult write(WorkItem workItem, WriteContext context) {
+                return WriteResult.written(null);
             }
 
             @Override

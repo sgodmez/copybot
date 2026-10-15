@@ -141,10 +141,6 @@ public final class PluginLoader {
                 .toList();
     }
 
-    static String missingDependencies(List<ModuleDescriptor.Requires> requires, List<ModuleDescriptor> loadedModules) {
-        return String.join(", ", missingDependencyList(requires, loadedModules));
-    }
-
     private void instanciateResolved() {
         instanciate(ModuleLayer.boot(), null); // the embedded plugin
         for (LayerLoader ll : loadedLayers) {

@@ -11,5 +11,10 @@ public enum PipelineStatus {
     ERROR,
     SUCCESS,
     /** stopped by the caller (cancel) or by an interruption of the pipeline thread; the resume cursor is not written */
-    CANCELLED
+    CANCELLED;
+
+    /** The pipeline operation ended: SUCCESS, ERROR or CANCELLED. */
+    public boolean isTerminal() {
+        return this == SUCCESS || this == ERROR || this == CANCELLED;
+    }
 }

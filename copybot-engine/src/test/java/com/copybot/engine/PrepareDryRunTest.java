@@ -16,6 +16,8 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -98,7 +100,8 @@ public class PrepareDryRunTest {
     /** Its target is out/&lt;display name&gt;; a name starting with "bad" has no value for a pattern key. */
     final class Out extends FakeAction implements IOutAction {
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override

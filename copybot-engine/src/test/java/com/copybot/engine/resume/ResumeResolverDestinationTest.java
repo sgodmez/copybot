@@ -5,6 +5,8 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -41,7 +43,8 @@ public class ResumeResolverDestinationTest {
         }
 
         @Override
-        public void writeItem(WorkItem workItem) {
+        public WriteResult write(WorkItem workItem, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override
@@ -52,10 +55,6 @@ public class ResumeResolverDestinationTest {
         @Override
         public Optional<Boolean> targetDirectoryVaries() {
             return varies;
-        }
-
-        @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
         }
 
         @Override

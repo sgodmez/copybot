@@ -8,6 +8,7 @@ import com.copybot.engine.plugin.report.PluginSource;
 import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.definition.IPlugin;
 import com.copybot.plugin.embedded.CBEmbeddedPlugin;
+import com.copybot.utils.VersionUtil;
 
 import java.nio.file.Path;
 import java.util.List;
@@ -80,8 +81,10 @@ public final class PluginDefinition {
         return ll.getMainModuleDescriptor().name() + (version != null ? " " + version : "");
     }
 
+    /** The plugin built into the engine: the version of the engine (null when the engine module has none). */
     public static PluginDefinition ofEmbedded(IPlugin pluginInstance) {
-        return new PluginDefinition(CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME, null, null, true, null, pluginInstance, PluginSource.EMBEDDED);
+        return new PluginDefinition(CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME, VersionUtil.engineVersion().orElse(null), null,
+                true, null, pluginInstance, PluginSource.EMBEDDED);
     }
 
     // visible for tests: a loaded plugin without module layer
@@ -106,7 +109,7 @@ public final class PluginDefinition {
         return this;
     }
 
-    public ActionDefinition findAction(String name, StepType type) throws ActionNotFoundException {
+    public ActionDefinition<?> findAction(String name, StepType type) throws ActionNotFoundException {
         var actionList = switch (type) {
             case IN -> pluginInstance.getInActions();
             case ANALYZE -> pluginInstance.getAnalyzeActions();

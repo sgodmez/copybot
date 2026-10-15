@@ -27,14 +27,14 @@ public class CBEmbeddedPlugin extends AbstractPlugin {
     @Override
     public List<ActionDefinition<? extends IInAction>> getInActions() {
         return List.of(
-                new ActionDefinition<FileReadAction>("file.read", FileReadAction.class, false)
+                new ActionDefinition<>("file.read", FileReadAction.class)
         );
     }
 
     @Override
     public List<ActionDefinition<? extends IOutAction>> getOutActions() {
         return List.of(
-                new ActionDefinition<FileWriteAction>("file.write", FileWriteAction.class, false)
+                new ActionDefinition<>("file.write", FileWriteAction.class)
         );
     }
 }

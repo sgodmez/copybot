@@ -90,7 +90,10 @@ public class ResumeStateStoreTest {
 
         assertThrows(CopybotException.class,
                 () -> store.writeCursor(new ItemKey(Instant.parse("2026-09-28T15:42:10Z"), "A")));
-        assertFalse(Files.exists(tempDir.resolve("p.state.json.tmp")), "the temporary file is removed");
+        try (Stream<Path> files = Files.list(tempDir)) {
+            assertEquals(java.util.List.of(stateFile), files.toList(), "the temporary file is removed, whatever its name");
+        }
+        assertTrue(Files.isDirectory(stateFile.resolve("child")), "what was there is left as it was");
     }
 
     @Test

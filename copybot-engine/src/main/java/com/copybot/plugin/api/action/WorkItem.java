@@ -15,11 +15,8 @@ public class WorkItem {
     private URL sourceLocationUrl;
     private Supplier<InputStream> inputStreamSupplier;
     private Path sourceLocationPath;
-    private Path tempLocation;
     private boolean isLocal;
-    private boolean isDeleteAfterCompletion = false;
     private boolean isDeleted = false;
-    private boolean isSourceReaded; // when true, trigger next read (TODO : wrap input stream to catch close ?)
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
@@ -37,9 +34,7 @@ public class WorkItem {
         copy.sourceLocationUrl = sourceLocationUrl;
         copy.inputStreamSupplier = inputStreamSupplier;
         copy.sourceLocationPath = sourceLocationPath;
-        copy.tempLocation = tempLocation;
         copy.isLocal = isLocal;
-        copy.isDeleteAfterCompletion = isDeleteAfterCompletion;
         copy.isDeleted = isDeleted;
         copy.metadatas.raw().putAll(metadatas.raw());
         copy.metadatas.display().putAll(metadatas.display());
@@ -76,10 +71,6 @@ public class WorkItem {
     }
 
 
-    public boolean isSourceReaded() {
-        return isSourceReaded;
-    }
-
     public WorkItemMetadata getMetadatas() {
         return metadatas;
     }
@@ -88,16 +79,9 @@ public class WorkItem {
         return isLocal;
     }
 
-    public boolean isTempFile() {
-        return tempLocation != null;
-    }
-
+    /** The local file of the item, null for an item read from a URL. */
     public Path getLocalLocation() {
-        return tempLocation == null ? sourceLocationPath : tempLocation;
-    }
-
-    public boolean isDeleteAfterCompletion() {
-        return isDeleteAfterCompletion;
+        return sourceLocationPath;
     }
 
     public boolean isDeleted() {

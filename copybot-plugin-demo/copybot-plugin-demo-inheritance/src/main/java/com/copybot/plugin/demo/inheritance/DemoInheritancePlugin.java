@@ -25,7 +25,7 @@ public class DemoInheritancePlugin extends AbstractPlugin {
     @Override
     public List<ActionDefinition<? extends IAnalyzeAction>> getAnalyzeActions() {
         return List.of(
-                new ActionDefinition("demo", DemoInheritanceAction.class, true)
+                new ActionDefinition<>("demo", DemoInheritanceAction.class)
         );
     }
 

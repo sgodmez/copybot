@@ -109,7 +109,7 @@ public class PluginReportsTest {
 
         PluginEntry embedded = report.plugins().stream().filter(p -> p.source() == PluginSource.EMBEDDED).findFirst().orElseThrow();
         assertEquals(PluginStatus.LOADED, embedded.status());
-        assertNull(embedded.version());
+        assertEquals(com.copybot.utils.VersionUtil.engineVersion().orElse(null), embedded.version(), "the engine version");
         assertNull(embedded.path());
         assertFalse(embedded.actions().isEmpty());
     }

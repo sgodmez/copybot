@@ -1,6 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
 import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.action.ItemProgress;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -51,7 +52,7 @@ public class FileWriteActionTest {
         Files.createDirectories(target.getParent());
         WorkItem item = itemWithContent("src1.bin", "hello".getBytes());
 
-        action(target, true).writeItem(item);
+        action(target, true).write(item, WriteContext.newRun());
 
         assertTrue(Files.exists(target), "overwrite must be able to create the target");
         assertArrayEquals("hello".getBytes(), Files.readAllBytes(target));
@@ -63,7 +64,7 @@ public class FileWriteActionTest {
         Files.write(target, "old content that is longer".getBytes());
         WorkItem item = itemWithContent("src2.bin", "new".getBytes());
 
-        action(target, true).writeItem(item);
+        action(target, true).write(item, WriteContext.newRun());
 
         assertArrayEquals("new".getBytes(), Files.readAllBytes(target), "target must be truncated then replaced");
     }
@@ -74,7 +75,7 @@ public class FileWriteActionTest {
         Files.write(target, "keep me".getBytes());
         WorkItem item = itemWithContent("src3.bin", "intruder".getBytes());
 
-        assertThrows(RuntimeException.class, () -> action(target, false).writeItem(item));
+        assertThrows(RuntimeException.class, () -> action(target, false).write(item, WriteContext.newRun()));
         assertArrayEquals("keep me".getBytes(), Files.readAllBytes(target));
     }
 
@@ -83,7 +84,7 @@ public class FileWriteActionTest {
         Path target = tempDir.resolve("out").resolve("nested").resolve("deep.bin");
         WorkItem item = itemWithContent("src5.bin", "payload".getBytes());
 
-        action(target, false).writeItem(item);
+        action(target, false).write(item, WriteContext.newRun());
 
         assertArrayEquals("payload".getBytes(), Files.readAllBytes(target));
     }
@@ -97,9 +98,8 @@ public class FileWriteActionTest {
 
         FileWriteAction action = action(target, true);
         List<WorkStatus> statuses = new CopyOnWriteArrayList<>();
-        action.setStatusWatcher(statuses::add);
 
-        action.writeItem(item);
+        action.write(item, WriteContext.newRun().withProgress(statuses::add));
 
         List<Integer> percents = statuses.stream().map(WorkStatus::actionPercent).filter(p -> p >= 0).toList();
         assertTrue(percents.contains(50), "mid-copy percent must be 50, got " + percents);
@@ -203,7 +203,7 @@ public class FileWriteActionTest {
         WorkItem item = itemWithContent("src13.bin", "abc".getBytes());
         FileWriteAction action = action(target, ",\"verify\":\"readBack\"");
         List<Path> temps = new CopyOnWriteArrayList<>();
-        action.setStatusWatcher(status -> {
+        ItemProgress watchTemps = status -> {
             if (!Files.isDirectory(target.getParent())) {
                 return; // the first status comes before the target directory is created
             }
@@ -212,9 +212,9 @@ public class FileWriteActionTest {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
-        });
+        };
 
-        action.write(item, new WriteContext("engine-run-42"));
+        action.write(item, new WriteContext("engine-run-42", watchTemps));
 
         assertEquals(List.of(target.resolveSibling(".photo.jpg.engine-run-42" + SafeFileWriter.TEMP_SUFFIX)),
                 temps.stream().distinct().toList(), "the copy went through a temporary file named after the run");
@@ -408,7 +408,7 @@ public class FileWriteActionTest {
             FileWriteAction action = action(target,
                     ",\"onConflict\":{\"ifDifferent\":\"overwrite\"},\"writeMode\":\"" + writeMode + "\"");
 
-            assertThrows(CopybotException.class, () -> action.writeItem(item), writeMode);
+            assertThrows(CopybotException.class, () -> action.write(item, WriteContext.newRun()), writeMode);
             assertTrue(Files.isDirectory(target), writeMode);
             try (var left = Files.list(target.getParent())) {
                 assertEquals(List.of(target), left.toList(), writeMode + ": no temporary file left");

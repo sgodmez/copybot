@@ -25,6 +25,8 @@ import static java.lang.foreign.ValueLayout.JAVA_INT;
  */
 final class WindowsDiskProbe implements DiskProbe {
 
+    private static final System.Logger LOG = System.getLogger(WindowsDiskProbe.class.getName());
+
     private static final int NO_ACCESS = 0;
     private static final int FILE_SHARE_READ_WRITE = 0x1 | 0x2;
     private static final int OPEN_EXISTING = 3;
@@ -77,7 +79,11 @@ final class WindowsDiskProbe implements DiskProbe {
     public String unreachableId(Path root) {
         try (Arena arena = Arena.ofConfined()) {
             return shareId(arena, root.toString());
+        } catch (VirtualMachineError e) {
+            throw e;
         } catch (Throwable t) {
+            // the share behind a mapped letter stays unknown: the letter itself names the resource
+            LOG.log(System.Logger.Level.WARNING, "cannot tell the share behind " + root, t);
             return share(root.toString());
         }
     }

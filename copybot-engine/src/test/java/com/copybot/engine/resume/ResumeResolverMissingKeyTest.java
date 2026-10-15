@@ -5,6 +5,8 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -36,16 +38,13 @@ public class ResumeResolverMissingKeyTest {
         }
 
         @Override
-        public void writeItem(WorkItem workItem) {
+        public WriteResult write(WorkItem workItem, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override
         public Optional<Path> resolveTarget(WorkItem workItem) {
             return Optional.of(target.apply(workItem));
-        }
-
-        @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
         }
 
         @Override

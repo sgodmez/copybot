@@ -1,6 +1,7 @@
 package com.copybot.engine.resume;
 
 import com.copybot.exception.CopybotException;
+import com.copybot.utils.AtomicFiles;
 import com.copybot.utils.GsonUtil;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -8,10 +9,8 @@ import com.google.gson.JsonParser;
 import com.google.gson.JsonParseException;
 
 import java.io.IOException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Optional;
@@ -75,28 +74,21 @@ public final class ResumeStateStore {
         return value.getAsString();
     }
 
-    /** Writes a temporary file in the same directory then moves it over the state file. */
+    /**
+     * Writes the cursor through a temporary file of the same directory, flushed to the disk then moved over the
+     * state file ({@link AtomicFiles}): a crash leaves the previous cursor or the new one.
+     *
+     * @throws CopybotException resume.state.write-error, the state file left as it was
+     */
     public void writeCursor(ItemKey cursor) {
         JsonObject c = new JsonObject();
         c.addProperty("date", cursor.date().toString());
         c.addProperty("name", cursor.name());
         JsonObject root = new JsonObject();
         root.add("cursor", c);
-
-        Path temp = stateFile.resolveSibling(stateFile.getFileName() + ".tmp");
         try {
-            Files.writeString(temp, GsonUtil.getGson().toJson(root));
-            try {
-                Files.move(temp, stateFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temp, stateFile, StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicFiles.write(stateFile, GsonUtil.getGson().toJson(root));
         } catch (IOException e) {
-            try {
-                Files.deleteIfExists(temp);
-            } catch (IOException ignored) {
-                // best effort: the original error is the one worth reporting
-            }
             throw CopybotException.ofResource(e, "resume.state.write-error", stateFile.toAbsolutePath());
         }
     }

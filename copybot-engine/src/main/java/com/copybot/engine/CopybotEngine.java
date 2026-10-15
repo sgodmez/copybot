@@ -59,6 +59,8 @@ import java.util.function.Supplier;
  */
 public final class CopybotEngine implements AutoCloseable {
 
+    private static final System.Logger LOGGER = System.getLogger(CopybotEngine.class.getName());
+
     /** Best-effort grace period given to a cancelled pipeline to release its resources. */
     private static final long SHUTDOWN_AWAIT_SECONDS = 5;
 
@@ -160,7 +162,9 @@ public final class CopybotEngine implements AutoCloseable {
                     }
                 }
             } catch (RuntimeException e) {
-                // this step tells nothing: the others still do
+                // this step tells nothing (plugin missing, invalid configuration): the others still do; the run
+                // reports the failure when it resolves the step
+                LOGGER.log(System.Logger.Level.DEBUG, "no paths for the step " + step.getDisplayName(), e);
             }
         }
     }
@@ -288,8 +292,9 @@ public final class CopybotEngine implements AutoCloseable {
      * @param watcher optional progress observer, invoked from a background thread, at most ~10 times
      *                per second (notifications are coalesced, so the observer sees the latest state
      *                rather than every transition) plus one terminal notification at the end of each
-     *                phase. Exceptions it throws are swallowed. It must not call {@link #close()} nor any
-     *                other blocking engine operation (the operation notifying it would wait for itself).
+     *                phase. Exceptions it throws are ignored (the first one logged). It must not call
+     *                {@link #close()} nor any other blocking engine operation (the operation notifying it would
+     *                wait for itself).
      * @throws IllegalStateException when another operation is active or the engine is closed
      * @throws CopybotException      when the pipeline file is missing or invalid, or its resume mode unknown
      */
@@ -465,11 +470,9 @@ public final class CopybotEngine implements AutoCloseable {
                 PipelineState state = mainExecutor.getState();
                 state.recordFailureIfAbsent(e);
                 PipelineStatus status = state.getStatus();
-                boolean terminal = status == PipelineStatus.SUCCESS || status == PipelineStatus.ERROR
-                        || status == PipelineStatus.CANCELLED;
                 if (mainExecutor.isCancelRequested()) {
                     // a failure while cancelling is a consequence of the cancel: never ERROR, but always terminal
-                    if (!terminal) {
+                    if (!status.isTerminal()) {
                         state.setStatus(PipelineStatus.CANCELLED);
                     }
                 } else if (status != PipelineStatus.CANCELLED) {
@@ -528,8 +531,8 @@ public final class CopybotEngine implements AutoCloseable {
             throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
         }
         // before Gson: its enum adapter may fail on a non-string mode, which would read as "not a JSON"
-        checkResumeModeType(tree);
         JsonElement resume = tree.isJsonObject() ? tree.getAsJsonObject().get("resume") : null;
+        checkEnumType(resume, "mode", "resume.mode.unknown");
         checkEnumType(tree, "execution", "execution.unknown");
         checkEnumType(tree, "conflictCheck", "conflict-check.unknown");
         checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
@@ -543,7 +546,8 @@ public final class CopybotEngine implements AutoCloseable {
         if (pipelineConfig == null) { // empty file
             throw CopybotException.ofResource("pipeline.not-json", pipelinePath);
         }
-        checkResumeModeName(tree, pipelineConfig);
+        checkEnumName(resume, "mode", pipelineConfig.resume() == null ? null : pipelineConfig.resume().mode(),
+                "resume.mode.unknown");
         checkEnumName(tree, "execution", pipelineConfig.execution(), "execution.unknown");
         checkEnumName(tree, "conflictCheck", pipelineConfig.conflictCheck(), "conflict-check.unknown");
         checkEnumName(resume, "destinationCheck",
@@ -580,36 +584,6 @@ public final class CopybotEngine implements AutoCloseable {
             throw CopybotException.ofResource(resourceKey,
                     value.isJsonPrimitive() ? value.getAsString() : value.toString());
         }
-    }
-
-    /** A present, non-null resume mode that is not a string (number, boolean, object, array) is unknown. */
-    private static void checkResumeModeType(JsonElement tree) {
-        JsonElement mode = resumeMode(tree);
-        if (mode == null || mode.isJsonNull() || mode.isJsonPrimitive() && mode.getAsJsonPrimitive().isString()) {
-            return;
-        }
-        throw CopybotException.ofResource("resume.mode.unknown",
-                mode.isJsonPrimitive() ? mode.getAsString() : mode.toString());
-    }
-
-    /** Gson maps an unknown enum name to null, which would silently mean the default mode. */
-    private static void checkResumeModeName(JsonElement tree, PipelineConfig pipelineConfig) {
-        if (pipelineConfig.resume() == null || pipelineConfig.resume().mode() != null) {
-            return;
-        }
-        JsonElement mode = resumeMode(tree);
-        if (mode != null && mode.isJsonPrimitive() && mode.getAsJsonPrimitive().isString()) {
-            throw CopybotException.ofResource("resume.mode.unknown", mode.getAsString());
-        }
-    }
-
-    /** The raw {@code resume.mode} element of the pipeline tree, null when absent. */
-    private static JsonElement resumeMode(JsonElement tree) {
-        if (!tree.isJsonObject()) {
-            return null;
-        }
-        JsonElement resume = tree.getAsJsonObject().get("resume");
-        return resume != null && resume.isJsonObject() ? resume.getAsJsonObject().get("mode") : null;
     }
 
     private static ResumeContext resumeContext(Path pipelinePath, PipelineConfig pipelineConfig) {

@@ -1,6 +1,7 @@
 package com.copybot.config;
 
 import com.copybot.exception.CopybotException;
+import com.copybot.utils.AtomicFiles;
 import com.copybot.utils.GsonUtil;
 import com.copybot.utils.JsonTexts;
 import com.google.gson.Gson;
@@ -11,10 +12,8 @@ import com.google.gson.JsonParser;
 
 import java.io.IOException;
 import java.nio.charset.CharacterCodingException;
-import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -115,28 +114,13 @@ public final class ConfigFiles {
         if (original.contains("\r\n")) {
             text = text.replace("\r\n", "\n").replace("\n", "\r\n");
         }
-        Path temp = null;
         try {
             if (!Files.isWritable(configFile)) {
                 throw new IOException(configFile + " is read-only");
             }
-            temp = Files.createTempFile(configFile.toAbsolutePath().getParent(), "config", ".tmp");
-            Files.writeString(temp, text);
-            try {
-                Files.move(temp, configFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException e) {
-                Files.move(temp, configFile, StandardCopyOption.REPLACE_EXISTING);
-            }
+            AtomicFiles.write(configFile, text); // flushed to the disk, then moved over the configuration
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "config.write-failed", configFile, e.getMessage());
-        } finally {
-            if (temp != null) {
-                try {
-                    Files.deleteIfExists(temp);
-                } catch (IOException ignored) {
-                    // best effort: a leftover .tmp next to the configuration is harmless
-                }
-            }
         }
     }
 

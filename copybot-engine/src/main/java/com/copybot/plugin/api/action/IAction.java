@@ -8,26 +8,58 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Consumer;
 
+/**
+ * An action of a plugin, one step of a pipeline. The engine creates one instance per step and per pipeline: it
+ * calls {@link #setPlugin}, then {@link #loadConfig}, then uses the instance for every item of the step,
+ * <em>concurrently</em> (one virtual thread per item): the per-item methods must be thread-safe.
+ *
+ * <h2>Lifecycle</h2>
+ * A pipeline runs in phases: the preparation lists the files and runs the analyse steps, the execution runs the
+ * steps after them (process and out); a run without preparation (the CLI without resume, the streaming run) is a
+ * single phase running every step; the analysis of files deferred by a resume point is a phase of its own. In
+ * each phase:
+ * <ul>
+ *     <li>{@link #beforeAll} is called once, on the thread running the phase, before the first item, for every
+ *     action the phase may run (an IN action before it lists);</li>
+ *     <li>{@link #beforeEach} and {@link #afterEach} are called around each step of each item, on the item's
+ *     thread ({@link IInAction}: around nothing, it has no item);</li>
+ *     <li>{@link #afterAll} is called once, after the last item of the phase, whatever its outcome (cancelled or
+ *     failed included), when {@link #beforeAll} returned.</li>
+ * </ul>
+ * A failure of {@link #beforeAll} fails the phase: the pipeline ends ERROR with the cause and nothing more runs (the
+ * analysis of deferred files: the files to analyse end ERROR with it, the plan stays prepared). A failure of
+ * {@link #beforeEach} or {@link #afterEach} fails the item, like a failure of the step. A failure of
+ * {@link #afterAll} after a normal phase fails the pipeline like a failure of {@link #beforeAll} (after a stopped or
+ * failed phase it is logged and kept as the cause when there is none yet; after the analysis of deferred files it
+ * is only logged). The dry runs, the target checks and the
+ * editor's sample call none of them.
+ */
 public interface IAction {
 
     default void loadConfig(JsonElement config) {
         // nothing by default
     }
 
+    /** Once per phase, before its first item (see the lifecycle above). */
     default void beforeAll() {
         // nothing by default
     }
 
+    /** Before each step of each item, on the item's thread (see the lifecycle above). */
     default void beforeEach(WorkItem item) {
         // nothing by default
     }
 
+    /**
+     * After each step of each item whose {@link #beforeEach} returned, failed or not, on the item's thread; the
+     * item is the one handed to {@link #beforeEach} (a process step may replace it).
+     */
     default void afterEach(WorkItem item) {
         // nothing by default
     }
 
+    /** Once per phase, after its last item, when {@link #beforeAll} returned (see the lifecycle above). */
     default void afterAll() {
         // nothing by default
     }
@@ -67,11 +99,12 @@ public interface IAction {
         return Optional.empty();
     }
 
-    void setStatusWatcher(Consumer<WorkStatus> watcher);
-
     /**
-     * Called at start to chain action with its plugin.
+     * Called by the engine right after it created the action, before {@link #loadConfig}: chains the action with
+     * its plugin (e.g. for its resource bundle, see {@link AbstractAction#getResourceBundle()}). Nothing by default.
      */
-    void setPlugin(IPlugin plugin);
+    default void setPlugin(IPlugin plugin) {
+        // nothing by default
+    }
 
 }

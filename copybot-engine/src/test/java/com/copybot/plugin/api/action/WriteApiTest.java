@@ -1,6 +1,5 @@
 package com.copybot.plugin.api.action;
 
-import com.copybot.plugin.api.definition.IPlugin;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -9,45 +8,60 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The plugin API of the safe write (spec safe-write §6): existing out actions keep working unchanged. */
+/** The plugin API of the safe write (spec safe-write §6). */
 public class WriteApiTest {
 
     @TempDir
     Path tempDir;
 
-    /** An out action written before write(item, context) existed: it only implements writeItem. */
-    static final class LegacyOut implements IOutAction {
+    /** The smallest out action: only write, the rest by default. */
+    static final class MinimalOut implements IOutAction {
         final List<WorkItem> written = new ArrayList<>();
 
         @Override
-        public void writeItem(WorkItem workItem) {
+        public WriteResult write(WorkItem workItem, WriteContext context) {
             written.add(workItem);
+            return WriteResult.written(null);
         }
 
-        @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
-        public void setPlugin(IPlugin plugin) {
-        }
     }
 
     @Test
-    public void theDefaultWriteCallsWriteItemAndReportsWritten() throws IOException {
-        LegacyOut out = new LegacyOut();
+    public void anOutActionNeedsOnlyWrite() throws IOException {
+        MinimalOut out = new MinimalOut();
         WorkItem item = new WorkItem(Files.createFile(tempDir.resolve("a.jpg")));
 
         WriteResult result = out.write(item, WriteContext.newRun());
 
         assertEquals(List.of(item), out.written);
-        assertEquals(WriteResult.Outcome.WRITTEN, result.outcome());
-        assertNull(result.target(), "a legacy action cannot tell its target");
         assertFalse(result.isSkipped());
+        assertEquals(java.util.Optional.empty(), out.resolveTarget(item));
+        assertEquals(TargetCheck.UNKNOWN, out.checkTarget(item, true));
+    }
+
+    @Test
+    public void aContextWithoutProgressReportsIntoTheVoid() {
+        WriteContext context = new WriteContext("run");
+
+        assertSame(ItemProgress.NONE, context.progress());
+        assertSame(ItemProgress.NONE, new WriteContext("run", null).progress());
+        context.progress().percent(50); // never throws
+    }
+
+    @Test
+    public void theProgressOfAnItemKeepsTheRun() {
+        List<WorkStatus> reports = new ArrayList<>();
+        WriteContext run = WriteContext.newRun();
+
+        WriteContext item = run.withProgress(reports::add);
+        item.progress().report(new WorkStatus("copy", -1));
+        item.progress().percent(42);
+
+        assertEquals(run.runId(), item.runId());
+        assertEquals(List.of(new WorkStatus("copy", -1), new WorkStatus(null, 42)), reports);
     }
 
     @Test
@@ -80,6 +94,6 @@ public class WriteApiTest {
 
     @Test
     public void anActionHasNoConfigWarningsByDefault() {
-        assertEquals(List.of(), new LegacyOut().configWarnings());
+        assertEquals(List.of(), new MinimalOut().configWarnings());
     }
 }

@@ -13,6 +13,8 @@ import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -560,7 +562,7 @@ public class CopybotEngineTest {
         final AtomicBoolean unwound = new AtomicBoolean();
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             entered.countDown();
             try {
                 new CountDownLatch(1).await(20, TimeUnit.SECONDS);
@@ -573,6 +575,7 @@ public class CopybotEngineTest {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted", e);
             }
+            return WriteResult.written(null);
         }
     }
 
@@ -581,7 +584,8 @@ public class CopybotEngineTest {
         final CountDownLatch entered = new CountDownLatch(1);
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override

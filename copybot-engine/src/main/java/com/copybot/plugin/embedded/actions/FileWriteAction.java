@@ -3,6 +3,7 @@ package com.copybot.plugin.embedded.actions;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractActionWithConfig;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.ItemProgress;
 import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
@@ -22,7 +23,6 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Optional;
@@ -76,12 +76,6 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         return Set.of(Path.of(settings.outPattern().staticPrefix()));
     }
 
-    /** Direct use outside the engine: a write under a new run id; a skipped item simply returns. */
-    @Override
-    public void writeItem(WorkItem workItem) {
-        write(workItem, WriteContext.newRun());
-    }
-
     /**
      * Items resolving to the same target (e.g. 100CANON/IMG_0001.JPG and 101CANON/IMG_0001.JPG) are
      * serialized: the second one waits for the first to be written, then finds "exists, different" and
@@ -116,7 +110,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             throw CopybotException.ofResource(e, "write.error.io-detail", target, detail(e));
         }
         try {
-            return writeResolvingAgain(workItem, target, context.runId());
+            return writeResolvingAgain(workItem, target, context);
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "write.error.io-detail", target, detail(e));
         } finally {
@@ -176,10 +170,10 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         }
     }
 
-    private WriteResult writeResolvingAgain(WorkItem workItem, Path target, String runId) throws IOException {
+    private WriteResult writeResolvingAgain(WorkItem workItem, Path target, WriteContext context) throws IOException {
         for (int attempt = 1; ; attempt++) {
             try {
-                return doWrite(workItem, target, runId);
+                return doWrite(workItem, target, context);
             } catch (TargetTaken e) {
                 if (attempt >= TARGET_ATTEMPTS) {
                     throw (FileAlreadyExistsException) e.getCause();
@@ -283,8 +277,9 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         return CopybotException.ofResource("write.pattern.missing-key", String.join(", ", resolution.missing()), name);
     }
 
-    private WriteResult doWrite(WorkItem workItem, Path target, String runId) throws IOException {
-        updateStatus(new WorkStatus("Copy file " + workItem.getSourceLocationDisplay(), -1));
+    private WriteResult doWrite(WorkItem workItem, Path target, WriteContext context) throws IOException {
+        ItemProgress progress = context.progress();
+        progress.report(new WorkStatus("Copy file " + workItem.getSourceLocationDisplay(), -1));
 
         ConflictResolver.Decision decision = conflicts.resolve(workItem, target);
         if (decision.isSkip()) {
@@ -298,11 +293,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
 
         SafeFileWriter.Written written;
         try {
-            if (canBeMoved(workItem, decision.target())) {
-                move(workItem, decision);
-                return WriteResult.written(decision.target());
-            }
-            written = writer.write(workItem, decision.target(), decision.replaceExisting(), runId, this::updatePercent);
+            written = writer.write(workItem, decision.target(), decision.replaceExisting(), context.runId(), progress::percent);
         } catch (FileAlreadyExistsException e) {
             if (isFile(e, decision.target())) {
                 throw new TargetTaken(e); // resolved again; a temporary file name collision is not
@@ -314,20 +305,6 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         return WriteResult.written(decision.target());
     }
 
-    /** The existing fast path (temporary source or "delete after", same file system): not rewritten, not hashed. */
-    private static void move(WorkItem workItem, ConflictResolver.Decision decision) throws IOException {
-        Path parent = decision.target().toAbsolutePath().getParent();
-        if (parent != null) {
-            Files.createDirectories(parent);
-        }
-        if (decision.replaceExisting()) {
-            Files.move(workItem.getLocalLocation(), decision.target(), StandardCopyOption.REPLACE_EXISTING);
-        } else {
-            Files.move(workItem.getLocalLocation(), decision.target());
-        }
-        workItem.setDeleted(!workItem.isTempFile());
-    }
-
     /**
      * deleteSource: once written and verified, or already at the destination and compared with fullHash.
      * Local sources only: a URL source (or its temporary copy) is kept, without error.
@@ -335,7 +312,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
      * @throws CopybotException write.delete-source.failed
      */
     private void deleteSource(WorkItem workItem, Path target) {
-        if (!settings.deleteSource() || workItem.isDeleted() || !workItem.isLocal() || workItem.isTempFile()) {
+        if (!settings.deleteSource() || workItem.isDeleted() || !workItem.isLocal()) {
             return; // nothing asked, already gone, or not an original local file Copybot could delete
         }
         Path source = workItem.getLocalLocation();
@@ -362,14 +339,4 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             return false;
         }
     }
-
-    private static boolean canBeMoved(WorkItem workItem, Path outPath) {
-        // can be moved if either is a temp file or the original file with delete option enabled
-        if ((workItem.isLocal() && workItem.isDeleteAfterCompletion()) || workItem.isTempFile()) {
-            // can be moved if on the same disk
-            return workItem.getLocalLocation().getFileSystem().provider() == outPath.getFileSystem().provider();
-        }
-        return false;
-    }
-
 }

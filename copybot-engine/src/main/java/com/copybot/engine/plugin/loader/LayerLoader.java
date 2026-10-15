@@ -12,8 +12,10 @@ import java.lang.module.ModuleDescriptor;
 import java.lang.module.ModuleFinder;
 import java.lang.module.ModuleReference;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -71,9 +73,15 @@ public final class LayerLoader {
                     mainModules.stream().map(ModuleDescriptor::name).sorted().collect(Collectors.joining(", ")));
             return;
         }
-        // TODO vérifier la version de com.copybot.plugin.api
-
         mainModuleDescriptor = mainModules.get(0);
+
+        String engineVersion = VersionUtil.engineVersion().orElse(null);
+        Optional<String> builtFor = incompatibleApi(moduleDescriptors, VersionUtil.engineModuleName(), engineVersion);
+        if (builtFor.isPresent()) {
+            // refused now, with the reason, rather than a LinkageError when an action runs
+            error = ResourcesEngine.getString("plugin.load.api-incompatible", builtFor.get(), engineVersion);
+            return;
+        }
 
         requires = moduleDescriptors.stream()
                 .flatMap(d -> d.requires().stream())
@@ -88,6 +96,30 @@ public final class LayerLoader {
 
         // remove internally provided requirements
         requires.removeIf(req -> moduleDescriptors.stream().anyMatch(m -> VersionUtil.moduleCompatible(m, req)));
+    }
+
+    /**
+     * The plugin API version a module of the plugin was built against, when this engine cannot run it. A plugin
+     * declares it without doing anything: javac records the version of the engine module it compiled against in
+     * its {@code requires com.copybot.engine} (the engine module holds the plugin API, its version is the API
+     * version). Compatible: the same major version, a minor version at most the engine's
+     * ({@link VersionUtil#isCompatible}).
+     *
+     * @param engineModule  the name of the engine module, null when the engine runs from the class path
+     * @param engineVersion the version of the engine, null when it has none
+     * @return empty when compatible, or when a version is unknown (nothing recorded, engine without version)
+     */
+    static Optional<String> incompatibleApi(Collection<ModuleDescriptor> modules, String engineModule, String engineVersion) {
+        if (engineModule == null || engineVersion == null) {
+            return Optional.empty();
+        }
+        return modules.stream()
+                .flatMap(d -> d.requires().stream())
+                .filter(r -> r.name().equals(engineModule))
+                .flatMap(r -> r.compiledVersion().stream())
+                .map(Object::toString)
+                .filter(builtFor -> !VersionUtil.isCompatible(engineVersion, builtFor, false))
+                .findFirst();
     }
 
     public boolean canBeLoaded() {

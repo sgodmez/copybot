@@ -16,6 +16,8 @@ import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -43,10 +45,6 @@ final class ControlFakes {
     }
 
     abstract static class FakeAction implements IAction {
-        @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
         @Override
         public void setPlugin(IPlugin plugin) {
         }
@@ -128,7 +126,7 @@ final class ControlFakes {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             if (started.incrementAndGet() == 1) {
                 firstEntered.countDown();
                 if (gate != null) {
@@ -140,6 +138,7 @@ final class ControlFakes {
                     }
                 }
             }
+            return WriteResult.written(null);
         }
     }
 

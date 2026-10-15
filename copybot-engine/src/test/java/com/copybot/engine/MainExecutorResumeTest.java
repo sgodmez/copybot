@@ -35,10 +35,6 @@ public class MainExecutorResumeTest {
 
     abstract static class FakeAction implements IAction {
         @Override
-        public void setStatusWatcher(Consumer<WorkStatus> watcher) {
-        }
-
-        @Override
         public void setPlugin(IPlugin plugin) {
         }
     }
@@ -84,11 +80,12 @@ public class MainExecutorResumeTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             if (item.getNameDisplay().equals(failOn)) {
                 throw new IllegalStateException("write failed");
             }
             written.add(item.getNameDisplay());
+            return WriteResult.written(null);
         }
     }
 
@@ -494,8 +491,9 @@ public class MainExecutorResumeTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             written.add(item.getNameDisplay());
+            return WriteResult.written(null);
         }
 
         @Override
@@ -699,7 +697,7 @@ public class MainExecutorResumeTest {
         final CountDownLatch entered = new CountDownLatch(1);
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             entered.countDown();
             try {
                 new CountDownLatch(1).await();
@@ -707,6 +705,7 @@ public class MainExecutorResumeTest {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("interrupted");
             }
+            return WriteResult.written(null);
         }
     }
 
@@ -898,11 +897,6 @@ public class MainExecutorResumeTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
-            throw new AssertionError("the engine calls write(item, context)");
-        }
-
-        @Override
         public WriteResult write(WorkItem item, WriteContext context) {
             runIds.add(context.runId());
             if (item.getNameDisplay().equals(skipOn)) {
@@ -1067,10 +1061,6 @@ public class MainExecutorResumeTest {
 
     /** An out step whose write returns null: a plugin that has nothing to report. */
     static final class NullResultOut extends FakeAction implements IOutAction {
-        @Override
-        public void writeItem(WorkItem item) {
-        }
-
         @Override
         public WriteResult write(WorkItem item, WriteContext context) {
             return null;

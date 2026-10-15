@@ -125,12 +125,14 @@ public class CopybotExitCodeTest {
 
     @Test
     public void aCursorWriteFailureExitsOne() throws IOException {
-        Files.createDirectories(tempDir.resolve("sd.state.json.tmp")); // the temporary state file cannot be written
+        // a state file name of 251 characters: read fine, but its temporary file (a longer name) cannot be created
+        String base = "sd" + "x".repeat(238);
+        Path pipeline = Files.move(pipeline("", STATE), tempDir.resolve(base + ".json"));
 
-        String[] result = cli("-p=" + pipeline("", STATE), CONFIG);
+        String[] result = cli("-p=" + pipeline, CONFIG);
 
         assertEquals("1", result[0]);
-        assertTrue(result[2].contains("sd.state.json"), result[2]);
+        assertTrue(result[2].contains(base + ".state.json"), result[2]);
     }
 
     @Test

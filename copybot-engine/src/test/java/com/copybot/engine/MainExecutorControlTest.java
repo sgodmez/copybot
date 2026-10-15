@@ -14,6 +14,8 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WriteResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -481,7 +483,7 @@ public class MainExecutorControlTest {
         final AtomicBoolean interrupted = new AtomicBoolean();
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
             entered.countDown();
             try {
                 new CountDownLatch(1).await(20, TimeUnit.SECONDS);
@@ -503,7 +505,8 @@ public class MainExecutorControlTest {
         }
 
         @Override
-        public void writeItem(WorkItem item) {
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
         }
 
         @Override
