@@ -5,6 +5,8 @@ import com.copybot.plugin.api.action.WorkItem;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -14,12 +16,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.DosFileAttributeView;
 import java.util.ArrayList;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** file.read: recursive, include / exclude, hidden files (spec safe-write §7). */
 public class FileReadActionTest {
@@ -114,8 +114,9 @@ public class FileReadActionTest {
     }
 
     @Test
+    // elsewhere the walk sees no DOS attributes (Linux only emulates them in extended attributes): a leading dot hides
+    @EnabledOnOs(OS.WINDOWS)
     public void theWindowsHiddenAndSystemAttributesHideAFile() throws IOException {
-        assumeTrue(Files.getFileStore(card).supportsFileAttributeView(DosFileAttributeView.class), "a DOS file system");
         Files.setAttribute(file("hidden.jpg"), "dos:hidden", true);
         Files.setAttribute(file("system.jpg"), "dos:system", true);
 
@@ -125,8 +126,9 @@ public class FileReadActionTest {
     }
 
     @Test
+    // elsewhere the walk sees no DOS attributes (Linux only emulates them in extended attributes): a leading dot hides
+    @EnabledOnOs(OS.WINDOWS)
     public void aWindowsHiddenFolderHidesItsWholeSubtree() throws IOException {
-        assumeTrue(Files.getFileStore(card).supportsFileAttributeView(DosFileAttributeView.class), "a DOS file system");
         Files.setAttribute(card.resolve("sub/deep"), "dos:hidden", true);
 
         assertFalse(list("").contains("sub/deep/d.nef"));
