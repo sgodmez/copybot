@@ -25,9 +25,6 @@ import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.GsonUtil;
-import com.google.gson.JsonElement;
-import com.google.gson.JsonParseException;
-import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 
 import java.io.IOException;
@@ -138,7 +135,7 @@ public final class CopybotEngine implements AutoCloseable {
      * @throws CopybotException pipeline.not-found / pipeline.not-json
      */
     public List<Path> pipelinePaths(Path pipelinePath) {
-        PipelineConfig pipeline = readPipeline(pipelinePath);
+        PipelineConfig pipeline = PipelineReader.read(pipelinePath);
         Set<Path> paths = new LinkedHashSet<>();
         addTouchedPaths(paths, pipeline.inSteps(), IInAction.class);
         addTouchedPaths(paths, pipeline.analyseSteps(), IAnalyzeAction.class);
@@ -213,7 +210,7 @@ public final class CopybotEngine implements AutoCloseable {
     public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started, ResumePoint chosen) {
         begin();
         MainExecutor mainExecutor = endOnFailure(() -> {
-            PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            PipelineConfig pipelineConfig = PipelineReader.read(pipelinePath);
             PipelineChecks.requirePreparable(pipelineConfig);
             MainExecutor prepared = new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
             prepared.chooseResumePoint(chosen);
@@ -311,7 +308,7 @@ public final class CopybotEngine implements AutoCloseable {
     public Execution run(Path pipelinePath, Consumer<PipelineState> watcher, ResumePoint chosen) {
         begin();
         return endOnFailure(() -> {
-            PipelineConfig pipelineConfig = readPipeline(pipelinePath);
+            PipelineConfig pipelineConfig = PipelineReader.read(pipelinePath);
             PipelineChecks.requireExecutable(pipelineConfig);
             ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE && chosen == null
                     ? null
@@ -518,72 +515,6 @@ public final class CopybotEngine implements AutoCloseable {
 
     private ResourceRegistry newRegistry() {
         return new ResourceRegistry(ResourceSettings.from(config));
-    }
-
-    private static PipelineConfig readPipeline(Path pipelinePath) {
-        if (!Files.isReadable(pipelinePath)) {
-            throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
-        }
-        JsonElement tree;
-        try (var reader = Files.newBufferedReader(pipelinePath)) {
-            tree = JsonParser.parseReader(reader);
-        } catch (IOException | JsonParseException e) {
-            throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
-        }
-        // before Gson: its enum adapter may fail on a non-string mode, which would read as "not a JSON"
-        JsonElement resume = tree.isJsonObject() ? tree.getAsJsonObject().get("resume") : null;
-        checkEnumType(resume, "mode", "resume.mode.unknown");
-        checkEnumType(tree, "execution", "execution.unknown");
-        checkEnumType(tree, "conflictCheck", "conflict-check.unknown");
-        checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
-        checkEnumType(resume, "destinationMatch", "resume.destination-match.unknown");
-        PipelineConfig pipelineConfig;
-        try {
-            pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
-        } catch (JsonParseException e) {
-            throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
-        }
-        if (pipelineConfig == null) { // empty file
-            throw CopybotException.ofResource("pipeline.not-json", pipelinePath);
-        }
-        checkEnumName(resume, "mode", pipelineConfig.resume() == null ? null : pipelineConfig.resume().mode(),
-                "resume.mode.unknown");
-        checkEnumName(tree, "execution", pipelineConfig.execution(), "execution.unknown");
-        checkEnumName(tree, "conflictCheck", pipelineConfig.conflictCheck(), "conflict-check.unknown");
-        checkEnumName(resume, "destinationCheck",
-                pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationCheck(),
-                "resume.destination-check.unknown");
-        checkEnumName(resume, "destinationMatch",
-                pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationMatch(),
-                "resume.destination-match.unknown");
-        return pipelineConfig;
-    }
-
-    /** Before Gson, like the resume mode: a present, non-null member that is not a string is an unknown name. */
-    private static void checkEnumType(JsonElement object, String member, String resourceKey) {
-        if (object == null || !object.isJsonObject()) {
-            return;
-        }
-        JsonElement value = object.getAsJsonObject().get(member);
-        if (value == null || value.isJsonNull() || value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()) {
-            return;
-        }
-        throw CopybotException.ofResource(resourceKey, value.isJsonPrimitive() ? value.getAsString() : value.toString());
-    }
-
-    /**
-     * A present, non-null member that Gson read as null (an unknown name, or not a string: spec execution-mode §1)
-     * would silently mean the default.
-     */
-    private static void checkEnumName(JsonElement object, String member, Object read, String resourceKey) {
-        if (read != null || object == null || !object.isJsonObject()) {
-            return;
-        }
-        JsonElement value = object.getAsJsonObject().get(member);
-        if (value != null && !value.isJsonNull()) {
-            throw CopybotException.ofResource(resourceKey,
-                    value.isJsonPrimitive() ? value.getAsString() : value.toString());
-        }
     }
 
     private static ResumeContext resumeContext(Path pipelinePath, PipelineConfig pipelineConfig) {

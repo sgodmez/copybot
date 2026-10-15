@@ -18,22 +18,16 @@ import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.engine.resume.ResumeSource;
 import com.copybot.exception.CopybotException;
-import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.IAction;
-import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
-import com.copybot.plugin.api.action.ItemProgress;
-import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
-import com.copybot.plugin.api.action.WriteResult;
 import com.copybot.resources.ResourcesEngine;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -44,10 +38,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
@@ -55,25 +46,18 @@ import java.util.function.Consumer;
  * Runs one pipeline: one virtual thread per listing and per work item,
  * concurrency bounded by the ResourceRegistry (see the design spec).
  *
- * <p>Completion is tracked with a plain counter ({@code pendingTasks}) guarded by
- * {@code completionLock}, not a {@link java.util.concurrent.Phaser}: a Phaser's registered-parties
- * count is capped at 65534, and in two-phase mode every listed item registers before any of them
- * can deregister (they all park on {@code listingGate.await()}), so a single listing beyond that
- * size would overflow it. Large listings (100k+ files) are an explicit use case of this project.
+ * <p>This class holds the phases (single-phase run, prepare, analysis of deferred items, execute) and their control
+ * (cancel, pause); the tasks of a phase are a {@link TaskGroup}, the steps of an item run in an {@link ItemRunner},
+ * the watcher is notified through a {@link CoalescingNotifier}.
  */
 public class MainExecutor implements Runnable {
 
-    private static final CopybotLogger LOG = CopybotLogger.getLogger(MainExecutor.class);
     private static final System.Logger LOGGER = System.getLogger(MainExecutor.class.getName());
 
-    /** Minimum delay between two watcher notifications (coalescing, see {@link #notifyWatcher()}). */
-    static final long WATCHER_PERIOD_MILLIS = 100;
-
-    /** Best-effort grace period given to in-flight tasks to unwind after a shutdown request. */
-    private static final long SHUTDOWN_AWAIT_SECONDS = 5;
+    /** Minimum delay between two watcher notifications (coalescing, see {@link CoalescingNotifier#changed()}). */
+    static final long WATCHER_PERIOD_MILLIS = CoalescingNotifier.PERIOD_MILLIS;
 
     private final PipelineConfig pipelineConfig;
-    private final Consumer<PipelineState> watcher;
     private final ResourceRegistry registry;
     private final PipelineState state;
 
@@ -86,7 +70,6 @@ public class MainExecutor implements Runnable {
     private List<PipelineStep<IInAction>> inSteps;
     /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
     private volatile List<PipelineStep<?>> itemSteps;
-    private boolean processWhileListing;
 
     /**
      * null: single-phase run without barrier nor resume (historical behaviour of run(), and {@link #stream()} without
@@ -100,26 +83,13 @@ public class MainExecutor implements Runnable {
     /** Exclusive end of the steps run by the items the listings emit: the barrier while preparing, all steps otherwise. */
     private volatile int phaseEnd;
 
-    /**
-     * False while preparing: an item then ends PENDING even when no step follows the barrier, so that the
-     * resume point decides whether it is selected (an item ended DONE would escape the resume point).
-     */
-    private volatile boolean finalPhase;
-
     /** Set once the configuration warnings are published: prepare() collects them, execute() keeps them. */
     private boolean warningsCollected;
 
-    /**
-     * While preparing, the process steps dry-run for each item as soon as it is analysed (null otherwise):
-     * the targets show up during the preparation, not only at its end.
-     */
-    private volatile List<PipelineStep<IProcessAction>> dryRunSteps;
     /** From the start of {@link #prepare()} until it returns, and during {@link #analyseDeferred()}. */
     private volatile boolean preparing;
     /** The skipped items to analyse too ({@link #requestAnalysis}). */
     private final Set<WorkItemExecution> requestedAnalysis = ConcurrentHashMap.newKeySet();
-    /** How far the plan checks the existing targets (spec conflict-check §1). */
-    private volatile ConflictCheck conflictCheck = ConflictCheck.QUICK;
     /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
     private boolean analysing;
     /** {@link #prepare()} runs and has not published PREPARED yet: {@link #cancelPreparation()} stops it. Guarded by phaseLock. */
@@ -168,18 +138,12 @@ public class MainExecutor implements Runnable {
     private ResumeProposal proposal;
     private List<WorkItemExecution> orderedItems = List.of();
 
-    private ExecutorService taskExecutor;
+    private final TaskGroup tasks = new TaskGroup();
+    private final CoalescingNotifier<PipelineState> notifier;
+    private final ItemRunner itemRunner;
+
     private CountDownLatch listingGate;
     private final AtomicBoolean listingFailed = new AtomicBoolean(false);
-
-    private final Object completionLock = new Object();
-    private long pendingTasks;
-
-    private final AtomicBoolean dirty = new AtomicBoolean(false);
-    /** The watcher failed once: logged, the next failures are not (it is called ten times a second). */
-    private final AtomicBoolean watcherFailureLogged = new AtomicBoolean(false);
-    private final Object watcherLock = new Object();
-    private volatile Thread notifier;
 
     /** Guards phaseThread, cancelInterruptSent and paused against the start and the end of a phase. */
     private final Object phaseLock = new Object();
@@ -206,12 +170,13 @@ public class MainExecutor implements Runnable {
     public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
                         ResumeContext resume) {
         this.pipelineConfig = pipelineConfig;
-        this.watcher = watcher;
         this.registry = registry;
         this.resume = resume;
-        this.conflictCheck = pipelineConfig.conflictCheckMode();
         this.state = new PipelineState();
         this.state.setRegistry(registry);
+        this.notifier = new CoalescingNotifier<>(watcher, state);
+        this.itemRunner = newItemRunner();
+        this.itemRunner.setConflictCheck(pipelineConfig.conflictCheckMode());
     }
 
     // visible for tests: runs with pre-resolved steps, bypassing PluginEngine, without barrier
@@ -225,15 +190,21 @@ public class MainExecutor implements Runnable {
                  boolean processWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry,
                  ResumeContext resume) {
         this.pipelineConfig = null;
-        this.watcher = watcher;
         this.registry = registry;
         this.resume = resume;
         this.inSteps = inSteps;
         this.itemSteps = itemSteps;
         this.barrierIndex = barrierIndex;
-        this.processWhileListing = processWhileListing;
         this.state = new PipelineState();
         this.state.setRegistry(registry);
+        this.notifier = new CoalescingNotifier<>(watcher, state);
+        this.itemRunner = newItemRunner();
+        this.itemRunner.setProcessWhileListing(processWhileListing);
+    }
+
+    private ItemRunner newItemRunner() {
+        return new ItemRunner(registry, state, tasks, notifier, writeContext, () -> itemSteps, this::findOutAction,
+                () -> cancelRequested);
     }
 
     /**
@@ -262,7 +233,7 @@ public class MainExecutor implements Runnable {
      */
     public void stream() {
         streaming = true;
-        processWhileListing = true;
+        itemRunner.setProcessWhileListing(true);
         runSinglePhase();
     }
 
@@ -377,7 +348,7 @@ public class MainExecutor implements Runnable {
         boolean byCancel;
         synchronized (phaseLock) { // cancel() interrupts under this lock: its interrupt is already delivered
             byCancel = cancelRequested;
-            // a later cancel() must not interrupt again: it would cut the grace period of shutdownTasks()
+            // a later cancel() must not interrupt again: it would cut the grace period of tasks.shutdown()
             // short, or wipe (in endPhase) the external interrupt restored below
             phaseThread = null;
         }
@@ -387,7 +358,7 @@ public class MainExecutor implements Runnable {
         if (cancelled) {
             state.setStatus(PipelineStatus.CANCELLED);
         }
-        shutdownTasks();
+        tasks.shutdown();
         if (!byCancel) {
             Thread.currentThread().interrupt();
         }
@@ -431,7 +402,7 @@ public class MainExecutor implements Runnable {
             beginActions(itemSteps);
             preparing = false;
             phaseEnd = itemSteps.size();
-            finalPhase = true;
+            itemRunner.setFinalPhase(true);
             runListings();
             endActions();
             commitPhase();
@@ -495,7 +466,7 @@ public class MainExecutor implements Runnable {
             all.addAll(warnings);
             state.setWarnings(all);
         }
-        notifyWatcher();
+        notifier.changed();
     }
 
     /**
@@ -525,8 +496,8 @@ public class MainExecutor implements Runnable {
             checkCancelled();
             resolveStepsIfNeeded();
             phaseEnd = barrierIndex;
-            finalPhase = false;
-            dryRunSteps = processSteps();
+            itemRunner.setFinalPhase(false);
+            itemRunner.setDryRunSteps(processSteps());
             resolver = new ResumeResolver(resume, findOutAction());
             ResumePoint chosen = chosenPoint;
             if (chosen != null) {
@@ -567,7 +538,7 @@ public class MainExecutor implements Runnable {
         } catch (RuntimeException | Error e) {
             onPhaseFailed(e, true);
         } finally {
-            dryRunSteps = null;
+            itemRunner.setDryRunSteps(null);
             listingPoint = null;
             analysisOnDemand = false;
             state.setListingInProgress(false);
@@ -691,20 +662,20 @@ public class MainExecutor implements Runnable {
         try {
             checkCancelled();
             phaseEnd = barrierIndex;
-            finalPhase = false;
-            dryRunSteps = processSteps();
+            itemRunner.setFinalPhase(false);
+            itemRunner.setDryRunSteps(processSteps());
             if (beginAnalysis(items)) {
                 for (WorkItemExecution exec : items) {
-                    submitItem(exec, 0, barrierIndex);
+                    itemRunner.submit(exec, 0, barrierIndex);
                 }
-                awaitCompletion();
+                tasks.awaitCompletion();
                 projectItems();
             }
         } catch (InterruptedException e) {
             stopAfterInterrupt(false); // the plan stays PREPARED
         } finally {
-            dryRunSteps = null;
-            shutdownTasks(); // every task is over before the cancel request is forgotten (runItem reads it)
+            itemRunner.setDryRunSteps(null);
+            tasks.shutdown(); // every task is over before the cancel request is forgotten (the item runner reads it)
             endActionsQuietly(false); // the plan stays as it was: a failure of afterAll is only logged
             skipped.forEach((exec, reason) -> {
                 if (exec.getStatus() != ItemStatus.ERROR) {
@@ -775,7 +746,7 @@ public class MainExecutor implements Runnable {
      */
     private boolean analyseNow(WorkItemExecution exec) throws InterruptedException {
         if (exec.isAnalysisDeferred()) {
-            runItem(exec, 0, barrierIndex);
+            itemRunner.run(exec, 0, barrierIndex);
             if (Thread.interrupted()) {
                 throw new InterruptedException("interrupted");
             }
@@ -796,10 +767,10 @@ public class MainExecutor implements Runnable {
         }
         for (WorkItemExecution exec : orderedItems) {
             if (exec.isAnalysisDeferred() && exec.getStatus() == ItemStatus.PENDING) {
-                submitItem(exec, 0, barrierIndex);
+                itemRunner.submit(exec, 0, barrierIndex);
             }
         }
-        awaitCompletion();
+        tasks.awaitCompletion();
         checkCancelled();
     }
 
@@ -816,7 +787,7 @@ public class MainExecutor implements Runnable {
             checkCancelled();
             if (exec.getStatus() != ItemStatus.ERROR && !exec.isAnalysisDeferred() && exec.getProjection() == null) {
                 exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
-                checkTarget(exec, registry.ticket());
+                itemRunner.checkTarget(exec, registry.ticket());
             }
         }
     }
@@ -876,17 +847,17 @@ public class MainExecutor implements Runnable {
         startPhase();
         try {
             checkCancelled();
-            finalPhase = true;
+            itemRunner.setFinalPhase(true);
             boolean analysesToo = orderedItems.stream()
                     .anyMatch(exec -> exec.getStatus() == ItemStatus.PENDING && exec.isAnalysisDeferred());
             beginActions(itemSteps.subList(analysesToo ? 0 : barrierIndex, itemSteps.size()));
             for (WorkItemExecution exec : orderedItems) {
                 if (exec.getStatus() == ItemStatus.PENDING) {
                     // an item skipped at the listing, selected again by a manual point, is analysed first
-                    submitItem(exec, exec.isAnalysisDeferred() ? 0 : barrierIndex, itemSteps.size());
+                    itemRunner.submit(exec, exec.isAnalysisDeferred() ? 0 : barrierIndex, itemSteps.size());
                 }
             }
-            awaitCompletion();
+            tasks.awaitCompletion();
             endActions();
             commitPhase(); // a cancelled run never writes the cursor, a later cancel never interrupts its write
             // The final status is published once, after the cursor save: a cursor write failure
@@ -933,7 +904,7 @@ public class MainExecutor implements Runnable {
                 exec.setError(e);
                 exec.markPrepared();
             }
-            notifyWatcher();
+            notifier.changed();
             return false;
         }
     }
@@ -976,7 +947,7 @@ public class MainExecutor implements Runnable {
         if (begunActions.isEmpty()) {
             return;
         }
-        shutdownTasks();
+        tasks.shutdown();
         try {
             endActions();
         } catch (RuntimeException | Error e) {
@@ -1034,19 +1005,20 @@ public class MainExecutor implements Runnable {
     /** Submits every listing and waits for them AND every item they emitted (including forked ones). */
     private void runListings() throws InterruptedException {
         listingGate = new CountDownLatch(inSteps.size());
+        itemRunner.setListingGate(listingGate);
         for (PipelineStep<IInAction> inStep : inSteps) {
-            submitTask(() -> runListing(inStep));
+            tasks.submit(() -> runListing(inStep));
         }
-        awaitCompletion();
+        tasks.awaitCompletion();
     }
 
     private void startPhase() {
         synchronized (phaseLock) {
             phaseThread = Thread.currentThread(); // what cancel() interrupts
         }
-        taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
-        startNotifier();
-        notifyWatcher();
+        tasks.open();
+        notifier.start();
+        notifier.changed();
     }
 
     private void endPhase() {
@@ -1063,8 +1035,8 @@ public class MainExecutor implements Runnable {
             // the interrupt came from cancel(): it must not leak to the caller of prepare() (e.g. a UI worker)
             Thread.interrupted();
         }
-        shutdownTasks();
-        stopNotifier(); // includes the final, guaranteed notification
+        tasks.shutdown();
+        notifier.stop(); // includes the final, guaranteed notification
     }
 
     /** The pipeline configuration, null for an executor built from pre-resolved steps. */
@@ -1110,69 +1082,6 @@ public class MainExecutor implements Runnable {
         return listingFailed.get() || anyItemFailed ? PipelineStatus.ERROR : PipelineStatus.SUCCESS;
     }
 
-    /**
-     * Interrupts whatever is still running ({@code shutdownNow}, not {@code shutdown}: threads parked
-     * in {@code acquireAll} would never wake up otherwise) and waits briefly for the tasks to unwind,
-     * so their {@code finally} blocks release their permits and close their streams before the caller
-     * (possibly the JVM) moves on. Idempotent and harmless once everything has completed.
-     */
-    private void shutdownTasks() {
-        if (taskExecutor == null) {
-            return;
-        }
-        taskExecutor.shutdownNow();
-        if (taskExecutor.isTerminated()) {
-            return;
-        }
-        try {
-            taskExecutor.awaitTermination(SHUTDOWN_AWAIT_SECONDS, TimeUnit.SECONDS);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    /**
-     * Registers one pending task, then submits it to the executor. Registration happens
-     * BEFORE submission (same discipline for every caller), so the pending count never drops
-     * to zero prematurely; if the submission itself throws (e.g. RejectedExecutionException),
-     * the registration is rolled back so {@link #awaitCompletion()} never hangs on a task that
-     * was never actually queued.
-     */
-    private void submitTask(Runnable task) {
-        synchronized (completionLock) {
-            pendingTasks++;
-        }
-        try {
-            taskExecutor.submit(() -> {
-                try {
-                    task.run();
-                } finally {
-                    completeTask();
-                }
-            });
-        } catch (RuntimeException e) {
-            completeTask();
-            throw e;
-        }
-    }
-
-    private void completeTask() {
-        synchronized (completionLock) {
-            pendingTasks--;
-            if (pendingTasks == 0) {
-                completionLock.notifyAll();
-            }
-        }
-    }
-
-    private void awaitCompletion() throws InterruptedException {
-        synchronized (completionLock) {
-            while (pendingTasks > 0) {
-                completionLock.wait();
-            }
-        }
-    }
-
     private void runListing(PipelineStep<IInAction> inStep) {
         try {
             Set<String> footprint = FootprintResolver.forListing(inStep.getAction(), inStep.getConfig());
@@ -1201,18 +1110,8 @@ public class MainExecutor implements Runnable {
             if (listingGate.getCount() == 0) {
                 state.setListingComplete(!listingStopped.get() && !listingFailed.get());
                 state.setListingInProgress(false);
-                notifyWatcher();
+                notifier.changed();
             }
-        }
-    }
-
-    /**
-     * The phase is being stopped (cancel, interrupt): thrown by emitItem through the plugin's listFiles,
-     * and by runStep when the fork of an item is rejected by the executor the phase shut down.
-     */
-    private static final class PhaseStopped extends RuntimeException {
-        PhaseStopped() {
-            super("phase stopped", null, false, false);
         }
     }
 
@@ -1223,7 +1122,7 @@ public class MainExecutor implements Runnable {
             registry.awaitNotPaused();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            if (cancelRequested || taskExecutor.isShutdown()) {
+            if (cancelRequested || tasks.isShutdown()) {
                 throw stopListing();
             }
             // not an interrupt of ours: the listing stops short, which must fail the run
@@ -1238,18 +1137,18 @@ public class MainExecutor implements Runnable {
         if (resumeAtTheListing) {
             listedItems.add(exec);
         }
-        notifyWatcher();
+        notifier.changed();
         if (exec.isAnalysisDeferred() || exec.getStatus() == ItemStatus.ERROR) {
             return;
         }
         try {
             if (checkEachFile) {
-                submitTask(() -> streamItem(exec));
+                tasks.submit(() -> streamItem(exec));
             } else {
-                submitItem(exec, 0, phaseEnd);
+                itemRunner.submit(exec, 0, phaseEnd);
             }
         } catch (RejectedExecutionException e) {
-            if (taskExecutor.isShutdown()) {
+            if (tasks.isShutdown()) {
                 // the phase shut its executor down (cancel, interrupt) while this listing was emitting
                 throw stopListing();
             }
@@ -1299,7 +1198,7 @@ public class MainExecutor implements Runnable {
      * rest of the steps unless it is at the destination (skipped by the resume point).
      */
     private void streamItem(WorkItemExecution exec) {
-        runItem(exec, 0, barrierIndex);
+        itemRunner.run(exec, 0, barrierIndex);
         if (exec.getStatus() != ItemStatus.PENDING || Thread.currentThread().isInterrupted() || cancelRequested) {
             return; // failed, filtered, or stopped
         }
@@ -1308,303 +1207,21 @@ public class MainExecutor implements Runnable {
             found = resolver.checkDestination(exec);
         } catch (RuntimeException e) {
             exec.setError(e);
-            notifyWatcher();
+            notifier.changed();
             return;
         }
         addWarnings(resolver.drainWarnings());
         if (found.isPresent()) {
             exec.setSkippedByResumePoint(found.get());
-            notifyWatcher();
+            notifier.changed();
             return;
         }
-        runItem(exec, barrierIndex, itemSteps.size());
-    }
-
-    private void submitItem(WorkItemExecution exec, int fromStep, int toStep) {
-        long ticket = registry.ticket(); // its place among the resource waiters: the order of submission
-        submitTask(() -> runItem(exec, fromStep, toStep, ticket));
-    }
-
-    /**
-     * Runs the steps [fromStep, toStep); an item stopped at the barrier goes back to PENDING, an item the
-     * out step skipped ends SKIPPED with its reason.
-     */
-    private void runItem(WorkItemExecution exec, int fromStep, int toStep) {
-        runItem(exec, fromStep, toStep, registry.ticket());
-    }
-
-    /** @param ticket the item's place among the resource waiters ({@link ResourceRegistry#ticket()}) */
-    private void runItem(WorkItemExecution exec, int fromStep, int toStep, long ticket) {
-        try {
-            if (!processWhileListing) {
-                listingGate.await();
-            }
-            StepOutcome outcome = StepOutcome.CONTINUE;
-            for (int i = fromStep; i < toStep; i++) {
-                PipelineStep<?> step = itemSteps.get(i);
-                Set<String> footprint = FootprintResolver.resolve(step.getAction(), exec.getWorkItem(), step.getConfig(), i);
-                exec.setWaitingResources(i, footprint);
-                notifyWatcher();
-                registry.acquireAll(footprint, ticket);
-                if (cancelRequested) {
-                    // cancel() lifts a pause before the tasks are shut down: the waiters it grants must not
-                    // start their step
-                    registry.releaseAll(footprint);
-                    throw new InterruptedException("cancelled");
-                }
-                exec.setRunning(i);
-                notifyWatcher();
-                try {
-                    outcome = runStepOfItem(exec, step, i, toStep);
-                } finally {
-                    registry.releaseAll(footprint);
-                }
-                if (!outcome.continueItem()) {
-                    break;
-                }
-            }
-            if (outcome.skipReason() != null) {
-                exec.setSkipped(outcome.skipReason());
-            } else if (!outcome.continueItem() || (toStep == itemSteps.size() && finalPhase)) {
-                exec.setDone();
-            } else {
-                exec.setReady();
-                if (!finalPhase) {
-                    exec.markPrepared(); // stopped at the preparation barrier: analysed
-                    projectEarly(exec, ticket);
-                }
-            }
-        } catch (InterruptedException | PhaseStopped e) {
-            // PhaseStopped: a fork rejected because the phase is being stopped, an interrupt, not an item failure
-            exec.setReady(); // not left WAITING_RESOURCES / RUNNING: the item is simply not done
-            Thread.currentThread().interrupt();
-        } catch (Throwable t) {
-            if (cancelRequested) {
-                // a failure caused by the cancel (e.g. a ClosedByInterruptException wrapped by the step) is an
-                // interruption like the ones above, not an item error
-                // the cause (t) is intentionally dropped: the item is an interruption and the run ends CANCELLED
-                exec.setReady();
-            } else {
-                exec.setError(t);
-                exec.propagateFailureToAncestors(); // a failed fork holds the resume cursor back before its parent
-                if (!finalPhase) {
-                    exec.markPrepared(); // failed before the barrier: nothing more to prepare for it
-                }
-            }
-        } finally {
-            notifyWatcher();
-        }
-    }
-
-    /**
-     * While preparing, the target of an item is known as soon as it is analysed (spec pattern-helper §4.3), and
-     * checked at once (spec conflict-check §2).
-     */
-    private void projectEarly(WorkItemExecution exec, long ticket) throws InterruptedException {
-        List<PipelineStep<IProcessAction>> steps = dryRunSteps;
-        if (steps != null) {
-            exec.setProjection(DryRunner.project(exec.getWorkItem(), steps));
-            checkTarget(exec, ticket); // its own place in the queue: right after its analysis, not after all of them
-        }
-    }
-
-    /**
-     * What the out step would find at the targets of a file to copy (spec conflict-check §4): each produced item is
-     * checked, the most severe result kept. Under the disks of the out step's targets (not the source disk), with
-     * the file's ticket so that it follows its analysis. A plugin failure is UNKNOWN, never an item error. Nothing
-     * for conflictCheck "none", a file not selected, or a dry run that projected nothing.
-     */
-    private void checkTarget(WorkItemExecution exec, long ticket) throws InterruptedException {
-        ConflictCheck level = conflictCheck;
-        IOutAction out = findOutAction();
-        if (level == ConflictCheck.NONE || out == null || exec.getStatus() != ItemStatus.PENDING
-                || !(exec.getProjection() instanceof Projection.Projected projected)) {
-            return;
-        }
-        // the destination only: the check reads nothing on the source, it must not hold the card the analyses read
-        Set<String> footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
-        registry.acquireAll(footprint, ticket);
-        try {
-            if (cancelRequested) {
-                throw new InterruptedException("cancelled");
-            }
-            TargetCheck result = null;
-            for (WorkItem produced : projected.items()) {
-                result = TargetCheck.mostSevere(result, check(out, produced, level == ConflictCheck.FULL));
-            }
-            exec.setTargetCheck(result == null ? TargetCheck.UNKNOWN : result);
-        } finally {
-            registry.releaseAll(footprint);
-        }
-    }
-
-    private static TargetCheck check(IOutAction out, WorkItem produced, boolean compareContent) {
-        try {
-            TargetCheck check = out.checkTarget(produced, compareContent);
-            return check == null ? TargetCheck.UNKNOWN : check;
-        } catch (RuntimeException e) {
-            LOG.debug(e, "plan.check.failed", produced.getNameDisplay(), String.valueOf(e));
-            return TargetCheck.UNKNOWN;
-        }
+        itemRunner.run(exec, barrierIndex, itemSteps.size());
     }
 
     /** How far the plan checks the existing targets; from the pipeline, quick without one. */
     void setConflictCheck(ConflictCheck conflictCheck) {
-        this.conflictCheck = conflictCheck;
-    }
-
-    /**
-     * How an item goes on after one step.
-     *
-     * @param continueItem false when the item stops here
-     * @param skipReason   non null when the out step skipped the item: it ends SKIPPED with this reason
-     */
-    private record StepOutcome(boolean continueItem, String skipReason) {
-        static final StepOutcome CONTINUE = new StepOutcome(true, null);
-        /** Filtered out by a process step: the item ends DONE. */
-        static final StepOutcome FILTERED = new StepOutcome(false, null);
-
-        static StepOutcome skipped(String reason) {
-            return new StepOutcome(false, reason);
-        }
-    }
-
-    /**
-     * One step of one item, with what the action gets around it: {@link IAction#beforeEach} and
-     * {@link IAction#afterEach} (a failure of either fails the item, like a failure of the step), and the progress
-     * channel of the item ({@link ItemProgress#current()}, {@link WriteContext#progress()}): its reports reach the
-     * watcher through {@link WorkItemExecution#getWorkStatus()}.
-     */
-    private StepOutcome runStepOfItem(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep) {
-        IAction action = step.getAction();
-        ItemProgress progress = status -> {
-            exec.reportProgress(stepIndex, status);
-            notifyWatcher();
-        };
-        return ItemProgress.callWith(progress, () -> {
-            WorkItem item = exec.getWorkItem();
-            action.beforeEach(item);
-            StepOutcome outcome;
-            try {
-                outcome = runStep(exec, step, stepIndex, toStep, progress);
-            } catch (Throwable t) {
-                try {
-                    action.afterEach(item);
-                } catch (Throwable after) {
-                    t.addSuppressed(after); // the failure of the step is the one to report
-                }
-                throw t;
-            }
-            action.afterEach(item);
-            return outcome;
-        });
-    }
-
-    /**
-     * @param toStep exclusive end of the current phase: a forked item stops at the same step as its parent
-     */
-    private StepOutcome runStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep,
-                                ItemProgress progress) {
-        IAction action = step.getAction();
-        WorkItem item = exec.getWorkItem();
-        if (action instanceof IAnalyzeAction analyze) {
-            analyze.doAnalyze(item);
-            return StepOutcome.CONTINUE;
-        }
-        if (action instanceof IProcessAction process) {
-            List<WorkItem> produced = process.doProcess(item);
-            if (produced == null || produced.isEmpty()) {
-                return StepOutcome.FILTERED;
-            }
-            exec.replaceWorkItem(produced.get(0));
-            for (int i = 1; i < produced.size(); i++) {
-                WorkItemExecution forked = new WorkItemExecution(produced.get(i), itemSteps);
-                forked.setParent(exec);
-                state.getWorkItems().add(forked);
-                notifyWatcher();
-                try {
-                    submitItem(forked, stepIndex + 1, toStep);
-                } catch (RejectedExecutionException e) {
-                    if (taskExecutor.isShutdown()) {
-                        throw new PhaseStopped(); // the phase shut its executor down (cancel, interrupt)
-                    }
-                    throw e;
-                }
-            }
-            return StepOutcome.CONTINUE;
-        }
-        if (action instanceof IOutAction out) {
-            WriteResult result = out.write(item, writeContext.withProgress(progress));
-            if (result != null && result.isSkipped()) {
-                return StepOutcome.skipped(result.reason()); // the steps after it, if any, do not run
-            }
-            return StepOutcome.CONTINUE;
-        }
-        throw new UnsupportedOperationException("Unsupported action type: " + action.getClass());
-    }
-
-    /**
-     * Marks the state as changed. This fires ~(2*steps+2) times per item from every virtual thread,
-     * so it must stay O(1) and lock-free: pushing each transition straight to the watcher melts both
-     * consumers (the JavaFX UI rebuilds its whole list per notification, the CLI prints one line).
-     * The dedicated notifier thread coalesces the flag into at most one call per
-     * {@value #WATCHER_PERIOD_MILLIS} ms.
-     */
-    private void notifyWatcher() {
-        dirty.set(true);
-    }
-
-    private void startNotifier() {
-        if (watcher == null) {
-            return;
-        }
-        notifier = Thread.ofVirtual().name("copybot-watcher-notifier").start(() -> {
-            try {
-                while (!Thread.currentThread().isInterrupted()) {
-                    if (dirty.compareAndSet(true, false)) {
-                        deliverWatcher();
-                    }
-                    Thread.sleep(WATCHER_PERIOD_MILLIS);
-                }
-            } catch (InterruptedException e) {
-                // normal stop: the terminal notification is done by stopNotifier()
-            }
-        });
-    }
-
-    /** Stops the notifier and delivers the terminal state, which must never be missed. */
-    private void stopNotifier() {
-        Thread current = notifier;
-        notifier = null;
-        if (current != null) {
-            current.interrupt();
-            try {
-                current.join(WATCHER_PERIOD_MILLIS * 10);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
-        }
-        dirty.set(false);
-        deliverWatcher();
-    }
-
-    private void deliverWatcher() {
-        if (watcher == null) {
-            return;
-        }
-        synchronized (watcherLock) { // serializes the periodic and the terminal notification
-            try {
-                watcher.accept(state);
-            } catch (RuntimeException e) {
-                // An observer must never break the pipeline: a throwing watcher must not leak
-                // resource permits or a pending-task registration (see submitTask/completeTask),
-                // so we keep going. Logged once: it is called up to ten times a second.
-                if (watcherFailureLogged.compareAndSet(false, true)) {
-                    LOGGER.log(System.Logger.Level.WARNING,
-                            "the pipeline watcher failed (its next failures are not logged)", e);
-                }
-            }
-        }
+        itemRunner.setConflictCheck(conflictCheck);
     }
 
     PipelineState getState() {
