@@ -130,7 +130,7 @@
                         <!-- jpackage needs a numeric version: 1.0-SNAPSHOT gives 1.0.0 -->
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>build-helper-maven-plugin</artifactId>
-                        <version>3.6.0</version>
+                        <version>3.6.2</version>
                         <executions>
                             <execution>
                                 <id>parse-version</id>
