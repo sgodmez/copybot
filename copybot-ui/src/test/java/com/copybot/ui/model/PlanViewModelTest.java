@@ -572,11 +572,13 @@ public class PlanViewModelTest {
 
         model.setOverride(ResumePoint.from(new ItemKey(SHOT, "b.jpg")));
         b.setReady();
+        model.update(state, List.of(a, b, c, d)); // the statuses changed in the engine: notified
         assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.before", 1)), model.resumeCountText(),
                 "a manual point: the files before it, not imported ones");
 
         model.setOverride(ResumePoint.all());
         a.setReady();
+        model.update(state, List.of(a, b, c, d));
         assertEquals(Optional.empty(), model.resumeCountText(), "nothing skipped by the point");
     }
 
@@ -880,6 +882,7 @@ public class PlanViewModelTest {
         assertTranslated(model.progressText());
 
         b.setSkipped("identical to the destination");
+        model.update(state(PipelineStatus.RUNNING, a, b, c), List.of(a, b, c));
         assertEquals(new Progress(2, 2, 400, 400), model.progress(), "skipped by the write: processed");
     }
 
@@ -1388,5 +1391,104 @@ public class PlanViewModelTest {
         assertTrue(model.resumeText().isPresent(), "the resume line shows the chosen point");
         assertTrue(model.canPrepare(), "Prepare starts again from it");
         assertFalse(model.canCopy());
+    }
+
+    // ---- computed once per update ----
+
+    @Test
+    public void theCountersAreThoseOfTheLastUpdateUntilTheNextOne() throws IOException {
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 300);
+        PlanViewModel model = prepared(false, a, b);
+        model.startExecuting();
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of(a, b));
+        assertEquals(new Progress(0, 2, 0, 400), model.progress());
+
+        a.setDone(); // in the engine, not notified yet
+        assertEquals(new Progress(0, 2, 0, 400), model.progress(), "read again: the value of the last update");
+
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of(a, b));
+        assertEquals(new Progress(1, 2, 100, 400), model.progress(), "the next notification brings the change");
+        model.setFilter(Filter.TO_COPY);
+        assertEquals(List.of(b), model.visibleItems(), "a new filter filters the rows again");
+    }
+
+    @Test
+    public void theFilteredRowsAreFilteredOnceUntilTheRowsOrTheFilterChange() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setSkipped("already imported");
+        PlanViewModel model = prepared(false, a, b);
+        model.setFilter(Filter.SKIPPED);
+
+        List<WorkItemExecution> visible = model.visibleItems();
+        assertEquals(List.of(b), visible);
+        assertSame(visible, model.visibleItems(), "filtered once, however often it is read");
+
+        model.update(state(PipelineStatus.PREPARED, a, b), List.of(a, b));
+        assertNotSame(visible, model.visibleItems(), "an update filters the rows again");
+        assertEquals(List.of(b), model.visibleItems());
+    }
+
+    @Test
+    public void theCountersMatchThoseOfAFreshModel() throws IOException {
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution different = checked("b.jpg", Kind.DIFFERENT_SIZE);
+        WorkItemExecution before = item("c.jpg", 10);
+        before.setSkippedByResumePoint("before");
+        WorkItemExecution failed = item("d.jpg", 20);
+        failed.setError(new IllegalStateException("unreadable"));
+        WorkItemExecution[] all = {same, different, before, failed};
+        PipelineState state = state(PipelineStatus.PREPARED, all);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "c.jpg")), ResumeSource.DESTINATION));
+        PlanViewModel cached = new PlanViewModel();
+        cached.startPreparing();
+        cached.update(state(PipelineStatus.RUNNING, same), List.of());
+        assertEquals(new Plan.Counts(1, 0, 0, 1), cached.counts()); // computed for the first update...
+        cached.update(state, List.of(all)); // ...then again for this one
+
+        PlanViewModel fresh = new PlanViewModel();
+        fresh.startPreparing();
+        fresh.update(state, List.of(all));
+
+        assertEquals(new Plan.Counts(2, 1, 1, 2), cached.counts());
+        assertEquals(fresh.counts(), cached.counts());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.quick", 2, 1, 1)), cached.conflictText());
+        assertEquals(fresh.conflictText(), cached.conflictText());
+        assertEquals(fresh.copyLabel(), cached.copyLabel());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.imported", 1)), cached.resumeCountText());
+        assertEquals(fresh.resumeCountText(), cached.resumeCountText());
+    }
+
+    @Test
+    public void theSameListingStillInOrderIsNotSortedAgain() throws IOException {
+        WorkItemExecution late = dated("b.jpg", "2026-08-07T10:00:00Z");
+        WorkItemExecution early = dated("a.jpg", "2023-12-24T10:00:00Z");
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, late, early), List.of());
+        List<WorkItemExecution> rows = model.items();
+        assertEquals(List.of(early, late), rows);
+
+        model.update(state(PipelineStatus.RUNNING, late, early), List.of());
+        assertSame(rows, model.items(), "nothing changed: the rows are kept as they are");
+
+        WorkItemExecution middle = dated("c.jpg", "2025-01-01T10:00:00Z");
+        model.update(state(PipelineStatus.RUNNING, late, early, middle), List.of());
+        assertEquals(List.of(early, middle, late), model.items(), "a file listed since: sorted again");
+    }
+
+    @Test
+    public void aDateChangedSinceTheLastSortSortsTheRowsAgain() throws IOException {
+        WorkItemExecution a = dated("a.jpg", "2023-01-01T10:00:00Z");
+        WorkItemExecution b = dated("b.jpg", "2024-01-01T10:00:00Z");
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of());
+        assertEquals(List.of(a, b), model.items());
+
+        a.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2025-01-01T10:00:00Z"));
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of());
+        assertEquals(List.of(b, a), model.items(), "the same listing, its order no longer holds");
     }
 }

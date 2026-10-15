@@ -48,8 +48,8 @@ public final class Background {
         run(EXECUTOR, Platform::runLater, work, onSuccess, onError);
     }
 
-    /** {@link #run(Callable, Consumer, Consumer)} on these threads (tests). */
-    static <T> void run(Executor background, Executor ui, Callable<T> work, Consumer<? super T> onSuccess,
+    /** {@link #run(Callable, Consumer, Consumer)} on these threads (the plan operations, tests). */
+    public static <T> void run(Executor background, Executor ui, Callable<T> work, Consumer<? super T> onSuccess,
                         Consumer<? super Throwable> onError) {
         try {
             background.execute(() -> {

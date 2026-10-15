@@ -41,6 +41,9 @@ import java.util.stream.Stream;
  * The state of the plan view (spec desktop-ui §2), without JavaFX: the phase and the buttons it allows,
  * the rows and their filter, the counters, the texts. The controller feeds it the engine state (on the
  * JavaFX thread) and renders it. Not thread-safe.
+ * <p>
+ * The counters and the filtered rows are those of the last {@link #update}: the engine changes the rows in place,
+ * its next notification brings the change. They are computed once per update, however often they are read.
  */
 public final class PlanViewModel {
 
@@ -136,6 +139,18 @@ public final class PlanViewModel {
     private boolean streaming;
     /** The current run failed before anything was done (its preparation: steps, state file). */
     private boolean preparationFailed;
+    /**
+     * The listing the rows were last sorted from (by date, before the resume order is known), null when they were
+     * not: the same listing still in order is not sorted again.
+     */
+    private List<WorkItemExecution> sortedFrom;
+    /**
+     * The counters and texts the rows give, computed once per update: a notification (~10 per second) renders them
+     * several times. Null when to be computed again: every change of the rows or of what they are counted against.
+     */
+    private Derived derived;
+    /** The rows of the current filter, null when to be filtered again (as {@link #derived}, and a new filter). */
+    private List<WorkItemExecution> visible;
 
     /** The automatic execution box unchecked, mode plan. */
     public PlanViewModel() {
@@ -173,6 +188,7 @@ public final class PlanViewModel {
         streaming = true;
         listing = true; // until the engine says otherwise
         phase = Phase.RUNNING;
+        invalidate();
     }
 
     // ---- feeding ----
@@ -183,6 +199,7 @@ public final class PlanViewModel {
         phase = Phase.PREPARING;
         listing = true; // until the engine says otherwise
         autoExecuteArmed = true;
+        invalidate();
     }
 
     /** The prepared plan starts executing: the selected items and bytes become the progress totals. */
@@ -194,6 +211,7 @@ public final class PlanViewModel {
         Set<WorkItemExecution> selected = Collections.newSetFromMap(new IdentityHashMap<>());
         items.stream().filter(i -> Plan.Counts.isSelected(i.getStatus())).forEach(selected::add);
         selectedAtStart = selected;
+        invalidate(); // the progress totals, "To copy"
     }
 
     /**
@@ -204,6 +222,7 @@ public final class PlanViewModel {
         analysing = List.copyOf(toAnalyse);
         autoExecuteArmed = false;
         phase = Phase.ANALYSING;
+        invalidate();
     }
 
     /** Back to "not prepared" (pipeline reloaded, preparation refused before it started). */
@@ -228,6 +247,14 @@ public final class PlanViewModel {
         failure = null;
         selectedAtStart = Set.of();
         analysing = List.of();
+        sortedFrom = null;
+        invalidate();
+    }
+
+    /** The rows or what they are counted against changed: the counters and the filtered rows are computed again. */
+    private void invalidate() {
+        derived = null;
+        visible = null;
     }
 
     /**
@@ -249,10 +276,15 @@ public final class PlanViewModel {
         }
         warnings = List.copyOf(all);
         List<WorkItemExecution> listed = List.copyOf(state.getWorkItems());
+        invalidate(); // the statuses evolve in place: the same rows are counted again
         if (ordered.isEmpty()) {
             // the date is known at the listing: no need to wait for the resume order (the same, by date then name)
-            items = listed.stream().sorted(DATE_ORDER).toList();
+            if (sortedFrom == null || !sameItems(listed, sortedFrom) || !strictlySorted(items)) {
+                items = listed.stream().sorted(DATE_ORDER).toList();
+            }
+            sortedFrom = listed;
         } else {
+            sortedFrom = null;
             Set<WorkItemExecution> known = Collections.newSetFromMap(new IdentityHashMap<>());
             known.addAll(ordered);
             List<WorkItemExecution> rows = new ArrayList<>(ordered);
@@ -283,6 +315,88 @@ public final class PlanViewModel {
         }
     }
 
+    /** The same items, in the same order (the engine's objects: by identity). */
+    private static boolean sameItems(List<WorkItemExecution> a, List<WorkItemExecution> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i) != b.get(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Each row strictly before the next in {@link #DATE_ORDER}: sorting them again would give the same rows (with a
+     * tie the order of the listing decides, so they are sorted again).
+     */
+    private static boolean strictlySorted(List<WorkItemExecution> rows) {
+        for (int i = 1; i < rows.size(); i++) {
+            if (DATE_ORDER.compare(rows.get(i - 1), rows.get(i)) >= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** What the rows give, in one pass over them (see {@link #derived}). */
+    private record Derived(Plan.Counts counts, int copied, int prepared, int analysedOfListed, int skippedByResumePoint,
+                           int conflictsSame, int conflictsDifferent, boolean conflictsFull,
+                           int written, long writtenBytes, Progress progress) {
+    }
+
+    private Derived derived() {
+        if (derived == null) {
+            derived = derive();
+        }
+        return derived;
+    }
+
+    private Derived derive() {
+        int copied = 0;
+        int prepared = 0;
+        int analysedOfListed = 0;
+        int skippedByResumePoint = 0;
+        int same = 0;
+        int different = 0;
+        boolean full = false;
+        int written = 0;
+        long writtenBytes = 0;
+        for (WorkItemExecution item : items) {
+            ItemStatus s = item.getStatus();
+            if (s == ItemStatus.DONE) {
+                copied++;
+            }
+            if (item.isPrepared()) {
+                prepared++;
+                if (!item.isAnalysisDeferred()) {
+                    analysedOfListed++;
+                }
+            }
+            if (item.isSkippedByResumePoint()) {
+                skippedByResumePoint++;
+            }
+            if (isConflict(item)) {
+                Kind kind = item.getTargetCheck().kind();
+                full |= kind == Kind.IDENTICAL || kind == Kind.DIFFERENT;
+                if (kind == Kind.SAME_SIZE || kind == Kind.IDENTICAL) {
+                    same++;
+                } else {
+                    different++;
+                }
+            }
+            // the files the copy will write: selected, not announced left out by a full conflict check
+            if (Plan.Counts.isSelected(s) && (item.getTargetCheck() == null || !item.getTargetCheck().skipped())) {
+                written++;
+                writtenBytes += size(item);
+            }
+        }
+        return new Derived(Plan.Counts.of(items), copied, prepared, analysedOfListed, skippedByResumePoint,
+                same, different, full, written, writtenBytes, computeProgress());
+    }
+
     /** A manual resume point, already applied with {@code Plan.preview}: shown on the resume line and executed. */
     public void setOverride(ResumePoint override) {
         this.override = override;
@@ -294,6 +408,7 @@ public final class PlanViewModel {
 
     public void setFilter(Filter filter) {
         this.filter = filter;
+        visible = null;
     }
 
     public Filter filter() {
@@ -336,7 +451,7 @@ public final class PlanViewModel {
     }
 
     private int copied() {
-        return (int) items.stream().filter(i -> i.getStatus() == ItemStatus.DONE).count();
+        return derived().copied();
     }
 
     // ---- state ----
@@ -546,8 +661,15 @@ public final class PlanViewModel {
         return Math.max(0, junction - context);
     }
 
-    /** The rows of the current filter. */
+    /** The rows of the current filter (the same list until the rows or the filter change). */
     public List<WorkItemExecution> visibleItems() {
+        if (visible == null) {
+            visible = filter == Filter.ALL ? items : filtered();
+        }
+        return visible;
+    }
+
+    private List<WorkItemExecution> filtered() {
         return items.stream().filter(i -> switch (filter) {
             case ALL -> true;
             case TO_COPY -> executing ? isLeftToCopy(i.getStatus()) : Plan.Counts.isSelected(i.getStatus());
@@ -572,29 +694,18 @@ public final class PlanViewModel {
                 || phase == Phase.PREPARE_STOPPED)) {
             return Optional.empty();
         }
-        int same = 0;
-        int different = 0;
-        boolean full = false;
-        for (WorkItemExecution item : items) {
-            if (isConflict(item)) {
-                Kind kind = item.getTargetCheck().kind();
-                full |= kind == Kind.IDENTICAL || kind == Kind.DIFFERENT;
-                if (kind == Kind.SAME_SIZE || kind == Kind.IDENTICAL) {
-                    same++;
-                } else {
-                    different++;
-                }
-            }
-        }
+        Derived d = derived();
+        int same = d.conflictsSame();
+        int different = d.conflictsDifferent();
         if (same + different == 0) {
             return Optional.empty();
         }
-        return Optional.of(ResourcesEngine.getString(full ? "plan.conflicts.full" : "plan.conflicts.quick",
+        return Optional.of(ResourcesEngine.getString(d.conflictsFull() ? "plan.conflicts.full" : "plan.conflicts.quick",
                 same + different, same, different));
     }
 
     public Plan.Counts counts() {
-        return Plan.Counts.of(items);
+        return derived().counts();
     }
 
     /**
@@ -602,6 +713,10 @@ public final class PlanViewModel {
      * files listed so far that the resume point does not skip.
      */
     public Progress progress() {
+        return derived().progress();
+    }
+
+    private Progress computeProgress() {
         int done = 0;
         long doneBytes = 0;
         long totalBytes = 0;
@@ -650,12 +765,12 @@ public final class PlanViewModel {
     }
 
     private int preparedCount() {
-        return (int) items.stream().filter(WorkItemExecution::isPrepared).count();
+        return derived().prepared();
     }
 
     /** Among the listed files, those analysed (or failed): prepared, their analysis not deferred. */
     private int analysedOfListed() {
-        return (int) items.stream().filter(i -> i.isPrepared() && !i.isAnalysisDeferred()).count();
+        return derived().analysedOfListed();
     }
 
     private static long size(WorkItemExecution item) {
@@ -740,13 +855,11 @@ public final class PlanViewModel {
      * "ifIdentical": "skip") are not counted: "Copy N files (X GB), M already there left out".
      */
     public String copyLabel() {
-        List<WorkItemExecution> selected = items.stream().filter(i -> Plan.Counts.isSelected(i.getStatus())).toList();
-        List<WorkItemExecution> written = selected.stream()
-                .filter(i -> i.getTargetCheck() == null || !i.getTargetCheck().skipped()).toList();
-        String size = displaySize(written.stream().mapToLong(PlanViewModel::size).sum(), 1);
-        int leftOut = selected.size() - written.size();
-        return leftOut == 0 ? ResourcesEngine.getString("plan.copy", written.size(), size)
-                : ResourcesEngine.getString("plan.copy.left-out", written.size(), size, leftOut);
+        Derived d = derived();
+        String size = displaySize(d.writtenBytes(), 1);
+        int leftOut = d.counts().selected() - d.written();
+        return leftOut == 0 ? ResourcesEngine.getString("plan.copy", d.written(), size)
+                : ResourcesEngine.getString("plan.copy.left-out", d.written(), size, leftOut);
     }
 
     /**
@@ -827,7 +940,7 @@ public final class PlanViewModel {
         if (resumeText().isEmpty()) {
             return Optional.empty();
         }
-        long count = items.stream().filter(WorkItemExecution::isSkippedByResumePoint).count();
+        int count = derived().skippedByResumePoint();
         if (count == 0) {
             return Optional.empty();
         }

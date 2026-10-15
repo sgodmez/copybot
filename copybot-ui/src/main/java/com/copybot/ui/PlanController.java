@@ -1,38 +1,25 @@
 package com.copybot.ui;
 
 import com.copybot.engine.Execution;
-import com.copybot.engine.ItemDetail;
 import com.copybot.engine.Plan;
-import com.copybot.engine.pipeline.ExecutionMode;
-import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.WorkItemExecution;
-import com.copybot.engine.resources.DiskInventory;
-import com.copybot.engine.resources.ResourceSnapshot;
 import com.copybot.engine.plugin.PluginEngine;
-import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineSummary;
+import com.copybot.ui.model.PlanOperations;
 import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.PlanViewModel.Filter;
 import com.copybot.ui.model.PlanViewModel.Phase;
 import com.copybot.ui.model.RecentPipelines;
-import com.copybot.ui.model.ResourceGauges;
 import com.copybot.ui.model.StepCatalog;
 import com.copybot.ui.util.Background;
-import com.copybot.ui.util.Choosers;
 import com.copybot.ui.util.PopinUtil;
-import com.copybot.ui.util.SystemLoad;
 import com.copybot.ui.util.UiPreferences;
-import javafx.animation.Animation;
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
-import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyObjectWrapper;
-import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -46,63 +33,37 @@ import javafx.scene.control.ButtonType;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.ContextMenu;
-import javafx.scene.control.DatePicker;
-import javafx.scene.control.Dialog;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.ProgressBar;
-import javafx.scene.control.RadioButton;
 import javafx.scene.control.SelectionMode;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TableCell;
 import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
-import javafx.scene.control.TextArea;
-import javafx.scene.control.ToggleGroup;
 import javafx.scene.control.Tooltip;
-import javafx.geometry.Pos;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
-import javafx.scene.layout.Region;
-import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
-import javafx.util.Duration;
 import javafx.util.StringConverter;
 
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * The plan view of one pipeline (spec desktop-ui §2), a thin layer over {@link PlanViewModel}: it starts
- * the engine operations on background threads ({@link Background}), feeds the model on the
- * JavaFX thread and renders it.
- * <p>
- * Every preparation gets its own operation token: a notification (watcher, end of an operation) carrying
- * another token, or the state of another plan, comes from an earlier run and is dropped.
+ * The plan view of one pipeline (spec desktop-ui §2), a thin layer over {@link PlanViewModel}: the engine
+ * operations are coordinated by {@link PlanOperations} (background threads, operation tokens, the engine held),
+ * this class renders the model and handles the rows, the header ({@link PlanHeader}), the resources
+ * ({@link PlanGauges}) and the dialogs.
  */
-public class PlanController {
-
-    private static final System.Logger LOG = System.getLogger(PlanController.class.getName());
-
-    /** The date of a resume key in the "from a file" list (like the Date column). */
-    private static final DateTimeFormatter RESUME_KEY_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
+public class PlanController implements PlanOperations.View {
 
     @FXML private Button backButton;
     @FXML private Label pipelineName;
@@ -148,28 +109,13 @@ public class PlanController {
 
     private MainController main;
     private Path pipelinePath;
-    private PlanViewModel model = new PlanViewModel();
+    private PlanOperations<Plan, Execution> ops;
+    private PlanHeader header;
+    private PlanGauges gauges;
     private PipelineSummary summary;
     /** The pipeline file is being read (background): no preparation meanwhile. */
     private boolean loading;
     private Object loadToken;
-    /** The token of the current preparation and of the execution of its plan. */
-    private Object operation = new Object();
-    private Plan plan;
-    /** The plan being prepared, until {@code prepare()} returns: the targets of the items analysed so far. */
-    private Plan preparingPlan;
-    /** The execution of the plan, completed once the engine accepted it (null before the copy). */
-    private CompletableFuture<Execution> execution;
-    /**
-     * The engine is still held by an operation started here: from Prepare until {@code prepare()} has
-     * returned, from Copy until the execution is really over ({@code Execution.await()}). The model may
-     * already be PREPARED or FINISHED (terminal watcher notification) while the engine is not free yet.
-     */
-    private boolean engineHeld;
-    /** The token of the operation holding the engine: only its own end releases it (not renewed by a reload). */
-    private Object holdToken;
-    /** A save of the editor received while the engine was held: applied once it is free. */
-    private Path pendingSaved;
     /** "Always ignore" reads and writes the pipeline file (background): no preparation nor edit meanwhile. */
     private boolean excluding;
 
@@ -192,7 +138,7 @@ public class PlanController {
                 super.updateItem(text, empty);
                 setText(empty ? null : text);
                 WorkItemExecution item = empty || getTableRow() == null ? null : getTableRow().getItem();
-                Plan shown = targetsPlan();
+                Plan shown = ops.targetsPlan();
                 String tooltip = item == null || shown == null || !PlanViewModel.showsTarget(item)
                         ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
                 setTooltip(tooltip == null ? null : new Tooltip(tooltip));
@@ -229,16 +175,24 @@ public class PlanController {
         });
         filterCombo.setValue(Filter.ALL);
         filterCombo.valueProperty().addListener((obs, old, filter) -> {
-            model.setFilter(filter == null ? Filter.ALL : filter);
+            model().setFilter(filter == null ? Filter.ALL : filter);
             refresh();
         });
+        header = new PlanHeader(sourceLabel, destinationLabel, detailsLink, lastRunBox, detailsBox, stepsFlow,
+                resumeModeLabel);
     }
 
     void init(MainController main, Path pipelinePath) {
         this.main = main;
         this.pipelinePath = pipelinePath;
+        ops = new PlanOperations<>(new PlanEngine(pipelinePath), Background.executor(), Platform::runLater, this);
+        gauges = new PlanGauges(inlineGauges, resourcesPanel, itemsTable, ops::liveState);
         pipelineName.setText(RecentPipelines.displayName(pipelinePath));
         reload();
+    }
+
+    private PlanViewModel model() {
+        return ops.model();
     }
 
     /**
@@ -246,14 +200,7 @@ public class PlanController {
      * Only called while the engine is idle (Edit is disabled while busy).
      */
     private void reload() {
-        operation = new Object(); // a late notification of the dropped plan is ignored
-        plan = null;
-        preparingPlan = null;
-        execution = null;
-        ResumePoint chosen = model.chosenPoint(); // a choice of the user: kept when the pipeline is read again
-        model = new PlanViewModel();
-        model.setChosenPoint(chosen);
-        model.setFilter(filterCombo.getValue() == null ? Filter.ALL : filterCombo.getValue());
+        ops.dropPlan(filterCombo.getValue() == null ? Filter.ALL : filterCombo.getValue());
         autoExecuteBox.setSelected(false);
         summary = null;
         loading = true;
@@ -289,6 +236,7 @@ public class PlanController {
             return;
         }
         loading = false;
+        PlanViewModel model = model();
         model.setPreparationRefusal(document.gaps().contains(PipelineDocument.Gap.NO_INPUT)
                 ? Optional.of(PipelineDocument.Gap.NO_INPUT.message()) : Optional.empty());
         model.setNothingDoneRefusal(document.gaps().contains(PipelineDocument.Gap.DOES_NOTHING)
@@ -303,599 +251,81 @@ public class PlanController {
         }
     }
 
-    /** Whether the details of the header are open: kept while the application runs, from one plan view to the next. */
-    private static boolean detailsExpanded;
-
-    private static final String CHIP_STYLE = "-fx-background-color: #f3f4f6; -fx-border-color: #d1d5db; "
-            + "-fx-border-radius: 10; -fx-background-radius: 10; -fx-padding: 2 10 2 10;";
-    private static final String MUTED_STYLE = "-fx-text-fill: #6b7280;";
-
-    /** The card of the header: source and output, last run (badges), details (steps, resume mode) on demand. */
     private void renderSummary() {
-        lastRunBox.getChildren().subList(1, lastRunBox.getChildren().size()).clear(); // after the key label
-        stepsFlow.getChildren().clear();
-        applyDetailsState();
-        if (summary == null) {
-            sourceLabel.setText("");
-            sourceLabel.setTooltip(null);
-            destinationLabel.setText("");
-            destinationLabel.setTooltip(null);
-            resumeModeLabel.setText("");
-            return;
-        }
-        setPath(sourceLabel, "📂 ", summary.sourceText());
-        setPath(destinationLabel, "💾 ", summary.destinationText());
-        resumeModeLabel.setText(ResourcesEngine.getString("plan.resume-mode",
-                PlanViewModel.resumeModeText(summary.resumeMode())));
-
-        RecentPipelines.LastRun lastRun = UiPreferences.recents().entries().stream()
-                .filter(e -> e.path().equals(pipelinePath.toAbsolutePath().normalize()))
-                .findFirst()
-                .map(RecentPipelines.Entry::lastRun) // null when never run
-                .orElse(null);
-        if (lastRun == null) {
-            lastRunBox.getChildren().add(mutedLabel(ResourcesEngine.getString("recent.never-run")));
-        } else {
-            lastRunBox.getChildren().add(mutedLabel(PlanViewModel.lastRunDate(lastRun)));
-            for (PlanViewModel.Badge badge : PlanViewModel.lastRunBadges(lastRun)) {
-                lastRunBox.getChildren().add(badgeLabel(badge));
-            }
-        }
-
-        boolean first = true;
-        for (PipelineSummary.Step step : summary.steps()) {
-            if (!first) {
-                stepsFlow.getChildren().add(new Label("→"));
-            }
-            first = false;
-            stepsFlow.getChildren().add(chip(step));
-        }
-    }
-
-    private static void setPath(Label label, String icon, String value) {
-        label.setText(icon + value);
-        label.setTooltip(new Tooltip(value));
-    }
-
-    private static Label mutedLabel(String text) {
-        Label label = new Label(text);
-        label.setStyle(MUTED_STYLE);
-        return label;
-    }
-
-    private static Label badgeLabel(PlanViewModel.Badge badge) {
-        String colors = switch (badge.kind()) {
-            case SUCCESS -> "-fx-background-color: #dcfce7; -fx-text-fill: #166534;";
-            case ERROR -> "-fx-background-color: #fee2e2; -fx-text-fill: #991b1b;";
-            case NEUTRAL -> "-fx-background-color: #e5e7eb; -fx-text-fill: #374151;";
-        };
-        Label label = new Label(badge.text());
-        label.setStyle(colors + " -fx-background-radius: 10; -fx-padding: 1 8 1 8; -fx-font-size: 11px;");
-        return label;
-    }
-
-    /** A step as a chip: its name behind the icon of its section, its settings in a tooltip. */
-    private static Label chip(PipelineSummary.Step step) {
-        String icon = switch (step.section()) {
-            case IN -> "📂";
-            case ANALYZE -> "🏷";
-            case PROCESS -> "⚙";
-            case OUT -> "💾";
-        };
-        Label chip = new Label(icon + " " + step.name());
-        chip.setStyle(CHIP_STYLE);
-        String text = step.settings().isEmpty()
-                ? ResourcesEngine.getString("plan.chip.no-setting")
-                : step.settings().stream().map(s -> s.label() + " : " + s.value()).collect(Collectors.joining("\n"));
-        Tooltip tooltip = new Tooltip(text);
-        tooltip.setShowDelay(Duration.millis(250));
-        tooltip.setShowDuration(Duration.INDEFINITE);
-        chip.setTooltip(tooltip);
-        return chip;
+        header.render(summary, pipelinePath);
     }
 
     @FXML
     protected void onDetailsClick() {
-        detailsExpanded = !detailsExpanded;
-        applyDetailsState();
-    }
-
-    private void applyDetailsState() {
-        show(detailsBox, detailsExpanded);
-        detailsLink.setText(ResourcesEngine.getString(detailsExpanded ? "plan.details.hide" : "plan.details.show"));
+        header.toggleDetails();
     }
 
     private String targetText(WorkItemExecution item) {
-        Plan shown = targetsPlan();
+        Plan shown = ops.targetsPlan();
         return shown == null || !PlanViewModel.showsTarget(item) ? "" : PlanViewModel.targetText(shown.projectionOf(item));
     }
 
-    /** The prepared plan, or while preparing the plan being prepared (its targets fill in as items are analysed). */
-    private Plan targetsPlan() {
-        return plan != null ? plan : preparingPlan;
-    }
+    // ---- engine operations (see PlanOperations) ----
 
-    private List<WorkItemExecution> ordered() {
-        return plan == null ? List.of() : plan.getOrderedItems();
-    }
-
-    // ---- engine operations (background threads; the model and the scene graph on the JavaFX thread) ----
-
-    /** A preparation or an execution holds the engine, or the model says one is running. */
-    private boolean busy() {
-        return engineHeld || model.isActive();
-    }
-
-    private Object hold() {
-        Object hold = new Object();
-        holdToken = hold;
-        engineHeld = true;
-        return hold;
-    }
-
-    /** The operation of this hold has really ended in the engine (the caller refreshes). */
-    private void release(Object hold) {
-        if (hold == holdToken) {
-            engineHeld = false;
-            holdToken = null;
-        }
-    }
-
-    /**
-     * The button of the mode (spec execution-mode §5): "Prepare the plan" (plan), "Prepare and copy" (auto: the copy
-     * starts once prepared), "Copy as files are listed" (streaming: no plan, see {@link #startStreaming}).
-     */
     @FXML
     protected void onPrepareClick() {
-        if (loading || excluding || busy() || !model.canPrepare()) {
+        if (loading || excluding) {
             return;
         }
-        if (model.executionMode() == ExecutionMode.STREAMING) {
-            startStreaming();
-            return;
-        }
-        Object op = new Object();
-        operation = op;
-        Object hold = hold();
-        plan = null;
-        preparingPlan = null;
-        execution = null;
-        model.startPreparing();
-        ResumePoint chosen = model.chosenPoint(); // like a cursor at that point (spec manual-point §1)
-        refresh();
-        Background.run(() -> CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state),
-                        started -> Platform.runLater(() -> onPrepareStarted(op, started)), chosen),
-                prepared -> onPrepared(op, hold, prepared),
-                // missing or invalid pipeline file, engine busy or closed, an Error, the application closing
-                failure -> onPrepareRefused(op, hold, failure));
+        ops.prepare();
     }
 
-    /** The watcher notifications that follow refresh the table, so its targets fill in. */
-    private void onPrepareStarted(Object op, Plan started) {
-        if (op == operation && plan == null) {
-            preparingPlan = started;
-            refresh(); // Stop can now stop it
-        }
-    }
-
-    private void onPrepareRefused(Object op, Object hold, Throwable failure) {
-        release(hold); // prepare() has returned (thrown)
-        if (op == operation) {
-            preparingPlan = null;
-            execution = null; // a refused streaming run
-            model.reset();
-        }
-        refresh();
-        PopinUtil.showError(failure);
-    }
-
-    /**
-     * The streaming run ({@code "execution": "streaming"}, spec execution-mode §5): the engine runs the pipeline
-     * directly, each file processed as soon as it is listed; the watcher feeds the table as for a copy, Pause and
-     * Stop act on it. No plan: no resume point to change, no target shown. A refused run (invalid pipeline, engine
-     * busy) brings the view back to "not prepared".
-     */
-    private void startStreaming() {
-        Object op = new Object();
-        operation = op;
-        Object hold = hold();
-        plan = null;
-        preparingPlan = null;
-        model.startStreaming();
-        ResumePoint chosen = model.chosenPoint();
-        CompletableFuture<Execution> future = new CompletableFuture<>();
-        execution = future;
-        refresh();
-        Background.run(() -> {
-                    Execution run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state), chosen);
-                    future.complete(run);
-                    return run;
-                },
-                run -> awaitThenRelease(op, hold, future, run),
-                failure -> { // missing or invalid pipeline file, engine busy or closed, an Error, the application closing
-                    future.completeExceptionally(failure);
-                    onPrepareRefused(op, hold, failure);
-                });
-    }
-
-    /** Watcher notifications (background thread, coalesced ~10 Hz) of the preparation and of the execution. */
-    private void onState(Object op, PipelineState state) {
-        Platform.runLater(() -> {
-            if (op != operation || (plan != null && state != plan.getState())) {
-                return; // an earlier run: it must not change the phase
-            }
-            liveState = state;
-            model.update(state, ordered());
-            afterUpdate();
-        });
-    }
-
-    // ---- the resources, live ----
-
-    /** The last state notified for the current operation: its registry gives the resources in use. */
-    private PipelineState liveState;
-    /** The volumes of the machine, to name the disks; read once, off the JavaFX thread. */
-    private List<DiskInventory.Volume> volumes = List.of();
-    private boolean volumesAsked;
-    /** The volumes could not be read: asked again when the next operation starts. */
-    private boolean volumesFailed;
-    /** A plan is prepared or run: the gauges are live. */
-    private boolean resourcesLive;
-    /**
-     * Once a second while the view is shown: the CPU load moves between two notifications, and the place of the
-     * resources (a preference) may have changed meanwhile.
-     */
-    private Timeline resourcesTimer;
-    /** On the line of the progress bar, the gauges past these are summed up in "+N", their detail in a tooltip. */
-    private static final int INLINE_GAUGES = 4;
-    private static final double INLINE_BAR = 60;
-    private static final double PANEL_BAR = 184;
-    /** The gauges are kept from one second to the next (a tooltip being read stays open), by their label. */
-    private final Map<String, GaugeView> inlineViews = new LinkedHashMap<>();
-    private final Map<String, GaugeView> panelViews = new LinkedHashMap<>();
-    private final Label moreGauges = new Label();
-    private final Tooltip moreGaugesTip = new Tooltip();
-    private Label panelTitle;
-    private Label panelIdle;
-
-    private void refreshResources(boolean live) {
-        if (live && !resourcesLive && volumesFailed) {
-            volumesFailed = false; // a new operation: the volumes are asked again
-            volumesAsked = false;
-        }
-        resourcesLive = live;
-        if (live && !volumesAsked) {
-            volumesAsked = true;
-            Background.run(DiskInventory::volumes, // a share may answer slowly
-                    read -> {
-                        volumes = read;
-                        renderResources();
-                    },
-                    failure -> {
-                        // the gauges go on without the names of the disks
-                        LOG.log(System.Logger.Level.WARNING, "the volumes of the machine cannot be read", failure);
-                        volumesFailed = true;
-                    });
-        }
-        if (resourcesTimer == null) {
-            resourcesTimer = new Timeline(new KeyFrame(Duration.seconds(1), e -> renderResources()));
-            resourcesTimer.setCycleCount(Animation.INDEFINITE);
-            resourcesTimer.play();
-        }
-        renderResources();
-    }
-
-    private void renderResources() {
-        if (itemsTable.getScene() == null) {
-            resourcesTimer.stop(); // the view was replaced
-            return;
-        }
-        boolean panel = UiPreferences.resourcesLayout() == UiPreferences.ResourcesLayout.SIDE_PANEL;
-        show(resourcesPanel, panel);
-        show(inlineGauges, !panel && resourcesLive);
-        if (panelTitle == null) {
-            panelTitle = new Label(ResourcesEngine.getString("plan.resources"));
-            panelTitle.setStyle("-fx-font-weight: bold;");
-            panelIdle = new Label(ResourcesEngine.getString("plan.resources.idle"));
-            panelIdle.setWrapText(true);
-            panelIdle.setStyle("-fx-text-fill: #6b7280;");
-            moreGauges.setStyle("-fx-text-fill: #6b7280;");
-            Tooltip.install(moreGauges, moreGaugesTip);
-        }
-        if (!resourcesLive) {
-            if (panel) {
-                setChildren(resourcesPanel, List.of(panelTitle, panelIdle));
-            }
-            return;
-        }
-        List<ResourceGauges.Gauge> gauges = ResourceGauges.of(liveState == null ? List.of() : liveState.getResourceSnapshot(),
-                SystemLoad.machine(), SystemLoad.process(), volumes);
-        if (panel) {
-            List<Node> nodes = new ArrayList<>(List.of(panelTitle));
-            nodes.addAll(views(panelViews, gauges, false));
-            setChildren(resourcesPanel, nodes);
-        } else {
-            List<ResourceGauges.Gauge> shown = gauges.subList(0, Math.min(INLINE_GAUGES, gauges.size()));
-            List<Node> nodes = new ArrayList<>(views(inlineViews, shown, true));
-            List<ResourceGauges.Gauge> rest = gauges.subList(shown.size(), gauges.size());
-            if (!rest.isEmpty()) {
-                moreGauges.setText(ResourcesEngine.getString("plan.resources.more", rest.size()));
-                moreGaugesTip.setText(rest.stream().map(g -> g.label() + " : " + g.text())
-                        .collect(Collectors.joining("\n")));
-                nodes.add(moreGauges);
-            }
-            setChildren(inlineGauges, nodes);
-        }
-    }
-
-    /** The views of the gauges, the ones already shown updated in place. */
-    private static List<Node> views(Map<String, GaugeView> views, List<ResourceGauges.Gauge> gauges, boolean inline) {
-        List<Node> nodes = new ArrayList<>();
-        Set<String> labels = new HashSet<>();
-        for (ResourceGauges.Gauge gauge : gauges) {
-            GaugeView view = views.computeIfAbsent(gauge.label(), l -> new GaugeView(inline));
-            view.show(gauge);
-            nodes.add(view.root);
-            labels.add(gauge.label());
-        }
-        views.keySet().retainAll(labels);
-        return nodes;
-    }
-
-    /** Replaces the children only when they change: the same nodes keep their tooltip and their hover. */
-    private static void setChildren(javafx.scene.layout.Pane pane, List<Node> nodes) {
-        if (!pane.getChildren().equals(nodes)) {
-            pane.getChildren().setAll(nodes);
-        }
-    }
-
-    /**
-     * One gauge: its name, a bar (orange when the resource is full and actions wait for it; for the CPU the load of
-     * the machine in light blue and, inside it, the part of Copybot in dark blue) and its value; all of it in the
-     * tooltip. Compact on the line of the progress bar, one under the other in the panel.
-     */
-    private static final class GaugeView {
-        private final boolean inline;
-        private final double width;
-        private final Label name = new Label();
-        private final Label value = new Label();
-        private final Region fill = layer();
-        private final Region part = layer();
-        private final Tooltip tip = new Tooltip();
-        private final javafx.scene.layout.Pane root;
-
-        GaugeView(boolean inline) {
-            this.inline = inline;
-            this.width = inline ? INLINE_BAR : PANEL_BAR;
-            Region track = layer();
-            size(track, 1);
-            track.setStyle("-fx-background-color: #e5e7eb; -fx-background-radius: 3;");
-            part.setStyle("-fx-background-color: #1d4ed8; -fx-background-radius: 3;");
-            StackPane bar = new StackPane(track, fill, part);
-            bar.setAlignment(Pos.CENTER_LEFT);
-            bar.setMinWidth(width);
-            bar.setMaxWidth(width);
-            value.setStyle("-fx-text-fill: #6b7280; -fx-font-size: 11px;");
-            if (inline) {
-                HBox line = new HBox(5, name, bar, value);
-                line.setAlignment(Pos.CENTER_LEFT);
-                root = line;
-            } else {
-                name.setWrapText(true);
-                value.setWrapText(true);
-                root = new VBox(2, name, bar, value);
-            }
-            tip.setShowDelay(Duration.millis(300));
-            Tooltip.install(root, tip);
-        }
-
-        void show(ResourceGauges.Gauge gauge) {
-            name.setText(inline ? gauge.shortLabel() : gauge.label());
-            value.setText(inline ? gauge.shortText() : gauge.text());
-            boolean split = gauge.part() >= 0;
-            String color = gauge.saturated() ? "#d97706" : split ? "#93c5fd" : "#3b82f6";
-            fill.setStyle("-fx-background-color: " + color + "; -fx-background-radius: 3;");
-            size(fill, Math.max(gauge.fraction(), 0));
-            part.setVisible(split);
-            size(part, Math.max(gauge.part(), 0));
-            tip.setText(gauge.label() + "\n" + gauge.text()
-                    + (split ? "\n" + ResourcesEngine.getString("plan.resources.cpu.legend") : ""));
-        }
-
-        private void size(Region layer, double fraction) {
-            double w = Math.round(width * Math.min(fraction, 1));
-            layer.setMinSize(w, 10);
-            layer.setPrefSize(w, 10);
-            layer.setMaxSize(w, 10);
-        }
-
-        private static Region layer() {
-            return new Region();
-        }
-    }
-
-    private void onPrepared(Object op, Object hold, Plan prepared) {
-        release(hold); // prepare() has returned: the engine is free
-        if (op != operation) {
-            refresh();
-            return;
-        }
-        plan = prepared;
-        preparingPlan = null;
-        model.setExecutionRefusal(prepared.executionRefusal());
-        model.update(prepared.getState(), prepared.getOrderedItems());
-        afterUpdate();
-        scrollToResume();
-    }
-
-    /** Rows already imported before the first one to copy, kept in view above it. */
-    private static final int RESUME_CONTEXT_ROWS = 5;
-
-    /** Shows the resume junction: the last imported files, then the first ones to copy. */
-    private void scrollToResume() {
+    @Override
+    public void scrollToResume() {
         if (!rows.isEmpty()) {
             // the index is in resume order, the table may be sorted otherwise: scroll to that row
             itemsTable.scrollTo(rows.get(Math.min(PlanViewModel.resumeScrollIndex(rows, RESUME_CONTEXT_ROWS), rows.size() - 1)));
         }
     }
 
-    /**
-     * Renders, then starts the copy when the plan just became ready and "automatic execution" is checked.
-     * Checked after every update, but only once the plan is known: the terminal watcher notification of
-     * the preparation may come before {@code prepare} returns.
-     */
-    private void afterUpdate() {
-        refresh();
-        if (plan != null && model.consumeAutoExecute()) {
-            startCopy();
-        }
+    /** Rows already imported before the first one to copy, kept in view above it. */
+    private static final int RESUME_CONTEXT_ROWS = 5;
+
+    @Override
+    public void showError(Throwable failure) {
+        PopinUtil.showError(failure);
     }
 
     @FXML
     protected void onCopyClick() {
-        startCopy();
-    }
-
-    /** Only from PREPARED; when the engine refuses the plan the view goes back to the prepared plan. */
-    private void startCopy() {
-        if (plan == null || engineHeld || model.phase() != Phase.PREPARED || !model.canCopy()) {
-            return;
-        }
-        Object op = operation;
-        Object hold = hold();
-        Plan toRun = plan;
-        ResumePoint override = model.override();
-        model.startExecuting(); // before execute(): its first notifications must find the model executing
-        CompletableFuture<Execution> future = new CompletableFuture<>();
-        execution = future;
-        refresh();
-        Background.run(() -> {
-                    Execution run = CopybotMainUi.ENGINE.execute(toRun, override); // the preparation's watcher goes on
-                    future.complete(run);
-                    return run;
-                },
-                run -> awaitThenRelease(op, hold, future, run),
-                failure -> { // refused (engine busy or closed), an Error, the application closing
-                    future.completeExceptionally(failure);
-                    onExecuteRefused(op, hold, future, toRun, override, failure);
-                });
-    }
-
-    /** Once a copy or a streaming run is accepted: waits in the background for its real end, then frees the view. */
-    private void awaitThenRelease(Object op, Object hold, CompletableFuture<Execution> future, Execution run) {
-        Background.run(() -> {
-                    run.await(); // returns once the engine has released the operation
-                    return run;
-                },
-                done -> released(op, hold, future, run, null),
-                // interrupted: the application is closing, released anyway
-                failure -> released(op, hold, future, run, failure instanceof InterruptedException ? null : failure));
-    }
-
-    /** Never leaves the view held, whatever happened. */
-    private void released(Object op, Object hold, CompletableFuture<Execution> future, Execution run, Throwable failure) {
-        release(hold);
-        if (failure != null && op == operation && future == execution) {
-            model.update(run.getState(), ordered());
-            if (model.isActive()) { // no terminal state will come: the plan is dropped
-                model.reset();
-                plan = null;
-                execution = null;
-            }
-        }
-        refresh();
-        if (failure != null) {
-            PopinUtil.showError(failure);
-        }
-    }
-
-    private void onExecuteRefused(Object op, Object hold, CompletableFuture<Execution> future, Plan toRun,
-                                  ResumePoint override, Throwable e) {
-        release(hold);
-        if (op == operation && future == execution) {
-            // a fresh model on the same plan: the phase follows the plan's state again (PREPARED, not locked)
-            PlanViewModel back = new PlanViewModel();
-            back.setExecutionMode(model.executionMode());
-            back.setAutoExecute(model.isAutoExecute());
-            back.setFilter(model.filter());
-            back.setOverride(override);
-            back.update(toRun.getState(), toRun.getOrderedItems());
-            model = back;
-            execution = null;
-        }
-        refresh();
-        PopinUtil.showError(e);
+        ops.copy();
     }
 
     @FXML
     protected void onPauseClick() {
-        control(Execution::pause);
+        ops.pause();
     }
 
     @FXML
     protected void onResumeClick() {
-        control(Execution::resume);
+        ops.resume();
     }
 
     @FXML
     protected void onStopClick() {
-        if (model.phase() == Phase.PREPARING) {
-            if (preparingPlan != null) {
-                // non-blocking: the end of prepare() shows what was listed and analysed so far
-                preparingPlan.cancelPreparation();
-            }
-            return;
-        }
-        if (model.phase() == Phase.ANALYSING && plan != null) {
-            plan.cancelAnalysis(); // non-blocking: the end of analyse() brings the view back to the plan
-            return;
-        }
-        control(Execution::cancel);
-    }
-
-    /**
-     * Pause, resume or stop, in the background once the engine accepted the execution; a pause or resume
-     * changes the status without a watcher notification, hence the update afterwards.
-     */
-    private void control(Consumer<Execution> action) {
-        CompletableFuture<Execution> future = execution;
-        if (future == null || !model.isExecutionActive()) {
-            return;
-        }
-        Object op = operation;
-        future.thenAcceptAsync(running -> {
-            action.accept(running);
-            Platform.runLater(() -> {
-                if (op == operation && future == execution) {
-                    model.update(running.getState(), ordered());
-                    refresh();
-                }
-            });
-        }, Background.executor()).exceptionally(failure -> {
-            if (!future.isCompletedExceptionally()) { // a refused execute() is already reported by onExecuteRefused
-                Throwable cause = failure instanceof CompletionException && failure.getCause() != null
-                        ? failure.getCause() : failure;
-                PopinUtil.showError(cause); // shown on the JavaFX thread
-            }
-            return null;
-        });
+        ops.stop();
     }
 
     @FXML
     protected void onAutoExecuteClick() {
-        model.setAutoExecute(autoExecuteBox.isSelected()); // this session only: the file is not changed
+        model().setAutoExecute(autoExecuteBox.isSelected()); // this session only: the file is not changed
     }
 
     @FXML
     protected void onBackClick() {
-        if (!busy() && model.canGoBack()) {
+        if (!ops.busy() && model().canGoBack()) {
             main.showHome();
         }
     }
 
     @FXML
     protected void onEditClick() {
-        if (busy() || excluding || !model.canGoBack()) {
+        if (ops.busy() || excluding || !model().canGoBack()) {
             return;
         }
         // returns at once: the editor opens once the file is read (Prepare and Copy stay clickable
@@ -904,11 +334,7 @@ public class PlanController {
             if (!isShown()) {
                 return; // this view was replaced while the editor was loading
             }
-            if (busy()) {
-                pendingSaved = saved;
-            } else {
-                applySaved(saved);
-            }
+            ops.editorSaved(saved);
         });
     }
 
@@ -916,7 +342,8 @@ public class PlanController {
      * A no-op once this view is no longer shown: the editor opens once its file is read, and Back (or a
      * language change) may have replaced this view meanwhile.
      */
-    private void applySaved(Path saved) {
+    @Override
+    public void applySaved(Path saved) {
         if (!isShown()) {
             return;
         }
@@ -943,24 +370,25 @@ public class PlanController {
         MenuItem fromHere = new MenuItem(ResourcesEngine.getString("plan.menu.resume-from-here"));
         fromHere.setOnAction(e -> {
             if (row.getItem() != null) {
-                model.resumePointFrom(row.getItem()).ifPresent(this::resumeFrom);
+                model().resumePointFrom(row.getItem()).ifPresent(this::resumeFrom);
             }
         });
         MenuItem detail = new MenuItem();
         detail.setOnAction(e -> showDetails(PlanViewModel.detailable(selectedRows()), row.getItem()));
         MenuItem analyse = new MenuItem();
-        analyse.setOnAction(e -> analyse(model.analysable(selectedRows())));
+        analyse.setOnAction(e -> analyse(model().analysable(selectedRows())));
         MenuItem ignore = new MenuItem();
-        ignore.setOnAction(e -> ignoreForThisRun(model.ignorable(selectedRows()), true));
+        ignore.setOnAction(e -> ignoreForThisRun(model().ignorable(selectedRows()), true));
         MenuItem unignore = new MenuItem();
-        unignore.setOnAction(e -> ignoreForThisRun(model.unignorable(selectedRows()), false));
+        unignore.setOnAction(e -> ignoreForThisRun(model().unignorable(selectedRows()), false));
         MenuItem exclude = new MenuItem();
         exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
         ContextMenu menu = new ContextMenu(fromHere, detail, analyse, new SeparatorMenuItem(), ignore, unignore, exclude);
         menu.setOnShowing(e -> {
-            fromHere.setDisable(row.getItem() == null || busy() || model.resumePointFrom(row.getItem()).isEmpty());
+            PlanViewModel model = model();
+            boolean busy = ops.busy();
+            fromHere.setDisable(row.getItem() == null || busy || model.resumePointFrom(row.getItem()).isEmpty());
             List<WorkItemExecution> selected = selectedRows();
-            boolean busy = busy();
             // both apply to the selection, whatever the clicked row
             setCountedItem(detail, "plan.menu.details", PlanViewModel.detailable(selected).size());
             setCountedItem(analyse, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
@@ -1023,59 +451,18 @@ public class PlanController {
     }
 
     /** The planned processing of this item, read only: available as soon as it is analysed, and after the copy. */
-    private void showDetail(WorkItemExecution item) {
+    @Override
+    public void showDetail(WorkItemExecution item) {
         showDetails(List.of(item), item);
     }
 
-    /**
-     * The planned processing of these analysed items, from the clicked one when it is among them: with several, a
-     * counter and previous / next buttons go through them.
-     */
+    /** The planned processing of these analysed items, from the clicked one when it is among them. */
     private void showDetails(List<WorkItemExecution> items, WorkItemExecution clicked) {
-        Plan shown = targetsPlan();
+        Plan shown = ops.targetsPlan();
         if (shown == null || items.isEmpty()) {
             return;
         }
-        TextArea text = new TextArea();
-        text.setEditable(false);
-        text.setWrapText(false);
-        text.setStyle("-fx-font-family: 'Consolas', 'monospace';");
-        Dialog<Void> dialog = new Dialog<>();
-        dialog.initOwner(CopybotMainUi.STAGE);
-        dialog.setResizable(true);
-        dialog.getDialogPane().setPrefSize(950, 560); // long target paths fit without scrolling
-        dialog.getDialogPane().getButtonTypes().add(ButtonType.CLOSE);
-        int[] index = {PlanViewModel.detailStart(items, clicked)};
-        Button previous = new Button("◀");
-        Button next = new Button("▶");
-        Label position = new Label();
-        Runnable display = () -> {
-            WorkItemExecution item = items.get(index[0]);
-            text.setText(shown.detailOf(item).map(detail -> PlanViewModel.detailText(item, detail)).orElse(""));
-            dialog.setTitle(ResourcesEngine.getString("plan.detail.title", item.getWorkItem().getNameDisplay()));
-            position.setText(ResourcesEngine.getString("plan.detail.position", index[0] + 1, items.size()));
-            previous.setDisable(index[0] == 0);
-            next.setDisable(index[0] == items.size() - 1);
-        };
-        previous.setOnAction(e -> {
-            index[0]--;
-            display.run();
-        });
-        next.setOnAction(e -> {
-            index[0]++;
-            display.run();
-        });
-        display.run();
-        if (items.size() > 1) {
-            HBox navigation = new HBox(8.0, previous, position, next);
-            navigation.setAlignment(javafx.geometry.Pos.CENTER_LEFT);
-            VBox content = new VBox(8.0, navigation, text);
-            VBox.setVgrow(text, javafx.scene.layout.Priority.ALWAYS);
-            dialog.getDialogPane().setContent(content);
-        } else {
-            dialog.getDialogPane().setContent(text);
-        }
-        dialog.show();
+        ItemDetailDialog.show(shown, items, clicked);
     }
 
     /** The label with the number of rows it applies to, disabled for none. */
@@ -1091,16 +478,17 @@ public class PlanController {
 
     /** In memory on the prepared, idle plan, like a resume point: nothing is executed. */
     private void ignoreForThisRun(List<WorkItemExecution> items, boolean ignore) {
-        if (plan == null || busy() || items.isEmpty()) {
+        Plan plan = ops.plan();
+        if (plan == null || ops.busy() || items.isEmpty()) {
             return;
         }
         try {
             if (ignore) {
-                plan.ignore(items, model.override());
+                plan.ignore(items, model().override());
             } else {
-                plan.unignore(items, model.override());
+                plan.unignore(items, model().override());
             }
-            model.update(plan.getState(), plan.getOrderedItems());
+            model().update(plan.getState(), plan.getOrderedItems());
         } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }
@@ -1112,13 +500,13 @@ public class PlanController {
      * a confirmation; in a prepared plan they are also ignored for this run, so it need not be prepared again.
      */
     private void alwaysIgnore(List<WorkItemExecution> rows) {
-        List<Path> files = model.excludable(rows);
-        if (files.isEmpty() || busy() || excluding) {
+        List<Path> files = model().excludable(rows);
+        if (files.isEmpty() || ops.busy() || excluding) {
             return;
         }
         // the file is read and written in the background: no preparation nor edit meanwhile
         excluding = true;
-        Plan target = plan;
+        Plan target = ops.plan();
         refresh();
         Background.run(() -> {
                     PipelineDocument document = PipelineDocument.load(pipelinePath);
@@ -1153,12 +541,13 @@ public class PlanController {
         List<WorkItemExecution> excluded = rows.stream()
                 .filter(r -> r.getListedPath().filter(p -> !exclusion.uncovered().contains(p)).isPresent())
                 .toList();
-        if (plan != null && plan == target && !busy()) {
+        Plan plan = ops.plan();
+        if (plan != null && plan == target && !ops.busy()) {
             try {
-                List<WorkItemExecution> toIgnore = model.ignorable(excluded);
+                List<WorkItemExecution> toIgnore = model().ignorable(excluded);
                 if (!toIgnore.isEmpty()) {
-                    plan.ignore(toIgnore, model.override());
-                    model.update(plan.getState(), plan.getOrderedItems());
+                    plan.ignore(toIgnore, model().override());
+                    model().update(plan.getState(), plan.getOrderedItems());
                 }
             } catch (RuntimeException e) {
                 PopinUtil.showError(e);
@@ -1213,16 +602,18 @@ public class PlanController {
 
     @FXML
     protected void onChangeResumeClick() {
-        if (busy()) {
+        if (ops.busy()) {
             return;
         }
-        if (plan != null && model.canChangeResumePoint()) {
-            resumeDialog(false).showAndWait().ifPresent(choice -> applyResumePoint(choice.point()));
+        PlanViewModel model = model();
+        if (ops.plan() != null && model.canChangeResumePoint()) {
+            ResumeDialog.create(model.items(), model.chosenPoint(), false).showAndWait()
+                    .ifPresent(choice -> applyResumePoint(choice.point()));
         } else if (model.canChooseResumePoint()) {
             // before a prepared plan (spec manual-point §3): the point of the next preparation, nothing more; a
             // stopped preparation is not resumed by itself (Prepare starts again from the point)
-            resumeDialog(true).showAndWait().ifPresent(choice -> {
-                model.setChosenPoint(choice.point());
+            ResumeDialog.create(model.items(), model.chosenPoint(), true).showAndWait().ifPresent(choice -> {
+                model().setChosenPoint(choice.point());
                 refresh();
             });
         }
@@ -1233,27 +624,24 @@ public class PlanController {
      * the next preparation only: the analysis the user stopped does not start again by itself.
      */
     private void resumeFrom(ResumePoint point) {
-        if (model.isStoppedAfterTheListing()) {
-            model.setChosenPoint(point);
+        if (model().isStoppedAfterTheListing()) {
+            model().setChosenPoint(point);
             refresh();
         } else {
             applyResumePoint(point);
         }
     }
 
-    /** A choice of the resume dialog: a point, or null for the automatic one. */
-    private record ResumeChoice(ResumePoint point) {
-    }
-
     /** In memory on the prepared, idle plan: the statuses are recomputed, nothing is executed. */
     private void applyResumePoint(ResumePoint point) {
-        if (plan == null || !model.canChangeResumePoint()) {
+        Plan plan = ops.plan();
+        if (plan == null || !model().canChangeResumePoint()) {
             return;
         }
         try {
             plan.preview(point);
-            model.setOverride(point);
-            model.update(plan.getState(), plan.getOrderedItems());
+            model().setOverride(point);
+            model().update(plan.getState(), plan.getOrderedItems());
         } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }
@@ -1261,195 +649,35 @@ public class PlanController {
         scrollToResume(); // the junction moved
         List<WorkItemExecution> toAnalyse = plan.toAnalyse();
         if (!toAnalyse.isEmpty()) {
-            startAnalysis(toAnalyse);
+            ops.analyse(toAnalyse, null);
         }
     }
-
-    /**
-     * The files the resume point selected again although the preparation skipped them at the listing are analysed
-     * in the background, like a preparation (spec deferred-analysis §2): their targets fill in, Copy waits for the
-     * end, Stop ends it early (the files left are then analysed by the copy). The resume point cannot be changed
-     * meanwhile: stop the analysis first.
-     */
-    private void startAnalysis(List<WorkItemExecution> toAnalyse) {
-        if (engineHeld) {
-            return; // not expected: the plan is prepared and idle; the copy analyses them anyway
-        }
-        Object op = operation;
-        Object hold = hold();
-        Plan analysed = plan;
-        model.startAnalysing(toAnalyse);
-        refresh();
-        Background.run(() -> {
-                    CopybotMainUi.ENGINE.analyse(analysed); // the preparation's watcher reports its progress
-                    return null;
-                },
-                done -> onAnalysed(op, hold, analysed, null),
-                // refused (engine busy or closed), an unexpected failure, the application closing
-                failure -> onAnalysed(op, hold, analysed, failure));
-    }
-
-    /** analyse() has returned: the plan is PREPARED again, the view follows it. */
-    private void onAnalysed(Object op, Object hold, Plan analysed, Throwable failure) {
-        release(hold);
-        if (op == operation && plan == analysed) {
-            model.update(analysed.getState(), analysed.getOrderedItems());
-        }
-        refresh();
-        WorkItemExecution single = detailAfterAnalysis;
-        detailAfterAnalysis = null;
-        if (failure == null && single != null && op == operation && plan == analysed && single.getProjection() != null) {
-            showDetail(single); // one file asked for: what it was analysed for
-        }
-        if (failure != null) {
-            PopinUtil.showError(failure);
-        }
-    }
-
-    /** The file "Analyse" was asked for alone: its planned processing opens once analysed. */
-    private WorkItemExecution detailAfterAnalysis;
 
     /** "Analyse" on skipped files not analysed: they stay skipped, their planned processing becomes known. */
     private void analyse(List<WorkItemExecution> items) {
-        if (plan == null || items.isEmpty() || busy()) {
+        Plan plan = ops.plan();
+        if (plan == null || items.isEmpty() || ops.busy()) {
             return;
         }
         plan.requestAnalysis(items);
         List<WorkItemExecution> toAnalyse = plan.toAnalyse();
         if (!toAnalyse.isEmpty()) {
-            detailAfterAnalysis = items.size() == 1 ? items.getFirst() : null;
-            startAnalysis(toAnalyse);
+            // one file asked for: its planned processing opens once analysed
+            ops.analyse(toAnalyse, items.size() == 1 ? items.getFirst() : null);
         }
-    }
-
-    /** The file last chosen on disk in the resume dialog: the next chooser opens in its folder. */
-    private static Path lastResumeFile;
-
-    /** The listed file of this key, else the file chosen last; null when none. */
-    private String resumeFileFolder(ItemKey key) {
-        Optional<Path> listed = key == null ? Optional.empty() : model.items().stream()
-                .filter(item -> item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).filter(key::equals).isPresent())
-                .map(WorkItemExecution::getListedPath)
-                .flatMap(Optional::stream)
-                .findFirst();
-        return listed.or(() -> Optional.ofNullable(lastResumeFile)).map(Path::toString).orElse(null);
-    }
-
-    /**
-     * Everything / from a date / from a file of the plan; with {@code withAuto} (before a prepared plan, spec
-     * manual-point §3) also "Automatic", and a file chosen on disk when no file is listed yet.
-     */
-    private Dialog<ResumeChoice> resumeDialog(boolean withAuto) {
-        Dialog<ResumeChoice> dialog = new Dialog<>();
-        dialog.initOwner(CopybotMainUi.STAGE);
-        dialog.setTitle(ResourcesEngine.getString("resume.dialog.title"));
-        ToggleGroup group = new ToggleGroup();
-        RadioButton auto = new RadioButton(ResourcesEngine.getString("resume.dialog.auto"));
-        RadioButton all = new RadioButton(ResourcesEngine.getString("resume.dialog.all"));
-        RadioButton fromDate = new RadioButton(ResourcesEngine.getString("resume.dialog.date"));
-        RadioButton fromFile = new RadioButton(ResourcesEngine.getString("resume.dialog.file"));
-        List.of(auto, all, fromDate, fromFile).forEach(b -> b.setToggleGroup(group));
-        ResumePoint current = withAuto ? model.chosenPoint() : null;
-        (withAuto && current == null ? auto : all).setSelected(true);
-        DatePicker date = new DatePicker(LocalDate.now());
-        // the keys themselves, "name (date)": two files of the same name (counter rollover) stay distinct
-        ComboBox<ItemKey> file = new ComboBox<>();
-        file.setConverter(new StringConverter<>() {
-            @Override
-            public String toString(ItemKey key) {
-                return key == null ? "" : key.name() + " (" + RESUME_KEY_DATE.format(key.date().atZone(ZoneId.systemDefault())) + ")";
-            }
-
-            @Override
-            public ItemKey fromString(String s) {
-                return null; // not editable
-            }
-        });
-        // the listed files (a prepared plan, a stopped preparation): their keys, the date known at the listing
-        model.items().stream()
-                .map(item -> item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())))
-                .flatMap(Optional::stream)
-                .sorted()
-                .forEach(file.getItems()::add);
-        if (!file.getItems().isEmpty()) {
-            file.setValue(file.getItems().getFirst());
-        }
-        if (current != null && current.kind() == ResumePoint.Kind.FROM && current.key() != null) {
-            if (current.key().name().isEmpty()) {
-                fromDate.setSelected(true);
-                date.setValue(LocalDate.ofInstant(current.key().date(), ZoneId.systemDefault()));
-            } else {
-                fromFile.setSelected(true);
-                if (!file.getItems().contains(current.key())) {
-                    file.getItems().addFirst(current.key());
-                }
-                file.setValue(current.key());
-            }
-        }
-        // nothing listed yet: a file chosen on disk gives the key the listing will give it
-        Button chooseFile = new Button(ResourcesEngine.getString("resume.dialog.choose-file"));
-        BooleanProperty reading = new SimpleBooleanProperty(); // the chooser's folder, then the chosen file
-        chooseFile.setOnAction(e -> {
-            javafx.stage.Window window = dialog.getDialogPane().getScene().getWindow();
-            reading.set(true);
-            Choosers.inFolderOf(null, resumeFileFolder(file.getValue()), folder -> {
-                reading.set(false);
-                javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
-                chooser.setInitialDirectory(folder);
-                java.io.File chosen = chooser.showOpenDialog(window);
-                if (chosen == null) {
-                    return;
-                }
-                lastResumeFile = chosen.toPath();
-                reading.set(true);
-                Background.run(() -> Plan.fromFile(chosen.toPath()).key(), // its date is read from the file
-                        key -> {
-                            reading.set(false);
-                            file.getItems().addFirst(key);
-                            file.setValue(key);
-                        },
-                        failure -> {
-                            reading.set(false);
-                            PopinUtil.showError(window, failure);
-                        });
-            });
-        });
-        date.disableProperty().bind(fromDate.selectedProperty().not());
-        file.disableProperty().bind(fromFile.selectedProperty().not());
-        chooseFile.disableProperty().bind(fromFile.selectedProperty().not().or(reading));
-        VBox content = new VBox(8);
-        if (withAuto) {
-            content.getChildren().add(auto);
-        }
-        content.getChildren().addAll(all, new HBox(8, fromDate, date), new HBox(8, fromFile, file, chooseFile));
-        dialog.getDialogPane().setContent(content);
-        dialog.getDialogPane().getButtonTypes().addAll(ButtonType.OK, ButtonType.CANCEL);
-        Node ok = dialog.getDialogPane().lookupButton(ButtonType.OK);
-        ok.disableProperty().bind(fromFile.selectedProperty().and(file.valueProperty().isNull())
-                .or(fromDate.selectedProperty().and(date.valueProperty().isNull())));
-        dialog.setResultConverter(button -> {
-            if (button != ButtonType.OK) {
-                return null;
-            }
-            if (auto.isSelected()) {
-                return new ResumeChoice(null);
-            }
-            if (fromDate.isSelected()) {
-                return new ResumeChoice(Plan.fromDate(date.getValue()));
-            }
-            if (fromFile.isSelected()) {
-                return new ResumeChoice(ResumePoint.from(file.getValue()));
-            }
-            return new ResumeChoice(ResumePoint.all());
-        });
-        return dialog;
     }
 
     // ---- rendering ----
 
     private void refresh() {
+        ops.refresh(); // renders, then applies an editor save received while the engine was held
+    }
+
+    @Override
+    public void render() {
+        PlanViewModel model = model();
         Phase phase = model.phase();
-        boolean busy = busy();
+        boolean busy = ops.busy();
         backButton.setDisable(busy || !model.canGoBack());
         editButton.setDisable(busy || excluding || !model.canGoBack());
         prepareButton.setText(model.prepareLabel());
@@ -1468,11 +696,11 @@ public class PlanController {
         show(stopButton, phase == Phase.PREPARING || model.isExecutionActive() || phase == Phase.ANALYSING);
         pauseButton.setDisable(!model.canPause());
         // a preparation is stopped through its plan, handed out once the pipeline file is read
-        stopButton.setDisable(!model.canStop() || phase == Phase.PREPARING && preparingPlan == null);
+        stopButton.setDisable(!model.canStop() || phase == Phase.PREPARING && !ops.isPreparationStoppable());
 
         boolean preparing = phase == Phase.PREPARING || phase == Phase.ANALYSING; // the same bar
         show(progressBox, preparing || model.isExecutionActive() || phase == Phase.FINISHED);
-        refreshResources(preparing || model.isExecutionActive());
+        gauges.refresh(preparing || model.isExecutionActive());
         progressBar.setProgress(preparing ? model.prepareFraction() : model.executionFraction());
         progressLabel.setText(model.progressText());
         statusLine.setText(model.statusLine());
@@ -1483,8 +711,9 @@ public class PlanController {
         Optional<String> resume = model.resumeText();
         resumeLabel.setText(resume.orElse(""));
         show(resumeBox, resume.isPresent());
-        resumeCountLabel.setText(model.resumeCountText().orElse(""));
-        show(resumeCountLabel, model.resumeCountText().isPresent());
+        Optional<String> resumeCount = model.resumeCountText();
+        resumeCountLabel.setText(resumeCount.orElse(""));
+        show(resumeCountLabel, resumeCount.isPresent());
         Optional<String> conflicts = model.conflictText();
         conflictLabel.setText(conflicts.orElse(""));
         show(conflictLabel, conflicts.isPresent());
@@ -1503,11 +732,6 @@ public class PlanController {
             UiPreferences.updateRecents(recents -> recents.recordRun(pipelinePath, run));
             renderSummary(); // its "last run" line
         });
-        if (!busy && pendingSaved != null) { // an editor save received while the engine was held
-            Path saved = pendingSaved;
-            pendingSaved = null;
-            applySaved(saved); // last: it rebuilds this view (or replaces it)
-        }
     }
 
     private boolean sameRows(List<WorkItemExecution> visible) {
@@ -1533,7 +757,7 @@ public class PlanController {
         };
     }
 
-    private static void show(Node node, boolean visible) {
+    static void show(Node node, boolean visible) {
         node.setVisible(visible);
         node.setManaged(visible);
     }
