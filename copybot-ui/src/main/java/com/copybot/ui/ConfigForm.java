@@ -5,6 +5,7 @@ import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.FieldHint;
 import com.copybot.plugin.api.config.FieldKind;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.util.Choosers;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
@@ -284,12 +285,17 @@ final class ConfigForm {
         TextField textField = new TextField();
         text(textField, field);
         Button browse = new Button(ResourcesEngine.getString("editor.browse"));
-        browse.setOnAction(e -> {
+        // in the folder of the current value, when it is there
+        browse.setOnAction(e -> Choosers.inFolderOf(browse, textField.getText(), folder -> {
             File chosen;
             if (field.hasHint(FieldHint.DIRECTORY)) {
-                chosen = new DirectoryChooser().showDialog(owner);
+                DirectoryChooser chooser = new DirectoryChooser();
+                chooser.setInitialDirectory(folder);
+                chosen = chooser.showDialog(owner);
             } else {
-                chosen = new FileChooser().showOpenDialog(owner);
+                FileChooser chooser = new FileChooser();
+                chooser.setInitialDirectory(folder);
+                chosen = chooser.showOpenDialog(owner);
             }
             if (chosen != null) {
                 textField.setText(chosen.getPath());
@@ -298,7 +304,7 @@ final class ConfigForm {
                     pending.run();
                 }
             }
-        });
+        }));
         HBox.setHgrow(textField, Priority.ALWAYS);
         return new HBox(6, textField, browse);
     }

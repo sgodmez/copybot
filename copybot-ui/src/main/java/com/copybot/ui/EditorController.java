@@ -19,6 +19,7 @@ import com.copybot.ui.model.PipelineDocument.Section;
 import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.StepCatalog;
+import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.Views;
 import com.google.gson.JsonElement;
@@ -66,7 +67,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
@@ -132,6 +132,8 @@ public class EditorController {
 
     /** A pipeline file is being read for {@link #open} (JavaFX thread only): another open is ignored. */
     private static boolean loading;
+    /** The editors shown (JavaFX thread only), for the exit of the application. */
+    private static final Set<EditorController> OPEN = new LinkedHashSet<>();
 
     /**
      * Opens the editor, modal, on this pipeline file or on a new pipeline (path null). Call it on the
@@ -153,7 +155,7 @@ public class EditorController {
         loading = true;
         Locale language = Locale.getDefault();
         // the catalog (plugin instances, bundles) is built off the JavaFX thread too
-        background(() -> new Loaded(file == null ? PipelineDocument.empty() : PipelineDocument.load(file),
+        Background.run(() -> new Loaded(file == null ? PipelineDocument.empty() : PipelineDocument.load(file),
                         new StepCatalog(PluginEngine.catalog())),
                 loaded -> {
                     loading = false;
@@ -198,21 +200,18 @@ public class EditorController {
     }
 
     /**
-     * Runs the work on a daemon thread, then its result or its failure on the JavaFX thread. Any throwable
-     * reaches onError (an Error wrapped), so the caller always gets one of the two callbacks.
+     * On exit, every open editor is closed: one with unsaved changes asks first, as when its window is closed.
+     * False when one stays open (the user keeps its changes, or a save is running); the exit is then given up.
      */
-    private static <T> void background(Callable<T> work, Consumer<T> onDone, Consumer<Exception> onError) {
-        Thread.ofPlatform().daemon().name("copybot-editor-io").start(() -> {
-            T result;
-            try {
-                result = work.call();
-            } catch (Throwable t) {
-                Exception e = t instanceof Exception exception ? exception : new IllegalStateException(t.toString(), t);
-                Platform.runLater(() -> onError.accept(e));
-                return;
+    static boolean closeAllForExit() {
+        for (EditorController editor : List.copyOf(OPEN)) {
+            if (editor.saving || editor.document.isModified()
+                    && !editor.confirm(ResourcesEngine.getString("editor.discard"))) {
+                return false;
             }
-            Platform.runLater(() -> onDone.accept(result));
-        });
+            editor.stage.close(); // not a close request: it was asked above
+        }
+        return true;
     }
 
     @FXML
@@ -244,7 +243,9 @@ public class EditorController {
             }
         });
         // both ways out (an accepted close request, the close after a save): the sample is no longer wanted
+        OPEN.add(this);
         stage.setOnHidden(e -> {
+            OPEN.remove(this);
             closed = true;
             cancelSample();
             if (pinnedSession != null) {
@@ -667,7 +668,7 @@ public class EditorController {
         if (patternHelper != null) {
             patternHelper.showLoading();
         }
-        background(() -> rerun == PatternHelperModel.Rerun.LIST ? session.list(config) : session.analyse(config),
+        Background.run(() -> rerun == PatternHelperModel.Rerun.LIST ? session.list(config) : session.analyse(config),
                 result -> sampleDone(result, in, processing),
                 e -> sampleDone(Sample.failed(String.valueOf(e.getMessage())), in, processing));
     }
@@ -725,7 +726,10 @@ public class EditorController {
         };
     }
 
-    /** The path of the first input step's actionConfig when it is an existing folder, else null. */
+    /**
+     * The path of the first input step's actionConfig, else null; whether it is a folder is checked by the helper,
+     * off the JavaFX thread.
+     */
     private Path sourceFolder() {
         List<JsonObject> in = document.steps(Section.IN);
         if (in.isEmpty() || !(in.getFirst().get("actionConfig") instanceof JsonObject config)
@@ -733,8 +737,7 @@ public class EditorController {
             return null;
         }
         try {
-            Path folder = Path.of(path.getAsString());
-            return Files.isDirectory(folder) ? folder : null;
+            return Path.of(path.getAsString());
         } catch (InvalidPathException e) {
             return null;
         }
@@ -769,7 +772,7 @@ public class EditorController {
         }
         SampleSession session = pinnedSession;
         pinnedRunning = true;
-        background(() -> session.analyseFile(config, file),
+        Background.run(() -> session.analyseFile(config, file),
                 result -> pinnedDone(file, result),
                 e -> pinnedDone(file, Sample.failed(String.valueOf(e.getMessage()))));
     }
@@ -1041,7 +1044,7 @@ public class EditorController {
      */
     private void save(Path target) {
         setSaving(true);
-        background(() -> {
+        Background.run(() -> {
                     document.save(target);
                     return target;
                 },
@@ -1063,7 +1066,7 @@ public class EditorController {
     }
 
     /** The failure of a save, with a localized message naming the file (the cause in the stack trace). */
-    private static Exception saveFailed(Path target, Exception cause) {
+    private static Exception saveFailed(Path target, Throwable cause) {
         String message = ResourcesEngine.getString("editor.save-failed", target.toString());
         if (cause.getMessage() != null && !cause.getMessage().isBlank()) {
             message += "\n" + cause.getMessage();

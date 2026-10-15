@@ -3,21 +3,28 @@ package com.copybot.ui;
 import com.copybot.config.ConfigFiles;
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.util.AppInfo;
+import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.UiPreferences;
 import com.copybot.ui.util.Views;
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.Scene;
+import javafx.scene.control.Alert;
+import javafx.scene.control.ButtonType;
+import javafx.scene.control.Hyperlink;
+import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
+import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
-import java.util.concurrent.RejectedExecutionException;
 
 /** The main window: the menu, and the home screen or the plan view of one pipeline in the center. */
 public class MainController {
@@ -28,6 +35,11 @@ public class MainController {
     /** The plugins window, at most one, non modal: kept to bring it to front and refresh it. */
     private static Stage pluginsWindow;
     private static PluginsController pluginsController;
+    /** The language the plugins window was built in: built again after a change. */
+    private static Locale pluginsLocale;
+
+    /** A preparation or a copy runs in the plan view (see {@link #setBusy}). */
+    private boolean busy;
 
     @FXML
     private BorderPane root;
@@ -42,6 +54,12 @@ public class MainController {
             openPlan(shownPipeline); // a rebuild (language change): the recents are not touched again
         } else {
             showHome();
+        }
+        if (pluginsWindow != null && pluginsWindow.isShowing() && !Locale.getDefault().equals(pluginsLocale)) {
+            pluginsWindow.close(); // a language change: the window is built again in the new language
+            pluginsWindow = null;
+            pluginsController = null;
+            onPluginsClick();
         }
     }
 
@@ -69,12 +87,18 @@ public class MainController {
 
     /** While a preparation or a copy runs the language cannot change (the view would be rebuilt). */
     public void setBusy(boolean busy) {
+        this.busy = busy;
         preferencesItem.setDisable(busy);
+    }
+
+    /** Exiting then asks first: the operation would be stopped. */
+    boolean isBusy() {
+        return busy;
     }
 
     @FXML
     protected void onExitClick() {
-        Platform.exit(); // triggers Application.stop(): executor shutdown + engine close
+        CopybotMainUi.requestExit(); // the same way out as closing the window
     }
 
     @FXML
@@ -112,28 +136,20 @@ public class MainController {
         }
     }
 
+    /** What the plugins window shows. */
+    private record PluginsInfo(PluginReport report, Optional<Path> next) {
+    }
+
     /** Opens the plugins window, or refreshes it when open (the folder may have changed in the preferences). */
     @FXML
     protected void onPluginsClick() {
         if (pluginsWindow != null && pluginsWindow.isShowing()) {
             pluginsWindow.toFront();
         }
-        try {
-            // the report checks directories and the configuration file is read: off the JavaFX thread
-            CopybotMainUi.executor.submit(() -> {
-                PluginReport report;
-                try {
-                    report = CopybotMainUi.ENGINE.pluginReport();
-                } catch (Throwable t) { // an Error too: the click must not be lost silently
-                    Platform.runLater(() -> PopinUtil.showError(t instanceof Exception e ? e : new IllegalStateException(t.toString(), t)));
-                    return;
-                }
-                Optional<Path> next = nextPluginPath();
-                Platform.runLater(() -> showPlugins(report, next));
-            });
-        } catch (RejectedExecutionException e) {
-            // the application is stopping
-        }
+        // the report checks directories and the configuration file is read: off the JavaFX thread
+        Background.run(() -> new PluginsInfo(CopybotMainUi.ENGINE.pluginReport(), nextPluginPath()),
+                info -> showPlugins(info.report(), info.next()),
+                PopinUtil::showError); // an Error too: the click must not be lost silently
     }
 
     /** The directory the next start would load, empty when the configuration file cannot be read now. */
@@ -164,8 +180,35 @@ public class MainController {
             window.show();
             pluginsWindow = window;
             pluginsController = plugins.controller();
+            pluginsLocale = Locale.getDefault();
         } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }
+    }
+
+    /** Help > About: the versions of Copybot, Java and JavaFX, the licence and the source code. */
+    @FXML
+    protected void onAboutClick() {
+        Label name = new Label(AppInfo.NAME + " " + AppInfo.version());
+        name.setStyle("-fx-font-size: 16px; -fx-font-weight: bold;");
+        Label versions = new Label(ResourcesEngine.getString("about.java", AppInfo.javaVersion()) + "\n"
+                + ResourcesEngine.getString("about.javafx", AppInfo.javafxVersion()));
+        Label license = new Label(ResourcesEngine.getString("about.license"));
+        license.setWrapText(true);
+        Hyperlink source = new Hyperlink(AppInfo.SOURCE_URL);
+        source.setOnAction(e -> CopybotMainUi.HOST_SERVICES.showDocument(AppInfo.SOURCE_URL));
+        VBox content = new VBox(8, name, versions, license, source);
+        content.setPrefWidth(420);
+
+        Alert about = new Alert(Alert.AlertType.NONE, "", ButtonType.CLOSE);
+        about.initOwner(CopybotMainUi.STAGE);
+        about.setTitle(ResourcesEngine.getString("about.title"));
+        about.setHeaderText(null);
+        ImageView icon = new ImageView(CopybotMainUi.STAGE.getIcons().getFirst());
+        icon.setFitWidth(64);
+        icon.setPreserveRatio(true);
+        about.setGraphic(icon);
+        about.getDialogPane().setContent(content);
+        about.showAndWait();
     }
 }

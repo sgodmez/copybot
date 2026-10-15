@@ -6,6 +6,7 @@ import com.copybot.ui.model.PatternHelperModel;
 import com.copybot.ui.model.PatternHelperModel.KeyRow;
 import com.copybot.ui.model.PatternHelperModel.Row;
 import com.copybot.ui.model.PatternHelperModel.Summary;
+import com.copybot.ui.util.Choosers;
 import javafx.application.Platform;
 import javafx.geometry.Point2D;
 import javafx.geometry.Pos;
@@ -32,7 +33,6 @@ import javafx.stage.FileChooser;
 import javafx.stage.Popup;
 
 import java.io.File;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -322,15 +322,15 @@ final class PatternHelper extends VBox {
     }
 
     private void chooseFile() {
-        FileChooser chooser = new FileChooser();
         Path folder = actions.sourceFolder();
-        if (folder != null && Files.isDirectory(folder)) {
-            chooser.setInitialDirectory(folder.toFile());
-        }
-        File chosen = chooser.showOpenDialog(getScene() == null ? null : getScene().getWindow());
-        if (chosen != null) {
-            actions.test(chosen.toPath());
-        }
+        Choosers.inFolderOf(null, folder == null ? null : folder.toString(), initial -> {
+            FileChooser chooser = new FileChooser();
+            chooser.setInitialDirectory(initial);
+            File chosen = chooser.showOpenDialog(getScene() == null ? null : getScene().getWindow());
+            if (chosen != null) {
+                actions.test(chosen.toPath());
+            }
+        });
     }
 
     /** "name → " (on the example line) then the path, each missing expression in red; or the error in red. */

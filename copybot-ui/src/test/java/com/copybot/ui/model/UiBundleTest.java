@@ -70,7 +70,10 @@ public class UiBundleTest {
             "item.status.SKIPPED.no-reason", "editor.save.tooltip", "editor.save-as.tooltip", "editor.show-json.tooltip",
             "editor.lenient", "editor.overwrite", "home.state-file", "editor.incomplete", "editor.save-anyway",
             "plan.menu.detail", "plan.menu.details", "plan.menu.analyse", "plan.detail.title", "plan.detail.position", "plan.detail.status", "plan.detail.filtered",
-            "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false");
+            "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false",
+            "error.title", "error.unexpected", "exit.title", "exit.running", "exit.stop", "exit.stopping",
+            "about.title", "about.java", "about.javafx", "about.license",
+            "pipeline.document.not-object", "pipeline.document.not-steps");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
 

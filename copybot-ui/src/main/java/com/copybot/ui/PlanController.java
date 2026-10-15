@@ -20,6 +20,8 @@ import com.copybot.ui.model.PlanViewModel.Phase;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.ResourceGauges;
 import com.copybot.ui.model.StepCatalog;
+import com.copybot.ui.util.Background;
+import com.copybot.ui.util.Choosers;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.SystemLoad;
 import com.copybot.ui.util.UiPreferences;
@@ -28,7 +30,9 @@ import javafx.animation.KeyFrame;
 import javafx.animation.Timeline;
 import javafx.application.Platform;
 import javafx.beans.binding.Bindings;
+import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ReadOnlyObjectWrapper;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleStringProperty;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
@@ -67,7 +71,6 @@ import javafx.scene.layout.VBox;
 import javafx.util.Duration;
 import javafx.util.StringConverter;
 
-import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -82,20 +85,21 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * The plan view of one pipeline (spec desktop-ui §2), a thin layer over {@link PlanViewModel}: it starts
- * the engine operations on background threads ({@link CopybotMainUi#executor}), feeds the model on the
+ * the engine operations on background threads ({@link Background}), feeds the model on the
  * JavaFX thread and renders it.
  * <p>
  * Every preparation gets its own operation token: a notification (watcher, end of an operation) carrying
  * another token, or the state of another plan, comes from an earlier run and is dropped.
  */
 public class PlanController {
+
+    private static final System.Logger LOG = System.getLogger(PlanController.class.getName());
 
     /** The date of a resume key in the "from a file" list (like the Date column). */
     private static final DateTimeFormatter RESUME_KEY_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss");
@@ -166,6 +170,8 @@ public class PlanController {
     private Object holdToken;
     /** A save of the editor received while the engine was held: applied once it is free. */
     private Path pendingSaved;
+    /** "Always ignore" reads and writes the pipeline file (background): no preparation nor edit meanwhile. */
+    private boolean excluding;
 
     @FXML
     public void initialize() {
@@ -255,39 +261,30 @@ public class PlanController {
         loadToken = token;
         renderSummary();
         refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                PipelineDocument document;
-                try {
-                    document = PipelineDocument.load(pipelinePath);
-                } catch (Throwable t) { // an Error too: the view must not stay "loading"
-                    Platform.runLater(() -> {
-                        if (token == loadToken) {
-                            loading = false;
-                            refresh();
-                            PopinUtil.showError(asException(t)); // the preparation will report it too
-                        }
-                    });
-                    return;
-                }
-                // the catalog (plugin instances, bundles) is built here too, off the JavaFX thread
-                PipelineSummary loadedSummary = null;
-                Exception summaryFailure = null;
-                try {
-                    loadedSummary = PipelineSummary.of(document, new StepCatalog(PluginEngine.catalog()));
-                } catch (Throwable t) {
-                    summaryFailure = asException(t);
-                }
-                PipelineSummary result = loadedSummary;
-                Exception failure = summaryFailure;
-                Platform.runLater(() -> onLoaded(token, document, result, failure));
-            });
-        } catch (RejectedExecutionException e) {
-            loading = false; // the application is closing
-        }
+        Background.run(() -> {
+                    PipelineDocument document = PipelineDocument.load(pipelinePath);
+                    // the catalog (plugin instances, bundles) is built here too, off the JavaFX thread
+                    try {
+                        return new Loaded(document, PipelineSummary.of(document, new StepCatalog(PluginEngine.catalog())), null);
+                    } catch (Throwable t) {
+                        return new Loaded(document, null, t);
+                    }
+                },
+                loaded -> onLoaded(token, loaded.document(), loaded.summary(), loaded.summaryFailure()),
+                failure -> { // an Error too: the view must not stay "loading"
+                    if (token == loadToken) {
+                        loading = false;
+                        refresh();
+                        PopinUtil.showError(failure); // the preparation will report it too
+                    }
+                });
     }
 
-    private void onLoaded(Object token, PipelineDocument document, PipelineSummary loaded, Exception failure) {
+    /** The pipeline read in the background, and its summary (null with the failure that prevented it). */
+    private record Loaded(PipelineDocument document, PipelineSummary summary, Throwable summaryFailure) {
+    }
+
+    private void onLoaded(Object token, PipelineDocument document, PipelineSummary loaded, Throwable failure) {
         if (token != loadToken) {
             return;
         }
@@ -450,7 +447,7 @@ public class PlanController {
      */
     @FXML
     protected void onPrepareClick() {
-        if (loading || busy() || !model.canPrepare()) {
+        if (loading || excluding || busy() || !model.canPrepare()) {
             return;
         }
         if (model.executionMode() == ExecutionMode.STREAMING) {
@@ -466,21 +463,11 @@ public class PlanController {
         model.startPreparing();
         ResumePoint chosen = model.chosenPoint(); // like a cursor at that point (spec manual-point §1)
         refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                Plan prepared;
-                try {
-                    prepared = CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state),
-                            started -> Platform.runLater(() -> onPrepareStarted(op, started)), chosen);
-                } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
-                    Platform.runLater(() -> onPrepareRefused(op, hold, t));
-                    return;
-                }
-                Platform.runLater(() -> onPrepared(op, hold, prepared));
-            });
-        } catch (RejectedExecutionException e) {
-            onPrepareRefused(op, hold, e); // the application is closing
-        }
+        Background.run(() -> CopybotMainUi.ENGINE.prepare(pipelinePath, state -> onState(op, state),
+                        started -> Platform.runLater(() -> onPrepareStarted(op, started)), chosen),
+                prepared -> onPrepared(op, hold, prepared),
+                // missing or invalid pipeline file, engine busy or closed, an Error, the application closing
+                failure -> onPrepareRefused(op, hold, failure));
     }
 
     /** The watcher notifications that follow refresh the table, so its targets fill in. */
@@ -499,7 +486,7 @@ public class PlanController {
             model.reset();
         }
         refresh();
-        PopinUtil.showError(asException(failure));
+        PopinUtil.showError(failure);
     }
 
     /**
@@ -519,28 +506,16 @@ public class PlanController {
         CompletableFuture<Execution> future = new CompletableFuture<>();
         execution = future;
         refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                Execution run;
-                try {
-                    run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state), chosen);
-                } catch (Throwable t) { // missing or invalid pipeline file, engine busy or closed, an Error
-                    future.completeExceptionally(t);
-                    Platform.runLater(() -> onPrepareRefused(op, hold, t));
-                    return;
-                }
-                future.complete(run);
-                awaitThenRelease(op, hold, future, run);
-            });
-        } catch (RejectedExecutionException e) {
-            future.completeExceptionally(e);
-            onPrepareRefused(op, hold, e); // the application is closing
-        }
-    }
-
-    /** An Error (e.g. a LinkageError of a plugin) shown like an exception. */
-    private static Exception asException(Throwable failure) {
-        return failure instanceof Exception e ? e : new IllegalStateException(failure.toString(), failure);
+        Background.run(() -> {
+                    Execution run = CopybotMainUi.ENGINE.run(pipelinePath, state -> onState(op, state), chosen);
+                    future.complete(run);
+                    return run;
+                },
+                run -> awaitThenRelease(op, hold, future, run),
+                failure -> { // missing or invalid pipeline file, engine busy or closed, an Error, the application closing
+                    future.completeExceptionally(failure);
+                    onPrepareRefused(op, hold, failure);
+                });
     }
 
     /** Watcher notifications (background thread, coalesced ~10 Hz) of the preparation and of the execution. */
@@ -562,6 +537,8 @@ public class PlanController {
     /** The volumes of the machine, to name the disks; read once, off the JavaFX thread. */
     private List<DiskInventory.Volume> volumes = List.of();
     private boolean volumesAsked;
+    /** The volumes could not be read: asked again when the next operation starts. */
+    private boolean volumesFailed;
     /** A plan is prepared or run: the gauges are live. */
     private boolean resourcesLive;
     /**
@@ -582,20 +559,23 @@ public class PlanController {
     private Label panelIdle;
 
     private void refreshResources(boolean live) {
+        if (live && !resourcesLive && volumesFailed) {
+            volumesFailed = false; // a new operation: the volumes are asked again
+            volumesAsked = false;
+        }
         resourcesLive = live;
         if (live && !volumesAsked) {
             volumesAsked = true;
-            try {
-                CopybotMainUi.executor.submit(() -> {
-                    List<DiskInventory.Volume> read = DiskInventory.volumes(); // a share may answer slowly
-                    Platform.runLater(() -> {
+            Background.run(DiskInventory::volumes, // a share may answer slowly
+                    read -> {
                         volumes = read;
                         renderResources();
+                    },
+                    failure -> {
+                        // the gauges go on without the names of the disks
+                        LOG.log(System.Logger.Level.WARNING, "the volumes of the machine cannot be read", failure);
+                        volumesFailed = true;
                     });
-                });
-            } catch (RejectedExecutionException e) {
-                // the application is stopping
-            }
         }
         if (resourcesTimer == null) {
             resourcesTimer = new Timeline(new KeyFrame(Duration.seconds(1), e -> renderResources()));
@@ -789,51 +769,44 @@ public class PlanController {
         CompletableFuture<Execution> future = new CompletableFuture<>();
         execution = future;
         refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                Execution run;
-                try {
-                    run = CopybotMainUi.ENGINE.execute(toRun, override); // the preparation's watcher goes on
-                } catch (Throwable t) { // refused (engine busy or closed), or an Error
-                    future.completeExceptionally(t);
-                    Platform.runLater(() -> onExecuteRefused(op, hold, future, toRun, override, t));
-                    return;
-                }
-                future.complete(run);
-                awaitThenRelease(op, hold, future, run);
-            });
-        } catch (RejectedExecutionException e) {
-            future.completeExceptionally(e);
-            onExecuteRefused(op, hold, future, toRun, override, e); // the application is closing
-        }
+        Background.run(() -> {
+                    Execution run = CopybotMainUi.ENGINE.execute(toRun, override); // the preparation's watcher goes on
+                    future.complete(run);
+                    return run;
+                },
+                run -> awaitThenRelease(op, hold, future, run),
+                failure -> { // refused (engine busy or closed), an Error, the application closing
+                    future.completeExceptionally(failure);
+                    onExecuteRefused(op, hold, future, toRun, override, failure);
+                });
     }
 
-    /** On the background thread of a copy or a streaming run: waits for its real end, then frees the view. */
+    /** Once a copy or a streaming run is accepted: waits in the background for its real end, then frees the view. */
     private void awaitThenRelease(Object op, Object hold, CompletableFuture<Execution> future, Execution run) {
-        Throwable awaitFailure = null;
-        try {
-            run.await(); // returns once the engine has released the operation
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // the application is closing: release anyway
-        } catch (Throwable t) {
-            awaitFailure = t;
+        Background.run(() -> {
+                    run.await(); // returns once the engine has released the operation
+                    return run;
+                },
+                done -> released(op, hold, future, run, null),
+                // interrupted: the application is closing, released anyway
+                failure -> released(op, hold, future, run, failure instanceof InterruptedException ? null : failure));
+    }
+
+    /** Never leaves the view held, whatever happened. */
+    private void released(Object op, Object hold, CompletableFuture<Execution> future, Execution run, Throwable failure) {
+        release(hold);
+        if (failure != null && op == operation && future == execution) {
+            model.update(run.getState(), ordered());
+            if (model.isActive()) { // no terminal state will come: the plan is dropped
+                model.reset();
+                plan = null;
+                execution = null;
+            }
         }
-        Throwable failure = awaitFailure;
-        Platform.runLater(() -> { // never leave the view held, whatever happened
-            release(hold);
-            if (failure != null && op == operation && future == execution) {
-                model.update(run.getState(), ordered());
-                if (model.isActive()) { // no terminal state will come: the plan is dropped
-                    model.reset();
-                    plan = null;
-                    execution = null;
-                }
-            }
-            refresh();
-            if (failure != null) {
-                PopinUtil.showError(asException(failure));
-            }
-        });
+        refresh();
+        if (failure != null) {
+            PopinUtil.showError(failure);
+        }
     }
 
     private void onExecuteRefused(Object op, Object hold, CompletableFuture<Execution> future, Plan toRun,
@@ -851,7 +824,7 @@ public class PlanController {
             execution = null;
         }
         refresh();
-        PopinUtil.showError(asException(e));
+        PopinUtil.showError(e);
     }
 
     @FXML
@@ -898,12 +871,11 @@ public class PlanController {
                     refresh();
                 }
             });
-        }, CopybotMainUi.executor).exceptionally(failure -> {
+        }, Background.executor()).exceptionally(failure -> {
             if (!future.isCompletedExceptionally()) { // a refused execute() is already reported by onExecuteRefused
                 Throwable cause = failure instanceof CompletionException && failure.getCause() != null
                         ? failure.getCause() : failure;
-                Exception shown = cause instanceof Exception ex ? ex : new RuntimeException(cause);
-                Platform.runLater(() -> PopinUtil.showError(shown));
+                PopinUtil.showError(cause); // shown on the JavaFX thread
             }
             return null;
         });
@@ -923,7 +895,7 @@ public class PlanController {
 
     @FXML
     protected void onEditClick() {
-        if (busy() || !model.canGoBack()) {
+        if (busy() || excluding || !model.canGoBack()) {
             return;
         }
         // returns at once: the editor opens once the file is read (Prepare and Copy stay clickable
@@ -994,7 +966,7 @@ public class PlanController {
             setCountedItem(analyse, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
-            setCountedItem(exclude, "plan.menu.exclude", busy ? 0 : model.excludable(selected).size());
+            setCountedItem(exclude, "plan.menu.exclude", busy || excluding ? 0 : model.excludable(selected).size());
         });
         row.contextMenuProperty().bind(Bindings.when(row.emptyProperty())
                 .then((ContextMenu) null).otherwise(menu));
@@ -1141,32 +1113,65 @@ public class PlanController {
      */
     private void alwaysIgnore(List<WorkItemExecution> rows) {
         List<Path> files = model.excludable(rows);
-        if (files.isEmpty() || busy()) {
+        if (files.isEmpty() || busy() || excluding) {
             return;
         }
-        try {
-            PipelineDocument document = PipelineDocument.load(pipelinePath);
-            PipelineDocument.Exclusion exclusion = document.exclude(files);
-            if (!exclusion.added().isEmpty()) {
-                if (!confirmExclusion(document, exclusion)) {
-                    return;
+        // the file is read and written in the background: no preparation nor edit meanwhile
+        excluding = true;
+        Plan target = plan;
+        refresh();
+        Background.run(() -> {
+                    PipelineDocument document = PipelineDocument.load(pipelinePath);
+                    return new Excluding(document, document.exclude(files));
+                },
+                read -> {
+                    if (read.exclusion().added().isEmpty()) {
+                        informExclusion(read.exclusion());
+                        excluded(target, rows, read.exclusion());
+                    } else if (confirmExclusion(read.document(), read.exclusion())) {
+                        Background.run(() -> {
+                                    read.document().save(pipelinePath);
+                                    return null;
+                                },
+                                saved -> excluded(target, rows, read.exclusion()),
+                                this::exclusionFailed);
+                    } else {
+                        excluding = false;
+                        refresh();
+                    }
+                },
+                this::exclusionFailed);
+    }
+
+    /** The pipeline read for an exclusion, with the exclusion applied to it (not saved yet). */
+    private record Excluding(PipelineDocument document, PipelineDocument.Exclusion exclusion) {
+    }
+
+    /** The files are excluded in the pipeline: in the plan they were shown from, they are ignored for this run too. */
+    private void excluded(Plan target, List<WorkItemExecution> rows, PipelineDocument.Exclusion exclusion) {
+        excluding = false;
+        List<WorkItemExecution> excluded = rows.stream()
+                .filter(r -> r.getListedPath().filter(p -> !exclusion.uncovered().contains(p)).isPresent())
+                .toList();
+        if (plan != null && plan == target && !busy()) {
+            try {
+                List<WorkItemExecution> toIgnore = model.ignorable(excluded);
+                if (!toIgnore.isEmpty()) {
+                    plan.ignore(toIgnore, model.override());
+                    model.update(plan.getState(), plan.getOrderedItems());
                 }
-                document.save(pipelinePath);
-            } else {
-                informExclusion(exclusion);
+            } catch (RuntimeException e) {
+                PopinUtil.showError(e);
             }
-            List<WorkItemExecution> excluded = rows.stream()
-                    .filter(r -> r.getListedPath().filter(p -> !exclusion.uncovered().contains(p)).isPresent())
-                    .toList();
-            List<WorkItemExecution> toIgnore = model.ignorable(excluded);
-            if (plan != null && !toIgnore.isEmpty()) {
-                plan.ignore(toIgnore, model.override());
-                model.update(plan.getState(), plan.getOrderedItems());
-            }
-        } catch (IOException | RuntimeException e) { // unreadable pipeline, failed save: the file is left as it was
-            PopinUtil.showError(e);
         }
         refresh();
+    }
+
+    /** Unreadable pipeline, failed save: the file is left as it was. */
+    private void exclusionFailed(Throwable failure) {
+        excluding = false;
+        refresh();
+        PopinUtil.showError(failure);
     }
 
     /** The globs about to be added, the files no step lists, the loss of a non-strict file's comments. */
@@ -1275,20 +1280,13 @@ public class PlanController {
         Plan analysed = plan;
         model.startAnalysing(toAnalyse);
         refresh();
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                Throwable failure = null;
-                try {
+        Background.run(() -> {
                     CopybotMainUi.ENGINE.analyse(analysed); // the preparation's watcher reports its progress
-                } catch (Throwable t) { // refused (engine busy or closed), or an unexpected failure
-                    failure = t;
-                }
-                Throwable refused = failure;
-                Platform.runLater(() -> onAnalysed(op, hold, analysed, refused));
-            });
-        } catch (RejectedExecutionException e) {
-            onAnalysed(op, hold, analysed, e); // the application is closing
-        }
+                    return null;
+                },
+                done -> onAnalysed(op, hold, analysed, null),
+                // refused (engine busy or closed), an unexpected failure, the application closing
+                failure -> onAnalysed(op, hold, analysed, failure));
     }
 
     /** analyse() has returned: the plan is PREPARED again, the view follows it. */
@@ -1304,7 +1302,7 @@ public class PlanController {
             showDetail(single); // one file asked for: what it was analysed for
         }
         if (failure != null) {
-            PopinUtil.showError(asException(failure));
+            PopinUtil.showError(failure);
         }
     }
 
@@ -1322,6 +1320,19 @@ public class PlanController {
             detailAfterAnalysis = items.size() == 1 ? items.getFirst() : null;
             startAnalysis(toAnalyse);
         }
+    }
+
+    /** The file last chosen on disk in the resume dialog: the next chooser opens in its folder. */
+    private static Path lastResumeFile;
+
+    /** The listed file of this key, else the file chosen last; null when none. */
+    private String resumeFileFolder(ItemKey key) {
+        Optional<Path> listed = key == null ? Optional.empty() : model.items().stream()
+                .filter(item -> item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).filter(key::equals).isPresent())
+                .map(WorkItemExecution::getListedPath)
+                .flatMap(Optional::stream)
+                .findFirst();
+        return listed.or(() -> Optional.ofNullable(lastResumeFile)).map(Path::toString).orElse(null);
     }
 
     /**
@@ -1377,22 +1388,35 @@ public class PlanController {
         }
         // nothing listed yet: a file chosen on disk gives the key the listing will give it
         Button chooseFile = new Button(ResourcesEngine.getString("resume.dialog.choose-file"));
+        BooleanProperty reading = new SimpleBooleanProperty(); // the chooser's folder, then the chosen file
         chooseFile.setOnAction(e -> {
-            javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
-            java.io.File chosen = chooser.showOpenDialog(dialog.getDialogPane().getScene().getWindow());
-            if (chosen != null) {
-                try {
-                    ItemKey key = Plan.fromFile(chosen.toPath()).key();
-                    file.getItems().addFirst(key);
-                    file.setValue(key);
-                } catch (RuntimeException ex) {
-                    PopinUtil.showError(ex);
+            javafx.stage.Window window = dialog.getDialogPane().getScene().getWindow();
+            reading.set(true);
+            Choosers.inFolderOf(null, resumeFileFolder(file.getValue()), folder -> {
+                reading.set(false);
+                javafx.stage.FileChooser chooser = new javafx.stage.FileChooser();
+                chooser.setInitialDirectory(folder);
+                java.io.File chosen = chooser.showOpenDialog(window);
+                if (chosen == null) {
+                    return;
                 }
-            }
+                lastResumeFile = chosen.toPath();
+                reading.set(true);
+                Background.run(() -> Plan.fromFile(chosen.toPath()).key(), // its date is read from the file
+                        key -> {
+                            reading.set(false);
+                            file.getItems().addFirst(key);
+                            file.setValue(key);
+                        },
+                        failure -> {
+                            reading.set(false);
+                            PopinUtil.showError(window, failure);
+                        });
+            });
         });
         date.disableProperty().bind(fromDate.selectedProperty().not());
         file.disableProperty().bind(fromFile.selectedProperty().not());
-        chooseFile.disableProperty().bind(fromFile.selectedProperty().not());
+        chooseFile.disableProperty().bind(fromFile.selectedProperty().not().or(reading));
         VBox content = new VBox(8);
         if (withAuto) {
             content.getChildren().add(auto);
@@ -1427,9 +1451,9 @@ public class PlanController {
         Phase phase = model.phase();
         boolean busy = busy();
         backButton.setDisable(busy || !model.canGoBack());
-        editButton.setDisable(busy || !model.canGoBack());
+        editButton.setDisable(busy || excluding || !model.canGoBack());
         prepareButton.setText(model.prepareLabel());
-        prepareButton.setDisable(loading || busy || !model.canPrepare());
+        prepareButton.setDisable(loading || excluding || busy || !model.canPrepare());
 
         show(copyButton, phase == Phase.PREPARED || phase == Phase.ANALYSING); // disabled while analysing
         copyButton.setText(model.copyLabel());

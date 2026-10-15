@@ -2,6 +2,7 @@ module com.copybot.ui {
     requires javafx.controls;
     requires javafx.fxml;
     requires java.prefs;
+    requires java.logging; // the log file (System.Logger writes through java.util.logging)
     requires jdk.management; // the CPU load shown while a plan runs
     requires com.google.gson;
 

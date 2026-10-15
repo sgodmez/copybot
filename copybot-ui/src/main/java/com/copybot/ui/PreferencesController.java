@@ -2,30 +2,31 @@ package com.copybot.ui;
 
 import com.copybot.config.ConfigFiles;
 import com.copybot.resources.ResourcesEngine;
-import com.copybot.ui.util.PopinUtil;
+import com.copybot.ui.util.Background;
+import com.copybot.ui.util.Choosers;
+import com.copybot.ui.util.ConfigRewrite;
 import com.copybot.ui.util.UiPreferences;
-import javafx.application.Platform;
 import javafx.fxml.FXML;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonType;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.TextField;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 import javafx.util.StringConverter;
 
 import java.io.File;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
-import java.util.concurrent.RejectedExecutionException;
 
 public class PreferencesController {
+
+    private static final System.Logger LOG = System.getLogger(PreferencesController.class.getName());
 
     @FXML
     private ComboBox<Locale> languageCombo;
@@ -86,26 +87,21 @@ public class PreferencesController {
         resourcesLayoutCombo.getSelectionModel().select(UiPreferences.resourcesLayout());
         setPluginPathLoaded(false);
         Path configFile = CopybotMainUi.ENGINE.configFile();
-        try {
-            // a file read (it may sit on a disconnected share): off the JavaFX thread
-            CopybotMainUi.executor.submit(() -> {
-                Path saved;
-                try {
-                    saved = ConfigFiles.readPluginPath(configFile).orElse(null);
-                } catch (Throwable t) {
-                    saved = null; // unreadable now: shown as default, and OK rewrites it only if the user picks one
-                }
-                Path read = saved;
-                Platform.runLater(() -> {
-                    savedPluginPath = read;
-                    chosenPluginPath = read;
-                    showPluginPath();
-                    setPluginPathLoaded(true);
+        // a file read (it may sit on a disconnected share): off the JavaFX thread
+        Background.run(() -> ConfigFiles.readPluginPath(configFile).orElse(null),
+                this::pluginPathLoaded,
+                failure -> {
+                    // unreadable now: shown as default, and OK rewrites it only if the user picks one
+                    LOG.log(System.Logger.Level.WARNING, "the plugin directory of " + configFile + " cannot be read", failure);
+                    pluginPathLoaded(null);
                 });
-            });
-        } catch (RejectedExecutionException e) {
-            // the application is stopping
-        }
+    }
+
+    private void pluginPathLoaded(Path read) {
+        savedPluginPath = read;
+        chosenPluginPath = read;
+        showPluginPath();
+        setPluginPathLoaded(true);
     }
 
     /** Until the configuration file is read, the folder cannot be changed nor the dialog validated. */
@@ -128,17 +124,17 @@ public class PreferencesController {
 
     @FXML
     protected void onBrowsePluginPathClick() {
-        DirectoryChooser chooser = new DirectoryChooser();
-        chooser.setTitle(ResourcesEngine.getString("pref.plugin-path"));
         Path start = (chosenPluginPath != null ? chosenPluginPath : Path.of("plugins")).toAbsolutePath().normalize();
-        if (Files.isDirectory(start)) {
-            chooser.setInitialDirectory(start.toFile());
-        }
-        File dir = chooser.showDialog(pluginPathField.getScene().getWindow());
-        if (dir != null) {
-            chosenPluginPath = dir.toPath();
-            showPluginPath();
-        }
+        Choosers.inFolderOf(browsePluginPathButton, start.toString(), folder -> {
+            DirectoryChooser chooser = new DirectoryChooser();
+            chooser.setTitle(ResourcesEngine.getString("pref.plugin-path"));
+            chooser.setInitialDirectory(folder);
+            File dir = chooser.showDialog(pluginPathField.getScene().getWindow());
+            if (dir != null) {
+                chosenPluginPath = dir.toPath();
+                showPluginPath();
+            }
+        });
     }
 
     @FXML
@@ -149,23 +145,28 @@ public class PreferencesController {
 
     @FXML
     protected void onOkClick() {
-        if (!Objects.equals(chosenPluginPath, savedPluginPath)) {
-            Path configFile = CopybotMainUi.ENGINE.configFile();
-            try {
-                // synchronous: a user-initiated rewrite of the local configuration file
-                if (ConfigFiles.rewriteLosesContent(configFile) && !confirmLossyRewrite(configFile)) {
-                    return; // nothing written, the dialog stays open
-                }
-                ConfigFiles.writePluginPath(configFile, chosenPluginPath);
-            } catch (RuntimeException e) {
-                PopinUtil.showError(e);
-                return; // the dialog stays open
-            }
-            Alert info = new Alert(Alert.AlertType.INFORMATION, ResourcesEngine.getString("pref.plugin-path.saved", configFile));
-            info.setHeaderText(null);
-            info.initOwner(pluginPathField.getScene().getWindow());
-            info.showAndWait();
+        if (Objects.equals(chosenPluginPath, savedPluginPath)) {
+            applyAndClose();
+            return;
         }
+        Path configFile = CopybotMainUi.ENGINE.configFile();
+        Path chosen = chosenPluginPath;
+        Window window = pluginPathField.getScene().getWindow();
+        setPluginPathLoaded(false); // nothing changes while the file is written
+        ConfigRewrite.rewrite(window, configFile, file -> ConfigFiles.writePluginPath(file, chosen),
+                () -> {
+                    Alert info = new Alert(Alert.AlertType.INFORMATION,
+                            ResourcesEngine.getString("pref.plugin-path.saved", configFile));
+                    info.setHeaderText(null);
+                    info.initOwner(window);
+                    info.showAndWait();
+                    applyAndClose();
+                },
+                () -> setPluginPathLoaded(true)); // nothing written: the dialog stays open
+    }
+
+    /** The other preferences, then the dialog closes. */
+    private void applyAndClose() {
         UiPreferences.ResourcesLayout layout = resourcesLayoutCombo.getValue();
         if (layout != null && layout != UiPreferences.resourcesLayout()) {
             UiPreferences.saveResourcesLayout(layout); // the plan view reads it at each refresh
@@ -177,15 +178,6 @@ public class PreferencesController {
             CopybotMainUi.reloadMainView();
         }
         close();
-    }
-
-    /** Comments, lenient syntax or repeated keys of the file would be lost: true when the user accepts it. */
-    private boolean confirmLossyRewrite(Path configFile) {
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, ResourcesEngine.getString("pref.save.lossy", configFile),
-                ButtonType.OK, ButtonType.CANCEL);
-        confirm.setHeaderText(null);
-        confirm.initOwner(pluginPathField.getScene().getWindow());
-        return confirm.showAndWait().filter(ButtonType.OK::equals).isPresent();
     }
 
     @FXML

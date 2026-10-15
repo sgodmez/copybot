@@ -895,6 +895,18 @@ public class PipelineDocumentTest {
         assertEquals(List.of(Gap.DOES_NOTHING), PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\"}],\"outStep\":null}").gaps());
     }
 
+    /** Shown in the popup of a pipeline that cannot be read: a translated text naming the section. */
+    @Test
+    public void aMalformedPipelineHasATranslatedMessage() {
+        com.copybot.resources.ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+        IllegalArgumentException notObject = assertThrows(IllegalArgumentException.class, () -> PipelineDocument.parse("[1]"));
+        assertFalse(notObject.getMessage().startsWith("%"), notObject.getMessage());
+        IllegalArgumentException notSteps = assertThrows(IllegalArgumentException.class,
+                () -> PipelineDocument.parse("{\"inSteps\":[1]}"));
+        assertFalse(notSteps.getMessage().startsWith("%"), notSteps.getMessage());
+        assertTrue(notSteps.getMessage().contains("inSteps"), notSteps.getMessage());
+    }
+
     @Test
     public void theGapsHaveATranslatedMessage() {
         for (Gap gap : Gap.values()) {

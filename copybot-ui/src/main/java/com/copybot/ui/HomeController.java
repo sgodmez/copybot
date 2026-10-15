@@ -58,6 +58,12 @@ public class HomeController {
 
     void init(MainController main) {
         this.main = main;
+        // replaced (a plan view, a rebuild): the checks and the editor no longer update it, it can go
+        recentList.sceneProperty().addListener((o, old, scene) -> {
+            if (scene == null && shown == this) {
+                shown = null;
+            }
+        });
         refresh();
     }
 

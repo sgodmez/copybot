@@ -175,7 +175,7 @@ public final class PipelineDocument {
             throw new IllegalArgumentException(e.getMessage(), e);
         }
         if (!tree.isJsonObject()) {
-            throw new IllegalArgumentException("not a JSON object");
+            throw new IllegalArgumentException(ResourcesEngine.getString("pipeline.document.not-object"));
         }
         JsonObject root = tree.getAsJsonObject();
         for (Section section : Section.values()) {
@@ -183,7 +183,8 @@ public final class PipelineDocument {
             boolean valid = value == null || value.isJsonNull()
                     || (section == Section.OUT ? value.isJsonObject() : isArrayOfObjects(value));
             if (!valid) {
-                throw new IllegalArgumentException("\"" + section.jsonName() + "\" is not made of step objects");
+                throw new IllegalArgumentException(
+                        ResourcesEngine.getString("pipeline.document.not-steps", section.jsonName()));
             }
         }
         return new PipelineDocument(root, !JsonTexts.isStrictJson(json), JsonTexts.duplicateKeys(json));

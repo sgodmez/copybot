@@ -7,14 +7,14 @@ import com.copybot.engine.resources.ResourceSettings;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.DiskSettingsModel;
 import com.copybot.ui.model.RecentPipelines;
+import com.copybot.ui.util.Background;
+import com.copybot.ui.util.ConfigRewrite;
 import com.copybot.ui.util.PopinUtil;
 import javafx.application.Platform;
 import javafx.beans.property.ReadOnlyObjectWrapper;
 import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.fxml.FXML;
-import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
-import javafx.scene.control.ButtonType;
 import javafx.scene.control.ChoiceDialog;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
@@ -26,6 +26,7 @@ import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
 import javafx.stage.DirectoryChooser;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 import javafx.util.StringConverter;
 
 import java.io.File;
@@ -34,7 +35,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.stream.IntStream;
 
 /**
@@ -42,6 +42,8 @@ import java.util.stream.IntStream;
  * configuration file and taken by the engine from the next plan.
  */
 public class ResourcesController {
+
+    private static final System.Logger LOG = System.getLogger(ResourcesController.class.getName());
 
     /** The capacities offered for a disk, after its default one. */
     private static final int MAX_CAPACITY = 16;
@@ -110,9 +112,7 @@ public class ResourcesController {
      */
     @FXML
     protected void onRefreshClick() {
-        if (disks != null) {
-            load(disks);
-        }
+        load(disks); // nothing shown yet (a first reading that failed): from the configuration file again
     }
 
     /** From the configuration file when nothing is shown yet, else from what is shown (previous). */
@@ -120,42 +120,36 @@ public class ResourcesController {
         Path configFile = CopybotMainUi.ENGINE.configFile();
         List<Path> chosen = List.copyOf(chosenFolders);
         refreshButton.setDisable(true);
-        try {
-            // the drives (a share may not answer) and the files: off the JavaFX thread
-            CopybotMainUi.executor.submit(() -> {
-                DiskSettingsModel model;
-                String error = null;
-                try {
+        // the drives (a share may not answer) and the files: off the JavaFX thread
+        Background.run(() -> {
                     List<DiskInventory.Volume> volumes = new ArrayList<>(DiskInventory.volumes());
                     chosen.forEach(folder -> volumes.add(DiskInventory.of(folder)));
-                    model = previous == null
+                    DiskSettingsModel model = previous == null
                             ? new DiskSettingsModel(volumes, ConfigFiles.readResources(configFile),
                                     DiskResolver::resourceForConfigName)
                             : previous.refreshed(volumes);
                     if (pipeline != null) {
                         addPipeline(model, pipeline);
                     }
-                } catch (Throwable t) {
-                    model = previous; // a refresh that fails leaves the rows as they were
-                    error = t.getMessage();
-                }
-                DiskSettingsModel read = model;
-                String failure = error;
-                Platform.runLater(() -> {
-                    disks = read;
-                    if (read == null) {
-                        disksPlaceholder.setText(ResourcesEngine.getString("pref.disks.unreadable", failure));
-                    } else if (failure != null) {
-                        PopinUtil.showError(new IllegalStateException(
-                                ResourcesEngine.getString("pref.disks.unreadable", failure)));
+                    return model;
+                },
+                model -> {
+                    disks = model;
+                    refreshButton.setDisable(false);
+                    showDisks();
+                },
+                failure -> {
+                    String text = ResourcesEngine.getString("pref.disks.unreadable", PopinUtil.messageOf(failure));
+                    if (previous == null) {
+                        LOG.log(System.Logger.Level.WARNING, text, failure);
+                        disksPlaceholder.setText(text); // Refresh tries again
+                    } else {
+                        // a refresh that fails leaves the rows as they were
+                        PopinUtil.showError(window(), new IllegalStateException(text, failure));
                     }
                     refreshButton.setDisable(false);
                     showDisks();
                 });
-            });
-        } catch (RejectedExecutionException e) {
-            // the application is stopping
-        }
     }
 
     /** A pipeline that cannot be read now (moved, invalid) adds nothing: the disks of the machine are still shown. */
@@ -298,22 +292,28 @@ public class ResourcesController {
         if (dir == null || disks == null) {
             return;
         }
-        chosenFolders.add(dir.toPath());
-        try {
-            CopybotMainUi.executor.submit(() -> {
-                DiskInventory.Volume volume = DiskInventory.of(dir.toPath()); // may be a share: off the thread
-                Platform.runLater(() -> {
-                    disks.addVolume(volume);
+        addFolderButton.setDisable(true);
+        Background.run(() -> DiskInventory.of(dir.toPath()), // may be a share: off the thread
+                volume -> {
+                    chosenFolders.add(dir.toPath()); // read again on a refresh
+                    if (disks != null) {
+                        disks.addVolume(volume);
+                    }
                     showDisks();
                     disksTable.getItems().stream()
                             .filter(r -> r.resource().equals(volume.resource()))
                             .findFirst()
                             .ifPresent(r -> disksTable.getSelectionModel().select(r));
+                },
+                failure -> {
+                    updateButtons(); // not added: it can be chosen again
+                    PopinUtil.showError(window(), failure);
                 });
-            });
-        } catch (RejectedExecutionException e) {
-            // the application is stopping
-        }
+    }
+
+    /** The window of this view, null once closed. */
+    private Window window() {
+        return disksTable.getScene() == null ? null : disksTable.getScene().getWindow();
     }
 
     @FXML
@@ -362,31 +362,26 @@ public class ResourcesController {
 
     @FXML
     protected void onSaveClick() {
-        if (disks != null && disks.changed()) {
-            Path configFile = CopybotMainUi.ENGINE.configFile();
-            try {
-                // synchronous: a user-initiated rewrite of the local configuration file
-                if (ConfigFiles.rewriteLosesContent(configFile) && !confirmLossyRewrite(configFile)) {
-                    return; // nothing written, the window stays open
-                }
-                ConfigFiles.Resources resources = disks.resources();
-                ConfigFiles.writeResources(configFile, resources);
-                CopybotMainUi.ENGINE.updateResources(resources.capacities(), resources.groups());
-            } catch (RuntimeException e) {
-                PopinUtil.showError(e);
-                return; // the window stays open
-            }
+        if (disks == null || !disks.changed()) {
+            close();
+            return;
         }
-        close();
-    }
-
-    /** Comments, lenient syntax or repeated keys of the file would be lost: true when the user accepts it. */
-    private boolean confirmLossyRewrite(Path configFile) {
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, ResourcesEngine.getString("pref.save.lossy", configFile),
-                ButtonType.OK, ButtonType.CANCEL);
-        confirm.setHeaderText(null);
-        confirm.initOwner(disksTable.getScene().getWindow());
-        return confirm.showAndWait().filter(ButtonType.OK::equals).isPresent();
+        ConfigFiles.Resources resources;
+        try {
+            resources = disks.resources();
+        } catch (RuntimeException e) {
+            PopinUtil.showError(window(), e);
+            return; // the window stays open
+        }
+        disksTable.getScene().getRoot().setDisable(true); // nothing changes while the file is written
+        ConfigRewrite.rewrite(window(), CopybotMainUi.ENGINE.configFile(),
+                file -> ConfigFiles.writeResources(file, resources),
+                () -> {
+                    disksTable.getScene().getRoot().setDisable(false);
+                    CopybotMainUi.ENGINE.updateResources(resources.capacities(), resources.groups());
+                    close();
+                },
+                () -> disksTable.getScene().getRoot().setDisable(false)); // nothing written: the window stays open
     }
 
     @FXML
