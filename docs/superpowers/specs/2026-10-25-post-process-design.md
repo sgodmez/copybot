@@ -17,7 +17,7 @@ Bloc facultatif du pipeline :
 ```json
 "postProcess": {
   "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe",
-  "args": ["gui", "rights", "--new-folders", "{createdDirs}"]
+  "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"]
 }
 ```
 
@@ -57,9 +57,14 @@ arguments (zone de texte, un argument par ligne), aide rappelant `{createdDirs}`
 
 ## Côté synoRight
 
-Fait dans le projet synoRight (session dédiée) : un mode de « Droits du dossier » pour un appelant comme copybot,
-qui écarte sans erreur les dossiers hors du dossier photos ou au-delà du 2e niveau, et attend que Synology Photos
-indexe les nouveaux dossiers. La ligne de commande exacte figure dans le README de synoRight.
+Fait dans le projet synoRight (session dédiée, commit acd4138) : `synoRightGui.exe` (sans console, ajoute lui-même
+`gui`) avec `rights --new-folders <dossiers…>` ouvre « Droits du dossier » sur les dossiers de niveau 1 et 2 sous le
+dossier photos, écarte sans erreur ceux de 3e niveau et les doublons, se ferme sans fenêtre s'il ne reste rien, et
+signale par une boîte d'erreur des dossiers tous hors du dossier photos (autre nom de serveur, lecteur non reconnu).
+Il attend que Synology Photos indexe les nouveaux dossiers (essai toutes les 10 s, `--wait-index <minutes>`, 10 par
+défaut). `-c` donne le dossier de sa configuration. La destination de la copie doit être écrite en UNC
+(`\\NAS\photo\…`) : un lecteur réseau n'est reconnu que s'il est mémorisé. Détails : README de synoRight, « Folders
+created by another tool ».
 
 ## Limites
 

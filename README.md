@@ -90,7 +90,9 @@ libraries.
   for it. An argument `{createdDirs}` becomes one argument per directory the
   copy created. If the copy created none, the program does not start. For
   example, this opens the photo rights of the new folders in synoRight:
-  `"postProcess": { "command": "D:\\progs\\synoRight\\synoRightGui.exe", "args": ["gui", "rights", "{createdDirs}"] }`.
+  `"postProcess": { "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe", "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"] }`.
+  synoRight keeps the folders it manages and waits until Synology Photos has
+  indexed them.
   If the program cannot start, the run gets a warning, and its status stays
   the copy's.
 - **Desktop application.** The home screen lists recent pipelines and how
