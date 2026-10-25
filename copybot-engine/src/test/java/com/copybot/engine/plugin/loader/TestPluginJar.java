@@ -32,6 +32,7 @@ public final class TestPluginJar {
     private boolean failingActions;
     private boolean missingI18nBundle;
     private final List<String> requires = new ArrayList<>();
+    private final List<String> requiresStatic = new ArrayList<>();
     private final List<Path> compileAgainst = new ArrayList<>();
 
     private TestPluginJar(String moduleName, String packageName) {
@@ -105,6 +106,16 @@ public final class TestPluginJar {
      */
     public TestPluginJar requires(String module, Path... jars) {
         requires.add(module);
+        compileAgainst.addAll(List.of(jars));
+        return this;
+    }
+
+    /**
+     * Requires this module at compile time only ({@code requires static}: optional at run time), compiled
+     * against these jars, which the test leaves out of the plugin folder.
+     */
+    public TestPluginJar requiresStatic(String module, Path... jars) {
+        requiresStatic.add(module);
         compileAgainst.addAll(List.of(jars));
         return this;
     }
@@ -189,6 +200,7 @@ public final class TestPluginJar {
             sb.append("  requires com.copybot.engine;\n");
         }
         requires.forEach(r -> sb.append("  requires ").append(r).append(";\n"));
+        requiresStatic.forEach(r -> sb.append("  requires static ").append(r).append(";\n"));
         sb.append("  exports ").append(packageName).append(";\n");
         if (plugin) {
             sb.append("  opens ").append(packageName).append(".i18n;\n");

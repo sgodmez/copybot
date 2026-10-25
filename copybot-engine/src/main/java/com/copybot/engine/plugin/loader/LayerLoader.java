@@ -1,6 +1,7 @@
 package com.copybot.engine.plugin.loader;
 
 import com.copybot.engine.plugin.report.ModuleEntry;
+import com.copybot.logger.CopybotLogger;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.utils.FileUtil;
 import com.copybot.utils.VersionUtil;
@@ -17,9 +18,14 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 
 public final class LayerLoader {
+    private static final CopybotLogger LOG = CopybotLogger.getLogger(LayerLoader.class);
+    /** Native access refused once is refused for every plugin: said once per JVM. */
+    private static final AtomicBoolean NATIVE_ACCESS_WARNED = new AtomicBoolean();
+
     private Path path;
     private final boolean dev;
     private ModuleFinder pluginsFinder;
@@ -83,9 +89,12 @@ public final class LayerLoader {
             return;
         }
 
+        // "requires static": needed at compile time only, optional at run time (JPMS): never missing
+        // (commons-compress of gps-zone, whose xz, asm, brotli codecs are not shipped)
         requires = moduleDescriptors.stream()
                 .flatMap(d -> d.requires().stream())
                 .filter(r -> !r.modifiers().contains(ModuleDescriptor.Requires.Modifier.MANDATED))
+                .filter(r -> !r.modifiers().contains(ModuleDescriptor.Requires.Modifier.STATIC))
                 .collect(Collectors.toList());
 
         // remove requirement provided by main copybot app
@@ -155,7 +164,28 @@ public final class LayerLoader {
         // create layer config
         pluginConfiguration = Configuration.resolve(pluginsFinder, parentConfs, ModuleFinder.of(), pluginsName);
         // create layer
-        moduleLayer = ModuleLayer.defineModulesWithOneLoader(pluginConfiguration, parentLayers, ClassLoader.getSystemClassLoader()).layer();
+        ModuleLayer.Controller controller = ModuleLayer.defineModulesWithOneLoader(pluginConfiguration, parentLayers, ClassLoader.getSystemClassLoader());
+        moduleLayer = controller.layer();
+        enableNativeAccess(controller);
+    }
+
+    /**
+     * Grants native access to the modules of the layer: --enable-native-access cannot name a module of a plugin
+     * layer (zstd-jni of gps-zone loads its library). The engine must have it itself (the launchers give it
+     * --enable-native-access=com.copybot.engine): without, the JVM warns once and grants it, and refuses it under
+     * --illegal-native-access=deny (logged once, the plugin still loads; its native calls are then refused).
+     */
+    private static void enableNativeAccess(ModuleLayer.Controller controller) {
+        for (Module module : controller.layer().modules()) {
+            try {
+                controller.enableNativeAccess(module);
+            } catch (RuntimeException e) { // IllegalCallerException: the engine has no native access
+                if (NATIVE_ACCESS_WARNED.compareAndSet(false, true)) {
+                    LOG.warn("plugin.load.native-access", module.getName(), String.valueOf(e));
+                }
+                return;
+            }
+        }
     }
 
     public ModuleDescriptor getMainModuleDescriptor() {

@@ -194,6 +194,36 @@ public class PluginLoaderTest {
     }
 
     @Test
+    public void anOptionalDependencyOfALibraryIsNotMissing() {
+        // like commons-compress in gps-zone: "requires static org.tukaani.xz", optional at run time (JPMS)
+        Path absentJar = TestPluginJar.library("test.optional.absent", "test.optional.absent")
+                .writeTo(plugins.resolve("not-installed"));
+        Path folder = plugins.resolve("optional");
+        Path libJar = TestPluginJar.library("test.optional.lib", "test.optional.lib")
+                .requiresStatic("test.optional.absent", absentJar)
+                .writeTo(folder.resolve("lib"));
+        TestPluginJar.plugin("test.optional").version("1.0").requires("test.optional.lib", libJar).writeTo(folder);
+
+        PluginDefinition definition = loaded(load(folder), "test.optional");
+
+        assertEquals(List.of(), definition.getMissingRequires());
+    }
+
+    @Test
+    public void theModulesOfAPluginLayerHaveNativeAccessWhenTheEngineHasIt() {
+        // a plugin layer module cannot be named by --enable-native-access: the engine grants it (zstd-jni of gps-zone)
+        Path folder = plugins.resolve("native");
+        TestPluginJar.library("test.nativecode.lib", "test.nativecode.lib").writeTo(folder.resolve("lib"));
+        TestPluginJar.plugin("test.nativecode").version("1.0").writeTo(folder);
+        assertTrue(PluginLoader.class.getModule().isNativeAccessEnabled(), "surefire: --enable-native-access=com.copybot.engine");
+
+        ModuleLayer layer = loaded(load(folder), "test.nativecode").getPluginInstance().getClass().getModule().getLayer();
+
+        assertTrue(layer.findModule("test.nativecode").orElseThrow().isNativeAccessEnabled());
+        assertTrue(layer.findModule("test.nativecode.lib").orElseThrow().isNativeAccessEnabled());
+    }
+
+    @Test
     public void aPluginRequiringAnotherIsLoadedOnTopOfIt() {
         Path base = plugins.resolve("base");
         Path baseJar = TestPluginJar.plugin("test.base").version("1.2").writeTo(base);
