@@ -52,7 +52,8 @@ journalisée.
 
 ## IHM
 
-Nœud « Pipeline » de l'éditeur : section « Après la copie » avec le programme (champ + bouton Parcourir) et les
+Entrée dédiée « Après la copie » de l'arbre de l'éditeur, en dernier, après la sortie (l'ordre de l'exécution) :
+le programme (champ + bouton Parcourir) et les
 arguments (zone de texte, un argument par ligne), aide rappelant `{createdDirs}`. Vider le programme retire le bloc.
 
 ## Côté synoRight

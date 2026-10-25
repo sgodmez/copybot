@@ -75,13 +75,14 @@ import java.util.stream.Collectors;
  */
 public class EditorController {
 
-    enum Kind { PIPELINE, SECTION, STEP }
+    enum Kind { PIPELINE, SECTION, STEP, POST_PROCESS }
 
-    /** A node of the tree: the pipeline, a section, or the step at index of a section. */
+    /** A node of the tree: the pipeline, a section, the step at index of a section, or the program launched after the copy. */
     record EditorNode(Kind kind, Section section, int index) {
     }
 
     private static final EditorNode PIPELINE_NODE = new EditorNode(Kind.PIPELINE, null, -1);
+    private static final EditorNode POST_PROCESS_NODE = new EditorNode(Kind.POST_PROCESS, null, -1);
 
     @FXML private TreeView<EditorNode> tree;
     @FXML private Button addButton;
@@ -275,6 +276,11 @@ public class EditorController {
             }
             root.getChildren().add(sectionItem);
         }
+        TreeItem<EditorNode> postProcessItem = new TreeItem<>(POST_PROCESS_NODE); // after the out step, like the run
+        if (POST_PROCESS_NODE.equals(select)) {
+            selected = postProcessItem;
+        }
+        root.getChildren().add(postProcessItem);
         tree.setRoot(root);
         tree.getSelectionModel().select(selected);
     }
@@ -282,6 +288,7 @@ public class EditorController {
     private String label(EditorNode node) {
         return switch (node.kind()) {
             case PIPELINE -> ResourcesEngine.getString("editor.section.PIPELINE");
+            case POST_PROCESS -> ResourcesEngine.getString("editor.post-process");
             case SECTION -> ResourcesEngine.getString("editor.section." + node.section().name());
             case STEP -> {
                 JsonObject step = step(node);
@@ -390,6 +397,8 @@ public class EditorController {
         }
         if (node.kind() == Kind.PIPELINE) {
             pipelineForm();
+        } else if (node.kind() == Kind.POST_PROCESS) {
+            formBox.getChildren().add(postProcessForm());
         } else {
             stepForm(node);
         }
@@ -493,8 +502,7 @@ public class EditorController {
                 new VBox(3, new Label(ResourcesEngine.getString("editor.conflict-check")), conflictCheck),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-check")), destinationCheck),
-                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch),
-                postProcessForm());
+                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch));
     }
 
     /** The program launched at the end of a copy and its arguments, one per line (spec post-process). */
