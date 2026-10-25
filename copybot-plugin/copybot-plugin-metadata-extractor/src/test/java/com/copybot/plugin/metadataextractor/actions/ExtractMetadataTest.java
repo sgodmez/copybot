@@ -26,11 +26,13 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
+import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
-import static com.copybot.plugin.metadataextractor.actions.TestJpegs.jpegWithDateOriginal;
+import static com.copybot.plugin.metadataextractor.actions.TestJpegs.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ExtractMetadataTest {
@@ -371,5 +373,89 @@ public class ExtractMetadataTest {
 
         CopybotException e = assertThrows(CopybotException.class, () -> new ExtractMetadata().doAnalyze(unreadable));
         assertSame(removed, e.getCause());
+    }
+
+    // ---- doAnalyze: the raw GPS values and the recorded offset ----
+
+    private static byte[] jpegWithGps(String status, String date, int[] time, int[] lat, int[] lon, String exifDate, String offset) {
+        List<TestJpegs.Entry> exif = new ArrayList<>(List.of(ascii(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL, exifDate)));
+        if (offset != null) {
+            exif.add(ascii(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL, offset));
+        }
+        return jpeg(tiff(List.of(), exif, List.of(
+                ascii(TAG_GPS_LATITUDE_REF, "N"), rationals(TAG_GPS_LATITUDE, lat),
+                ascii(TAG_GPS_LONGITUDE_REF, "E"), rationals(TAG_GPS_LONGITUDE, lon),
+                rationals(TAG_GPS_TIME_STAMP, time), ascii(TAG_GPS_STATUS, status),
+                ascii(TAG_GPS_DATE_STAMP, date))));
+    }
+
+    private static final int[] PARIS_LAT = {48, 51, 24};
+    private static final int[] PARIS_LON = {2, 21, 8};
+
+    @Test
+    public void exposesTheGpsPositionTimeAndValidity() throws IOException {
+        byte[] jpeg = jpegWithGps("A", "2026:10:25", new int[]{18, 30, 5}, PARIS_LAT, PARIS_LON, "2026:10:25 19:30:00", null);
+        WorkItem photo = item(() -> new ByteArrayInputStream(jpeg));
+
+        new ExtractMetadata().doAnalyze(photo);
+
+        var raw = photo.getMetadatas().raw();
+        assertEquals(48 + 51 / 60.0 + 24 / 3600.0, (Double) raw.get(WorkItemMetadata.GPS_LATITUDE), 1e-6);
+        assertEquals(2 + 21 / 60.0 + 8 / 3600.0, (Double) raw.get(WorkItemMetadata.GPS_LONGITUDE), 1e-6);
+        assertEquals(Instant.parse("2026-10-25T18:30:05Z"), raw.get(WorkItemMetadata.GPS_TIME));
+        assertEquals(Boolean.TRUE, raw.get(WorkItemMetadata.GPS_VALID));
+    }
+
+    @Test
+    public void aVoidOrZeroGpsIsNotValid() throws IOException {
+        byte[] voidFix = jpegWithGps("V", "2026:10:25", new int[]{18, 30, 5}, PARIS_LAT, PARIS_LON, "2026:10:25 19:30:00", null);
+        byte[] zero = jpegWithGps("A", "2026:10:25", new int[]{18, 30, 5}, new int[]{0, 0, 0}, new int[]{0, 0, 0}, "2026:10:25 19:30:00", null);
+        WorkItem voided = item(() -> new ByteArrayInputStream(voidFix));
+        WorkItem zeroed = item(() -> new ByteArrayInputStream(zero));
+
+        new ExtractMetadata().doAnalyze(voided);
+        new ExtractMetadata().doAnalyze(zeroed);
+
+        assertEquals(Boolean.FALSE, voided.getMetadatas().raw().get(WorkItemMetadata.GPS_VALID));
+        assertEquals(Boolean.FALSE, zeroed.getMetadatas().raw().get(WorkItemMetadata.GPS_VALID));
+    }
+
+    @Test
+    public void exposesTheRecordedOffsetOfAPhotoOnly(@TempDir Path dir) throws IOException {
+        byte[] jpeg = jpegWithDateOriginal("2026:10:25 23:30:00", "-06:00");
+        WorkItem photo = item(() -> new ByteArrayInputStream(jpeg));
+        byte[] noOffset = jpegWithDateOriginal("2026:10:25 23:30:00");
+        WorkItem unrecorded = item(() -> new ByteArrayInputStream(noOffset));
+        WorkItem clip = new WorkItem(Files.write(dir.resolve("clip.mp4"), mp4CreatedAt(Instant.parse("2026-10-26T05:30:00Z"))));
+
+        new ExtractMetadata().doAnalyze(photo);
+        new ExtractMetadata().doAnalyze(unrecorded);
+        new ExtractMetadata().doAnalyze(clip);
+
+        assertEquals(ZoneOffset.of("-06:00"), photo.getMetadatas().raw().get(WorkItemMetadata.RECORDED_OFFSET));
+        assertFalse(unrecorded.getMetadatas().raw().containsKey(WorkItemMetadata.RECORDED_OFFSET));
+        assertTrue(clip.getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE).isPresent());
+        assertFalse(clip.getMetadatas().raw().containsKey(WorkItemMetadata.RECORDED_OFFSET));
+    }
+
+    @Test
+    public void aReanalysisWithoutGpsRemovesTheKeys() throws IOException {
+        byte[] withGps = jpegWithGps("A", "2026:10:25", new int[]{18, 30, 5}, PARIS_LAT, PARIS_LON, "2026:10:25 19:30:00", "+01:00");
+        byte[] without = jpegWithDateOriginal("2026:10:25 19:30:00");
+        boolean[] first = {true};
+        WorkItem photo = item(() -> new ByteArrayInputStream(first[0] ? withGps : without));
+        ZoneId suggested = ZoneId.of("Europe/Paris");
+        new ExtractMetadata().doAnalyze(photo);
+        photo.getMetadatas().raw().put(WorkItemMetadata.SUGGESTED_ZONE, suggested);
+        first[0] = false;
+
+        new ExtractMetadata().doAnalyze(photo);
+
+        var raw = photo.getMetadatas().raw();
+        for (String key : List.of(WorkItemMetadata.GPS_LATITUDE, WorkItemMetadata.GPS_LONGITUDE, WorkItemMetadata.GPS_TIME,
+                WorkItemMetadata.GPS_VALID, WorkItemMetadata.RECORDED_OFFSET)) {
+            assertFalse(raw.containsKey(key), key);
+        }
+        assertEquals(suggested, raw.get(WorkItemMetadata.SUGGESTED_ZONE));
     }
 }

@@ -9,7 +9,9 @@ import com.drew.imaging.ImageMetadataReader;
 import com.drew.imaging.ImageProcessingException;
 import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
+import com.drew.lang.GeoLocation;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
+import com.drew.metadata.exif.GpsDirectory;
 import com.drew.metadata.mov.QuickTimeDirectory;
 import com.drew.metadata.mov.metadata.QuickTimeMetadataDirectory;
 import com.drew.metadata.mp4.Mp4Directory;
@@ -26,7 +28,9 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Date;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.TimeZone;
 import java.util.function.Supplier;
 import java.util.regex.Matcher;
@@ -48,10 +52,16 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
         Path local = item.getLocalLocation();
         Optional<Capture> capture = captureDate(metadata, ZoneId.systemDefault(),
                 () -> local == null ? Optional.empty() : sonySidecarOffset(local));
+        WorkItemMetadata metadatas = item.getMetadatas();
+        // rewritten at each analysis reading metadata; SUGGESTED_ZONE belongs to gps-zone
+        Map<String, Object> raw = metadatas.raw();
+        raw.keySet().removeAll(Set.of(WorkItemMetadata.GPS_LATITUDE, WorkItemMetadata.GPS_LONGITUDE,
+                WorkItemMetadata.GPS_TIME, WorkItemMetadata.GPS_VALID, WorkItemMetadata.RECORDED_OFFSET));
+        putGps(metadata, raw);
+        capture.flatMap(Capture::recorded).ifPresent(offset -> raw.put(WorkItemMetadata.RECORDED_OFFSET, offset));
         if (capture.isEmpty()) {
             return;
         }
-        WorkItemMetadata metadatas = item.getMetadatas();
         metadatas.raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, capture.get().clockUnknown());
         Optional<ZoneId> place = metadatas.getZone(WorkItemMetadata.CAPTURE_ZONE);
         metadatas.setTime(WorkItemMetadata.CAPTURE_DATE, place.isPresent()
@@ -63,7 +73,27 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
      * A capture date, and whether its clock is unknown: an EXIF photo without recorded offset, whose wall time
      * is only known to be that of some clock. A video is never unknown: its UTC creation date is reliable.
      */
-    record Capture(ZonedDateTime date, boolean clockUnknown) {
+    record Capture(ZonedDateTime date, boolean clockUnknown, Optional<ZoneOffset> recorded) {
+
+        Capture(ZonedDateTime date, boolean clockUnknown) {
+            this(date, clockUnknown, Optional.empty());
+        }
+    }
+
+    /** The raw GPS position, time and validity; nothing when the file has no GPS position. */
+    private static void putGps(Metadata metadata, Map<String, Object> raw) {
+        GpsDirectory gps = metadata.getFirstDirectoryOfType(GpsDirectory.class);
+        GeoLocation location = gps == null ? null : gps.getGeoLocation();
+        if (location == null) {
+            return;
+        }
+        raw.put(WorkItemMetadata.GPS_LATITUDE, location.getLatitude());
+        raw.put(WorkItemMetadata.GPS_LONGITUDE, location.getLongitude());
+        Date time = gps.getGpsDate();
+        if (time != null) {
+            raw.put(WorkItemMetadata.GPS_TIME, time.toInstant());
+        }
+        raw.put(WorkItemMetadata.GPS_VALID, !location.isZero() && !"V".equalsIgnoreCase(gps.getString(GpsDirectory.TAG_STATUS)));
     }
 
     /**
@@ -88,11 +118,11 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
                                          Supplier<Optional<ZoneOffset>> sidecarOffset) {
         ExifSubIFDDirectory exif = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
         if (exif != null) {
-            Optional<ZoneId> recorded = offset(exif.getString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL));
-            ZoneId cameraZone = recorded.orElse(localZone);
+            Optional<ZoneOffset> recorded = offset(exif.getString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL));
+            ZoneId cameraZone = recorded.<ZoneId>map(offset -> offset).orElse(localZone);
             Date original = exif.getDateOriginal(TimeZone.getTimeZone(cameraZone));
             if (original != null) {
-                return Optional.of(new Capture(original.toInstant().atZone(cameraZone), recorded.isEmpty()));
+                return Optional.of(new Capture(original.toInstant().atZone(cameraZone), recorded.isEmpty(), recorded));
             }
         }
         return videoDate(metadata, QuickTimeDirectory.class, QuickTimeDirectory.TAG_CREATION_TIME)
@@ -143,7 +173,7 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
         }
     }
 
-    private static Optional<ZoneId> offset(String text) {
+    private static Optional<ZoneOffset> offset(String text) {
         if (text == null) {
             return Optional.empty();
         }

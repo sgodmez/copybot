@@ -159,6 +159,7 @@ when several versions are installed.
 | `file.write` | built in | out | Safe write to a pattern-built path: temporary file and rename, verification, conflict policy, optional move |
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
 | `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
+| `check` | `com.copybot.plugin.gpszone` (optional) | analyze | Goes after `extract`. Flags a photo whose camera was badly set: from its GPS position, the time zone of the place (offline boundaries of [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder) through [timeshape](https://github.com/RomanIakovlev/timeshape)) gives another offset than the recorded one, the GPS time confirming the capture date. Nothing near a time zone boundary, at sea, or for a video. The plan suggests the zone; you apply it |
 
 ## Plugins
 
@@ -209,8 +210,8 @@ You need **JDK 25** and Maven (3.8.8 or later).
 mvn verify
 ```
 
-builds the modules and runs the test suite (about 775 tests across the
-engine, the UI and the plugin). To build the desktop application as well, add
+builds the modules and runs the test suite (about 1,170 tests across the
+engine, the UI and the plugins). To build the desktop application as well, add
 the `dist` profile:
 
 ```sh
@@ -222,6 +223,7 @@ It produces:
 - `copybot-ui/target/dist/Copybot/` — the desktop application (`Copybot.exe` on Windows), as a jpackage app image;
 - `copybot-ui/target/copybot/` — the same as a jlink runtime image, also zipped as `copybot.zip`;
 - `copybot-plugin/copybot-plugin-metadata-extractor/target/` — the metadata plugin. Copy its jar and its `lib/` folder into `plugins/metadata-extractor/` next to the application.
+- `copybot-plugin/copybot-plugin-gps-zone/target/` — the optional GPS time zone check. Copy its jar and its `lib/` folder (about 36 MB, mostly the time zone boundaries) into `plugins/gps-zone/` next to the application. It loads the boundaries at the first photo whose GPS can tell (about 1 s and 200 MB of memory), never for an import without GPS. Its data is under the ODbL: see [NOTICE](NOTICE).
 
 To run a pipeline from the command line with the jlink image:
 
@@ -233,6 +235,12 @@ copybot-ui/target/copybot/bin/java --enable-native-access=com.copybot.engine \
 
 The metadata plugin needs the `java.desktop` module. The runtime image holds
 it; with a custom image or `--limit-modules`, add `--add-modules java.desktop`.
+The gps-zone plugin decompresses its data with a native library (zstd-jni):
+the engine grants native access to the modules of the plugins when it has it
+itself (`--enable-native-access=com.copybot.engine`, as above); without, the
+JVM warns, which does not stop it. At the first photo with GPS, its protobuf
+library also prints a JVM warning about a terminally deprecated
+`sun.misc.Unsafe` method on stderr: harmless, it does not stop the run.
 
 | Exit code | Meaning |
 |---|---|
@@ -277,8 +285,9 @@ the share itself (`Z:\` and `\\nas\photos\`) are one resource.
 `--config-file=./copybot-ui/src/dev/config.json` and the repository root as
 working directory (the shared IntelliJ run configuration `CopybotMainUiDev`
 does that). This config file
-loads the metadata plugin straight from its `target/` folder, so package that
-plugin once first.
+loads the metadata and gps-zone plugins straight from their `target/` folders
+(`devPluginPaths`: a list of folders, or a single one as a string), so package
+these plugins once first.
 
 ## Why Copybot?
 
@@ -305,7 +314,7 @@ idea where to start again. Copybot is built around a few rules:
 |---|---|
 | [`copybot-engine`](copybot-engine) | The engine, the CLI, the plugin API (`com.copybot.plugin.api.*`) and the built-in `file.read` / `file.write` actions |
 | [`copybot-ui`](copybot-ui) | The JavaFX desktop application and its packaging |
-| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor` |
+| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, and the optional `gps-zone` |
 | [`copybot-plugin-demo`](copybot-plugin-demo) | Demo plugins exercising module isolation, versions and dependencies |
 | [`copybot-dependencies`](copybot-dependencies) | Shared dependency versions |
 

@@ -87,6 +87,7 @@ public class PlanController implements PlanOperations.View {
     @FXML private Label resumeCountLabel;
     /** The files to copy whose target already exists (spec conflict-check §5). */
     @FXML private Label conflictLabel;
+    @FXML private Label suggestionLabel;
     @FXML private Hyperlink changeResumeLink;
     @FXML private ComboBox<Filter> filterCombo;
     @FXML private TableView<WorkItemExecution> itemsTable;
@@ -140,13 +141,29 @@ public class PlanController implements PlanOperations.View {
         dateColumn.setCellFactory(column -> new TableCell<>() {
             /** The mark of a row whose time zone was corrected (spec timezone-correction §4). */
             private final SVGPath zoneMark = mark(CLOCK);
+            /** The mark of a row whose time zone the GPS suggests, in the orange of the conflict label. */
+            private final SVGPath suggestionMark = warningMark();
+            /** The marks present, side by side. */
+            private final HBox marksBox = new HBox(3);
 
             @Override
             protected void updateItem(WorkItemExecution item, boolean empty) {
                 super.updateItem(item, empty);
                 PlanViewModel.DateCell cell = empty || item == null ? null : PlanViewModel.dateCell(item);
                 setText(cell == null ? null : cell.text());
-                setGraphic(cell != null && cell.corrected() ? zoneMark : null);
+                List<SVGPath> marks = new ArrayList<>();
+                if (cell != null && cell.corrected()) {
+                    marks.add(zoneMark);
+                }
+                if (cell != null && cell.suggested()) {
+                    marks.add(suggestionMark);
+                }
+                if (marks.isEmpty()) {
+                    setGraphic(null);
+                } else {
+                    marksBox.getChildren().setAll(marks);
+                    setGraphic(marksBox);
+                }
                 setTooltip(cell == null || cell.tooltip() == null ? null : new Tooltip(cell.tooltip()));
             }
         });
@@ -427,6 +444,9 @@ public class PlanController implements PlanOperations.View {
         zone.setOnAction(e -> correctZone(model().correctable(selectedRows())));
         MenuItem zoneClear = new MenuItem();
         zoneClear.setOnAction(e -> clearZone(model().uncorrectable(selectedRows())));
+        // generic, and hidden without suggestion: nothing appears without the gps-zone plugin
+        MenuItem zoneSuggested = new MenuItem();
+        zoneSuggested.setOnAction(e -> applySuggestedZones(model().suggestible(selectedRows())));
         MenuItem ignore = new MenuItem();
         ignore.setOnAction(e -> ignoreForThisRun(model().ignorable(selectedRows()), true));
         MenuItem unignore = new MenuItem();
@@ -437,7 +457,7 @@ public class PlanController implements PlanOperations.View {
         outPattern.setOnAction(e -> chooseOutPattern(model().patternable(selectedRows())));
         MenuItem pipelinePattern = new MenuItem();
         pipelinePattern.setOnAction(e -> pipelinePattern(model().withOwnPattern(selectedRows())));
-        ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, zone, zoneClear, new SeparatorMenuItem(),
+        ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, zone, zoneClear, zoneSuggested, new SeparatorMenuItem(),
                 ignore, unignore, exclude, new SeparatorMenuItem(), outPattern, pipelinePattern);
         menu.setOnShowing(e -> {
             PlanViewModel model = model();
@@ -450,6 +470,9 @@ public class PlanController implements PlanOperations.View {
             setCountedItem(analyse, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
             setCountedItem(zone, "plan.menu.zone", busy ? 0 : model.correctable(selected).size());
             setCountedItem(zoneClear, "plan.menu.zone-clear", busy ? 0 : model.uncorrectable(selected).size());
+            int suggestible = busy ? 0 : model.suggestible(selected).size();
+            setCountedItem(zoneSuggested, "plan.menu.zone-suggested", suggestible);
+            zoneSuggested.setVisible(suggestible > 0);
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
             setCountedItem(exclude, "plan.menu.exclude", busy || excluding ? 0 : model.excludable(selected).size());
@@ -470,6 +493,17 @@ public class PlanController implements PlanOperations.View {
 
     /** A clock, drawn: the time zone of this file was corrected, in this plan or a previous one (kept in the state). */
     private static final String CLOCK = "M6 0a6 6 0 1 1 0 12A6 6 0 0 1 6 0zm0 1.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM5.25 3h1.5v2.69l1.83 1.83-1.06 1.06-2.27-2.27z";
+
+    /** A warning triangle with an exclamation mark, drawn: the GPS suggests another time zone for this file. */
+    private static final String WARNING = "M6 0l6 11H0zM5.4 3.8v3.6h1.2V3.8zM5.4 8.2v1.2h1.2V8.2z";
+
+    /** The warning mark, in the orange of the conflict label. */
+    private static SVGPath warningMark() {
+        SVGPath mark = mark(WARNING);
+        mark.setFillRule(javafx.scene.shape.FillRule.EVEN_ODD);
+        mark.setStyle("-fx-fill: #c2610c;");
+        return mark;
+    }
 
     /** A mark of the Target column, in the grey of the marks. */
     private static SVGPath mark(String content) {
@@ -803,6 +837,18 @@ public class PlanController implements PlanOperations.View {
         });
     }
 
+    /** "Apply the proposed time zone": each suggested zone is applied to its rows, then they are analysed again. */
+    private void applySuggestedZones(List<WorkItemExecution> items) {
+        Plan plan = ops.plan();
+        if (plan == null || items.isEmpty() || ops.busy()) {
+            return;
+        }
+        Optional<RuntimeException> failure = PlanViewModel.applySuggestedZones(items,
+                (zone, group) -> plan.correctZone(group, zone, null, model().override()));
+        reanalyseCorrected(plan); // the zones applied before a failure too: corrected and saved
+        failure.ifPresent(PopinUtil::showError);
+    }
+
     /** "Cancel the correction": the files go back to the zone of their metadata, analysed again. */
     private void clearZone(List<WorkItemExecution> items) {
         Plan plan = ops.plan();
@@ -879,6 +925,9 @@ public class PlanController implements PlanOperations.View {
         Optional<String> conflicts = model.conflictText();
         conflictLabel.setText(conflicts.orElse(""));
         show(conflictLabel, conflicts.isPresent());
+        Optional<String> suggestions = model.suggestionSummary();
+        suggestionLabel.setText(suggestions.map(s -> "⚠ " + s).orElse(""));
+        show(suggestionLabel, suggestions.isPresent());
         changeResumeLink.setDisable(busy || !model.canChangeResumePoint() && !model.canChooseResumePoint());
 
         placeholder.setText(phase == Phase.NOT_PREPARED ? ResourcesEngine.getString("plan.placeholder") : "");

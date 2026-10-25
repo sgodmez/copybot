@@ -38,6 +38,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -830,13 +831,133 @@ public class PlanViewModelTest {
     public void dateCellOfACorrectedRowShowsTheClockAndTheShotDateInTheCorrectedZone() throws IOException {
         WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
         PlanViewModel.DateCell plain = PlanViewModel.dateCell(item);
-        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, null), plain, "not corrected: unchanged");
+        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, false, null), plain, "not corrected: unchanged");
 
         item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
 
-        assertEquals(new PlanViewModel.DateCell("25/10/2026 23:30", true,
+        assertEquals(new PlanViewModel.DateCell("25/10/2026 23:30", true, false,
                         ResourcesEngine.getString("plan.date.corrected", "America/Mexico_City", PlanViewModel.dateText(item))),
                 PlanViewModel.dateCell(item));
+    }
+
+    private WorkItemExecution suggested(String name, String zone) throws IOException {
+        WorkItemExecution item = shot(name, "2026-10-26T05:30:00Z");
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.RECORDED_OFFSET, ZoneOffset.ofHours(1));
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.SUGGESTED_ZONE, ZoneId.of(zone));
+        return item;
+    }
+
+    @Test
+    public void suggestibleKeepsTheFlaggedCorrectableRows() throws IOException {
+        WorkItemExecution flagged = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution plain = shot("b.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution skipped = suggested("c.jpg", "America/Mexico_City");
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution failed = suggested("d.jpg", "America/Mexico_City");
+        failed.setError(new IllegalStateException("no date"));
+        PlanViewModel model = prepared(false, flagged, plain, skipped, failed);
+        List<WorkItemExecution> all = List.of(flagged, plain, skipped, failed);
+
+        assertEquals(List.of(flagged, skipped), model.suggestible(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.suggestible(all), "not once the copy started");
+    }
+
+    @Test
+    public void bySuggestedZoneGroupsTheRows() throws IOException {
+        WorkItemExecution mexico = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution tokyo = suggested("b.jpg", "Asia/Tokyo");
+        WorkItemExecution mexico2 = suggested("c.jpg", "America/Mexico_City");
+        WorkItemExecution plain = shot("d.jpg", "2026-10-26T05:30:00Z");
+
+        Map<ZoneId, List<WorkItemExecution>> groups = PlanViewModel.bySuggestedZone(List.of(mexico, tokyo, mexico2, plain));
+
+        assertEquals(List.of(ZoneId.of("America/Mexico_City"), ZoneId.of("Asia/Tokyo")), List.copyOf(groups.keySet()));
+        assertEquals(List.of(mexico, mexico2), groups.get(ZoneId.of("America/Mexico_City")));
+        assertEquals(List.of(tokyo), groups.get(ZoneId.of("Asia/Tokyo")));
+    }
+
+    @Test
+    public void applySuggestedZonesCorrectsEachGroupAndReturnsTheFailureOfOne() throws IOException {
+        WorkItemExecution mexico = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution tokyo = suggested("b.jpg", "Asia/Tokyo");
+        WorkItemExecution paris = suggested("c.jpg", "Europe/Paris");
+        List<ZoneId> corrected = new ArrayList<>();
+        RuntimeException stateWrite = new IllegalStateException("the state cannot be written");
+
+        Optional<RuntimeException> failure = PlanViewModel.applySuggestedZones(List.of(mexico, tokyo, paris), (zone, group) -> {
+            if (zone.equals(ZoneId.of("Asia/Tokyo"))) {
+                throw stateWrite;
+            }
+            corrected.add(zone);
+        });
+
+        // the caller analyses again what was corrected, then shows the failure
+        assertEquals(Optional.of(stateWrite), failure);
+        assertEquals(List.of(ZoneId.of("America/Mexico_City")), corrected, "stopped at the failure");
+        assertEquals(Optional.empty(), PlanViewModel.applySuggestedZones(List.of(mexico, paris), (zone, group) -> { }));
+    }
+
+    @Test
+    public void suggestionTextTellsTheNotedAndExpectedOffsets() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(Optional.empty(), PlanViewModel.suggestionText(item));
+
+        item = suggested("b.jpg", "America/Mexico_City");
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested", "+01:00", "America/Mexico_City", "-06:00")),
+                PlanViewModel.suggestionText(item));
+    }
+
+    @Test
+    public void suggestionSummaryCountsTheRowsStillToCopy() throws IOException {
+        WorkItemExecution toCopy = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution ignored = suggested("b.jpg", "America/Mexico_City");
+        ignored.setIgnored("ignored for this run");
+        WorkItemExecution failed = suggested("c.jpg", "America/Mexico_City");
+        failed.setError(new IOException("unreadable"));
+        WorkItemExecution skipped = suggested("d.jpg", "America/Mexico_City");
+        skipped.setSkipped("before the cursor");
+        WorkItemExecution plain = shot("e.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, plain);
+        assertEquals(Optional.empty(), model.suggestionSummary(), "none flagged");
+
+        model = prepared(false, toCopy, ignored, failed, skipped, plain);
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", 1)), model.suggestionSummary());
+    }
+
+    @Test
+    public void aCancelledGpsCorrectionIsSuggestedAgain() throws IOException {
+        WorkItemExecution item = suggested("a.jpg", "America/Mexico_City");
+        PlanViewModel model = prepared(false, item);
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.SUGGESTED_ZONE); // the analysis in the zone
+
+        assertEquals(List.of(), model.suggestible(List.of(item)));
+
+        // the correction cancelled: the zone of the metadata again, the plugin flags the photo at the re-analysis
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAPTURE_ZONE);
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.SUGGESTED_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(List.of(item), model.suggestible(List.of(item)));
+    }
+
+    @Test
+    public void dateCellOfASuggestedRowHasTheWarningAndItsLine() throws IOException {
+        WorkItemExecution item = suggested("a.jpg", "America/Mexico_City");
+        String line = PlanViewModel.suggestionText(item).orElseThrow();
+
+        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, true, line), PlanViewModel.dateCell(item));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("Asia/Tokyo"));
+        PlanViewModel.DateCell both = PlanViewModel.dateCell(item);
+
+        assertTrue(both.corrected() && both.suggested());
+        assertEquals(ResourcesEngine.getString("plan.date.corrected", "Asia/Tokyo", PlanViewModel.dateText(item)) + "\n" + line,
+                both.tooltip());
     }
 
     @Test

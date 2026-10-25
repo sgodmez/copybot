@@ -15,6 +15,7 @@
 
     <modules>
         <module>copybot-plugin-metadata-extractor</module>
+        <module>copybot-plugin-gps-zone</module>
     </modules>
 
     <dependencies>

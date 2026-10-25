@@ -20,6 +20,13 @@ final class TestJpegs {
     static final int TAG_USER_COMMENT = 0x9286;
     static final int TAG_GPS_VERSION = 0x0000;
     static final int TAG_GPS_MAP_DATUM = 0x0012;
+    static final int TAG_GPS_LATITUDE_REF = 0x0001;
+    static final int TAG_GPS_LATITUDE = 0x0002;
+    static final int TAG_GPS_LONGITUDE_REF = 0x0003;
+    static final int TAG_GPS_LONGITUDE = 0x0004;
+    static final int TAG_GPS_TIME_STAMP = 0x0007;
+    static final int TAG_GPS_STATUS = 0x0009;
+    static final int TAG_GPS_DATE_STAMP = 0x001D;
     private static final int TAG_EXIF_POINTER = 0x8769;
     private static final int TAG_GPS_POINTER = 0x8825;
     private static final int TAG_COMPRESSION = 0x0103;
@@ -29,6 +36,7 @@ final class TestJpegs {
     private static final short ASCII = 2;
     private static final short SHORT = 3;
     private static final short LONG = 4;
+    private static final short RATIONAL = 5;
     private static final short UNDEFINED = 7;
 
     private TestJpegs() {
@@ -61,6 +69,17 @@ final class TestJpegs {
             note.putShort((short) 1).putShort((short) 0xB020).putShort(ASCII).putInt(text.length).putInt(offset + 30).putInt(0);
             note.put(text);
             return note.array();
+        });
+    }
+
+    /** RATIONAL entry of whole numbers (denominator 1): degrees, minutes, seconds, or hours, minutes, seconds. */
+    static Entry rationals(int tag, int... numbers) {
+        return new Entry(tag, RATIONAL, (offset, order) -> {
+            ByteBuffer value = ByteBuffer.allocate(8 * numbers.length).order(order);
+            for (int number : numbers) {
+                value.putInt(number).putInt(1);
+            }
+            return value.array();
         });
     }
 
@@ -128,7 +147,7 @@ final class TestJpegs {
         tiff.putShort((short) all.size());
         for (Entry entry : all) {
             byte[] value = entry.value().at(data[0], tiff.order());
-            int count = value.length / (entry.type() == LONG ? 4 : entry.type() == SHORT ? 2 : 1);
+            int count = value.length / (entry.type() == LONG ? 4 : entry.type() == SHORT ? 2 : entry.type() == RATIONAL ? 8 : 1);
             tiff.putShort((short) entry.tag()).putShort(entry.type()).putInt(count);
             if (value.length <= 4) {
                 tiff.put(value).put(new byte[4 - value.length]);

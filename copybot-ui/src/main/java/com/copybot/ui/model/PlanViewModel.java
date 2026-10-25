@@ -32,10 +32,13 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -719,6 +722,64 @@ public final class PlanViewModel {
                 CORRECTED_DATE.format(shot.get().atZone(zone.get()))));
     }
 
+    // ---- time zone suggested by the GPS (optional gps-zone plugin, spec gps-zone-check §3, §6) ----
+
+    /** Among these rows, those "Apply the proposed time zone" applies to: the correctable ones with a suggested zone. */
+    public List<WorkItemExecution> suggestible(List<WorkItemExecution> rows) {
+        return correctable(rows).stream()
+                .filter(i -> i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent()).toList();
+    }
+
+    /** These rows grouped by their suggested zone, in order of appearance; the rows without suggestion are left out. */
+    public static Map<ZoneId, List<WorkItemExecution>> bySuggestedZone(List<WorkItemExecution> rows) {
+        Map<ZoneId, List<WorkItemExecution>> groups = new LinkedHashMap<>();
+        for (WorkItemExecution row : rows) {
+            row.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE)
+                    .ifPresent(zone -> groups.computeIfAbsent(zone, z -> new ArrayList<>()).add(row));
+        }
+        return groups;
+    }
+
+    /**
+     * Applies each suggested zone to its rows ({@link #bySuggestedZone}) with {@code correct}, which may fail (the
+     * state cannot be written). The first failure stops the next zones and is returned: the zones applied before
+     * it stay applied, their rows are to analyse again whatever the outcome.
+     */
+    public static Optional<RuntimeException> applySuggestedZones(List<WorkItemExecution> rows,
+                                                                BiConsumer<ZoneId, List<WorkItemExecution>> correct) {
+        for (Map.Entry<ZoneId, List<WorkItemExecution>> group : bySuggestedZone(rows).entrySet()) {
+            try {
+                correct.accept(group.getKey(), group.getValue());
+            } catch (RuntimeException e) {
+                return Optional.of(e);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static final DateTimeFormatter OFFSET_TEXT = DateTimeFormatter.ofPattern("xxx");
+
+    /** "Camera badly set: noted +01:00, place X (-06:00, from the GPS)" for a row with a suggested zone; empty otherwise. */
+    public static Optional<String> suggestionText(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.SUGGESTED_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        if (zone.isEmpty() || shot.isEmpty()) {
+            return Optional.empty();
+        }
+        String noted = metadata.raw().get(WorkItemMetadata.RECORDED_OFFSET) instanceof ZoneOffset offset
+                ? OFFSET_TEXT.format(offset) : "?";
+        return Optional.of(ResourcesEngine.getString("plan.zone.suggested", noted, zone.get().getId(),
+                OFFSET_TEXT.format(zone.get().getRules().getOffset(shot.get()))));
+    }
+
+    /** "12 photos of a badly set camera": the flagged rows still to copy (not ignored, copied nor in error); empty without any. */
+    public Optional<String> suggestionSummary() {
+        long count = items.stream().filter(i -> isLeftToCopy(i.getStatus()) && !i.isIgnored()
+                && i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent()).count();
+        return count == 0 ? Optional.empty() : Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", count));
+    }
+
     /** A mark drawn in the Target cell. */
     public enum TargetMark {
         /** The file has its own out pattern: a pencil. */
@@ -1146,7 +1207,7 @@ public final class PlanViewModel {
      * A "Date" cell: its text, whether a clock is drawn before it (the zone of the row was corrected) and its tooltip
      * (null when not corrected).
      */
-    public record DateCell(String text, boolean corrected, String tooltip) {
+    public record DateCell(String text, boolean corrected, boolean suggested, String tooltip) {
     }
 
     /**
@@ -1159,11 +1220,15 @@ public final class PlanViewModel {
         Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.CAPTURE_ZONE);
         Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
         String fileDate = dateText(item);
-        if (zone.isEmpty() || shot.isEmpty()) {
-            return new DateCell(fileDate, false, null);
+        boolean corrected = zone.isPresent() && shot.isPresent();
+        Optional<String> suggestion = suggestionText(item);
+        List<String> lines = new ArrayList<>();
+        if (corrected) {
+            lines.add(ResourcesEngine.getString("plan.date.corrected", zone.get().getId(), fileDate));
         }
-        return new DateCell(ITEM_DATE.format(shot.get().atZone(zone.get())), true,
-                ResourcesEngine.getString("plan.date.corrected", zone.get().getId(), fileDate));
+        suggestion.ifPresent(lines::add);
+        return new DateCell(corrected ? ITEM_DATE.format(shot.get().atZone(zone.get())) : fileDate, corrected,
+                suggestion.isPresent(), lines.isEmpty() ? null : String.join("\n", lines));
     }
 
     /** What the "Date" column shows, null without date. */

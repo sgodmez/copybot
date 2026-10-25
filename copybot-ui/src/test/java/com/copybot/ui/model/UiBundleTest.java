@@ -11,6 +11,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.text.MessageFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Properties;
 import java.util.regex.Pattern;
 
@@ -155,6 +156,20 @@ public class UiBundleTest {
             String many = ResourcesEngine.getString(key, 803);
             assertTrue(one.startsWith("1 "), one);
             assertTrue(many.startsWith("803 "), many);
+        }
+    }
+
+    /** The summary of the photos whose time zone is suggested: singular and plural, in every language. */
+    @Test
+    public void theSuggestedZoneCountHasItsPlural() throws IOException {
+        List<List<String>> expected = List.of(
+                List.of("1 photo of a badly set camera", "2 photos of a badly set camera"),
+                // a typographic apostrophe: a quote in a choice is read twice by MessageFormat (the plural lost it)
+                List.of("1 photo d’un appareil mal réglé", "2 photos d’un appareil mal réglé"),
+                List.of("1 foto di una fotocamera impostata male", "2 foto di una fotocamera impostata male"));
+        for (int i = 0; i < BUNDLES.size(); i++) {
+            MessageFormat format = new MessageFormat(bundle(BUNDLES.get(i)).getProperty("plan.zone.suggested-count"), Locale.ROOT);
+            assertEquals(expected.get(i), List.of(format.format(new Object[]{1}), format.format(new Object[]{2})), BUNDLES.get(i));
         }
     }
 }

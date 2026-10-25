@@ -22,6 +22,18 @@ public record WorkItemMetadata(
     public static final String CAMERA_CLOCK = "cameraClock";
     /** raw key: {@code Boolean} set by the metadata plugin at each analysis finding a date, true for an EXIF photo without recorded offset. */
     public static final String CAPTURE_CLOCK_UNKNOWN = "captureClockUnknown";
+    /** raw key: {@code Double} latitude in degrees (north positive), set by the metadata plugin at each analysis reading metadata, removed when the file has no GPS position. */
+    public static final String GPS_LATITUDE = "gpsLatitude";
+    /** raw key: {@code Double} longitude in degrees (east positive), set and removed like {@link #GPS_LATITUDE}. */
+    public static final String GPS_LONGITUDE = "gpsLongitude";
+    /** raw key: {@code Instant} the GPS UTC date and time of the fix, when the file holds them. */
+    public static final String GPS_TIME = "gpsTime";
+    /** raw key: {@code Boolean}, false when the GPS status is void (V) or the position is (0, 0), set with the position. */
+    public static final String GPS_VALID = "gpsValid";
+    /** raw key: {@code ZoneOffset} the camera recorded with the date of an EXIF photo (OffsetTimeOriginal); absent for a video or without one. */
+    public static final String RECORDED_OFFSET = "recordedOffset";
+    /** raw key: {@code ZoneId} suggested by the gps-zone plugin from the GPS position; never touched by the metadata plugin. */
+    public static final String SUGGESTED_ZONE = "suggestedZone";
 
     /** raw key: {@code String}, a remark of a process step on the item (set in a dry run for the projection, or at execution). */
     public static final String NOTE = "note";

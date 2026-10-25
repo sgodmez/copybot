@@ -1,4 +1,6 @@
 {
-  "devPluginPaths": "copybot-plugin/copybot-plugin-metadata-extractor/target"
-
+  "devPluginPaths": [
+    "copybot-plugin/copybot-plugin-metadata-extractor/target",
+    "copybot-plugin/copybot-plugin-gps-zone/target"
+  ]
 }

@@ -169,7 +169,7 @@ public final class CopybotEngine implements AutoCloseable {
     /** How the plugins of this JVM were loaded (spec plugins-view §1). */
     public PluginReport pluginReport() {
         Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
-        List<Path> devPluginPaths = config.devPluginPaths() != null ? List.of(config.devPluginPaths()) : List.of();
+        List<Path> devPluginPaths = config.devPluginPaths() != null ? config.devPluginPaths() : List.of();
         return PluginReports.of(configFile, pluginPath, config.pluginPath() != null, devPluginPaths, PluginEngine.getAllPlugins());
     }
 
@@ -509,9 +509,8 @@ public final class CopybotEngine implements AutoCloseable {
         // a configured-but-missing dev directory must not break startup: dev paths reach
         // ModuleFinder directly, which throws on nonexistent paths (the main pluginPath is
         // directory-listed first and tolerates absence)
-        List<Path> devPluginPaths = config.devPluginPaths() != null && Files.isDirectory(config.devPluginPaths())
-                ? List.of(config.devPluginPaths())
-                : List.of();
+        List<Path> devPluginPaths = config.devPluginPaths() == null ? List.of()
+                : config.devPluginPaths().stream().filter(Files::isDirectory).toList();
         PluginEngine.load(pluginPath, devPluginPaths); // idempotent: only the first load of the JVM counts
     }
 

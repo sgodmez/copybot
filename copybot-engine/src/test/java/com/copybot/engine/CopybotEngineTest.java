@@ -49,14 +49,17 @@ public class CopybotEngineTest {
     @Test
     public void thePluginReportNamesTheConfiguredDirectories() {
         Path devDir = Path.of("does-not-exist-dev");
-        CopybotConfig config = new CopybotConfig(null, devDir, null, null);
+        Path otherDevDir = Path.of("does-not-exist-dev-2");
+        CopybotConfig config = new CopybotConfig(null, List.of(devDir, otherDevDir), null, null);
         try (CopybotEngine engine = new CopybotEngine(config)) {
             PluginReport report = engine.pluginReport();
 
             assertFalse(report.pluginPathConfigured());
             assertEquals(Path.of("plugins").toAbsolutePath().normalize(), report.pluginPath());
-            assertEquals(List.of(devDir.toAbsolutePath().normalize()), report.devPluginPaths());
+            assertEquals(List.of(devDir.toAbsolutePath().normalize(), otherDevDir.toAbsolutePath().normalize()),
+                    report.devPluginPaths());
             assertTrue(report.warnings().stream().anyMatch(w -> w.contains(devDir.toAbsolutePath().normalize().toString())));
+            assertTrue(report.warnings().stream().anyMatch(w -> w.contains(otherDevDir.toAbsolutePath().normalize().toString())));
         }
     }
 
