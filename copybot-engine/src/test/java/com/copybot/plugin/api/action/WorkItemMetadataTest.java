@@ -3,6 +3,7 @@ package com.copybot.plugin.api.action;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Optional;
 
@@ -46,5 +47,16 @@ public class WorkItemMetadataTest {
 
         assertTrue(m.getTime("missing").isEmpty());
         assertTrue(m.getTime("weird").isEmpty());
+    }
+
+    @Test
+    public void getZoneIsEmptyForUnknownOrNonZoneValues() {
+        WorkItemMetadata m = new WorkItemMetadata();
+        m.raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("Europe/Paris"));
+        m.raw().put(WorkItemMetadata.CAMERA_CLOCK, "not a zone");
+
+        assertEquals(Optional.of(ZoneId.of("Europe/Paris")), m.getZone(WorkItemMetadata.CAPTURE_ZONE));
+        assertTrue(m.getZone(WorkItemMetadata.CAMERA_CLOCK).isEmpty());
+        assertTrue(m.getZone("missing").isEmpty());
     }
 }

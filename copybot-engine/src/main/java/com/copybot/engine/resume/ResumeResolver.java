@@ -54,6 +54,10 @@ public final class ResumeResolver {
      * or file by file by {@link #checkDestination} while streaming (from several threads).
      */
     private final Map<WorkItemExecution, Path> atDestination = new ConcurrentHashMap<>();
+    /** {@link #propose} decided every file by its own target ({@link #checkedEveryFile}). */
+    private volatile boolean everyFileChecked;
+    /** {@link #propose} found the target directory of the pipeline fixed: its files are not probed ({@link #probed}). */
+    private volatile boolean pipelineDirectoryFixed;
     /** While streaming with an out step that cannot tell whether its directory varies: the target directories seen (2 at most). */
     private final Set<Path> seenDirectories = new HashSet<>();
     private final AtomicBoolean fixedDirectoryWarned = new AtomicBoolean();
@@ -332,6 +336,7 @@ public final class ResumeResolver {
      * selected with a warning when fixed (spec own-out-pattern §2).
      */
     private ResumeProposal everyFile(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
+        everyFileChecked = false;
         Map<WorkItemExecution, Path> checked = new LinkedHashMap<>();
         for (WorkItemExecution item : candidates) {
             checkedPath(item, analyser).ifPresent(path -> checked.put(item, path));
@@ -350,22 +355,68 @@ public final class ResumeResolver {
         if (fixed) {
             warnings.add(ResourcesEngine.getString("resume.warn.single-directory", shared.getFirst()));
         }
-        boolean pipelineDirectoryFixed = fixed;
+        pipelineDirectoryFixed = fixed;
         checked.forEach((item, path) -> {
-            boolean probed;
             if (fixedOwnDirectory(item)) {
                 warnings.add(ResourcesEngine.getString("resume.warn.single-directory", path));
-                probed = false;
-            } else {
-                probed = ownDirectoryVaries(item).isPresent() || !pipelineDirectoryFixed;
             }
-            if (probed && atDestination(path)) {
+            if (probed(item) && atDestination(path)) {
                 atDestination.put(item, path);
             }
         });
+        everyFileChecked = true;
         return atDestination.isEmpty()
                 ? everything(List.copyOf(warnings))
                 : new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, List.copyOf(warnings));
+    }
+
+    /**
+     * Checks again at the destination these items analysed again (their time zone corrected: spec
+     * timezone-correction §3), for {@link #apply} with the point {@link ResumePoint.Kind#NOT_AT_DESTINATION}: an item
+     * whose new target is there is remembered with it, the others are forgotten. Like {@link #everyFile}, a file whose
+     * directory is fixed (the pipeline's, or its own out pattern's) is not probed: it stays selected. No warning,
+     * nothing else changes.
+     */
+    public void recheck(Collection<WorkItemExecution> items) {
+        for (WorkItemExecution item : items) {
+            if (!probed(item)) {
+                atDestination.remove(item);
+                continue;
+            }
+            Optional<Path> target;
+            try {
+                target = target(item);
+            } catch (RuntimeException e) {
+                target = Optional.empty(); // the out step fails on it: unknown target, it stays selected
+            }
+            Path checked = target == null || target.isEmpty() ? null : checkedPath(target.get());
+            if (checked != null && atDestination(checked)) {
+                atDestination.put(item, checked);
+            } else {
+                atDestination.remove(item);
+            }
+        }
+    }
+
+    /**
+     * True when the proposal comes from checking every file at the destination by its own target ({@code
+     * destinationCheck} every file), even when none was found there (the proposal is then
+     * {@link ResumePoint#all()}): a file whose target is found there later is skipped too, like at the preparation.
+     */
+    public boolean checkedEveryFile() {
+        return everyFileChecked;
+    }
+
+    /**
+     * With every file checked ({@link #everyFile}): whether this file is probed at the destination by its own target.
+     * Not when its own out pattern has a fixed directory, nor when it follows the pipeline pattern whose directory is
+     * fixed (spec own-out-pattern §2).
+     */
+    private boolean probed(WorkItemExecution item) {
+        if (fixedOwnDirectory(item)) {
+            return false;
+        }
+        return ownDirectoryVaries(item).isPresent() || !pipelineDirectoryFixed;
     }
 
     /** The out step cannot tell where it writes (no target path at all): the destination cannot be probed. */

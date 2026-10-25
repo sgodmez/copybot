@@ -16,6 +16,7 @@ import com.copybot.engine.resume.ResumeSource;
 import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.RecentPipelines.LastRun;
@@ -24,6 +25,7 @@ import com.copybot.utils.FileUtil;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -651,6 +653,100 @@ public final class PlanViewModel {
         return phase == Phase.PREPARED ? rows.stream().filter(Plan::hasOwnPattern).toList() : List.of();
     }
 
+    // ---- time zone correction (context menu of the rows) ----
+
+    /** The shot time in the corrected zone, as "correctionText" tells it. */
+    private static final DateTimeFormatter CORRECTED_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    /** Among these rows, those "Correct the time zone" applies to: a prepared plan, analysed, to copy or skipped, with a capture date. */
+    public List<WorkItemExecution> correctable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> !i.isAnalysisDeferred()
+                && (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)
+                && i.getWorkItem().getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE).isPresent()).toList();
+    }
+
+    /** Among these rows, those "Cancel the correction" applies to: a prepared plan, rows whose zone was corrected. */
+    public List<WorkItemExecution> uncorrectable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        // Plan.clearZone only acts on pending or skipped rows: a row whose analysis failed is left out
+        return rows.stream().filter(i -> (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)
+                && i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.CAPTURE_ZONE).isPresent()).toList();
+    }
+
+    /** The camera clock to show first in the dialog: a zone, and whether it is the place without summer time. */
+    public record ClockPrefill(ZoneId zone, boolean noDst) {
+    }
+
+    /** The zone under that metadata key when every row has the same one. */
+    public static Optional<ZoneId> sharedZone(List<WorkItemExecution> rows, String key) {
+        Set<Optional<ZoneId>> zones = rows.stream().map(i -> i.getWorkItem().getMetadatas().getZone(key)).collect(Collectors.toSet());
+        return zones.size() == 1 ? zones.iterator().next() : Optional.empty();
+    }
+
+    /** The clock to prefill for a place and the clock the rows share: the place and "no summer time" when it is the place's winter offset. */
+    public static ClockPrefill clockPrefill(ZoneId place, Optional<ZoneId> sharedClock) {
+        if (sharedClock.isEmpty()) {
+            return new ClockPrefill(place, false);
+        }
+        ZoneId clock = sharedClock.get();
+        boolean winterOfPlace = clock instanceof ZoneOffset offset
+                && offset.equals(place.getRules().getStandardOffset(Instant.now()));
+        return winterOfPlace ? new ClockPrefill(place, true) : new ClockPrefill(clock, false);
+    }
+
+    /** How many of these rows are photos without a recorded offset (a stale flag without a capture date does not count). */
+    public static long clockUnknownCount(List<WorkItemExecution> rows) {
+        return rows.stream().map(i -> i.getWorkItem().getMetadatas())
+                .filter(m -> Boolean.TRUE.equals(m.raw().get(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN))
+                        && m.getTime(WorkItemMetadata.CAPTURE_DATE).isPresent())
+                .count();
+    }
+
+    /** "Time zone corrected: X, shot at …" for a row whose zone was corrected; empty otherwise. */
+    public static Optional<String> correctionText(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.CAPTURE_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        if (zone.isEmpty() || shot.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(ResourcesEngine.getString("plan.zone.corrected", zone.get().getId(),
+                CORRECTED_DATE.format(shot.get().atZone(zone.get()))));
+    }
+
+    /** A mark drawn in the Target cell. */
+    public enum TargetMark {
+        /** The file has its own out pattern: a pencil. */
+        OWN_PATTERN
+    }
+
+    /** The marks of a Target cell, and its tooltip: one line per mark, in their order, then the folders; null without any. */
+    public record TargetMarks(List<TargetMark> marks, String tooltip) {
+    }
+
+    /**
+     * The marks of the Target cell of this row (null: an empty cell) and its tooltip, built on {@code folders} (the
+     * tooltip of the target folders, null when there is none).
+     */
+    public static TargetMarks targetMarks(WorkItemExecution item, String folders) {
+        List<TargetMark> marks = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        Optional<String> own = item == null ? Optional.empty() : item.getWorkItem().getOutPattern();
+        if (own.isPresent()) {
+            marks.add(TargetMark.OWN_PATTERN);
+            lines.add(ResourcesEngine.getString("plan.target.own-pattern", own.get()));
+        }
+        if (folders != null) {
+            lines.add(folders);
+        }
+        return new TargetMarks(List.copyOf(marks), lines.isEmpty() ? null : String.join("\n", lines));
+    }
+
     /**
      * The files "Always ignore" excludes from the pipeline for these rows: their listed local files, once each.
      * Before and after an execution, never while the engine is busy.
@@ -850,6 +946,7 @@ public final class PlanViewModel {
         Optional<String> reason = statusTooltip(item);
         lines.add(ResourcesEngine.getString("plan.detail.status", reason.isPresent()
                 ? ResourcesEngine.getString("item.status.SKIPPED", reason.get()) : statusText(item)));
+        correctionText(item).ifPresent(lines::add);
         lines.add("");
         for (Projection.Step step : detail.steps()) {
             lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced()));
@@ -1038,6 +1135,30 @@ public final class PlanViewModel {
     public static String dateText(WorkItemExecution item) {
         ItemKey key = dateKey(item);
         return key == null ? "" : ITEM_DATE.format(key.date().atZone(ZoneId.systemDefault()));
+    }
+
+    /**
+     * A "Date" cell: its text, whether a clock is drawn before it (the zone of the row was corrected) and its tooltip
+     * (null when not corrected).
+     */
+    public record DateCell(String text, boolean corrected, String tooltip) {
+    }
+
+    /**
+     * The "Date" cell of this row: the file date as {@link #dateText}; for a row whose zone was corrected, the corrected
+     * shot date in that zone with a clock, and a tooltip telling the zone and the file date. The sort stays on the
+     * file date ({@link #DATE_ORDER}).
+     */
+    public static DateCell dateCell(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.CAPTURE_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        String fileDate = dateText(item);
+        if (zone.isEmpty() || shot.isEmpty()) {
+            return new DateCell(fileDate, false, null);
+        }
+        return new DateCell(ITEM_DATE.format(shot.get().atZone(zone.get())), true,
+                ResourcesEngine.getString("plan.date.corrected", zone.get().getId(), fileDate));
     }
 
     /** What the "Date" column shows, null without date. */

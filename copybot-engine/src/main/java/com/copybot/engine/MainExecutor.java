@@ -18,17 +18,20 @@ import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.engine.resume.ResumeSource;
 import com.copybot.engine.resume.ResumeStateStore;
+import com.copybot.engine.resume.ZoneCorrection;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -99,6 +102,13 @@ public class MainExecutor implements Runnable {
     private volatile boolean preparing;
     /** The skipped items to analyse too ({@link #requestAnalysis}). */
     private final Set<WorkItemExecution> requestedAnalysis = ConcurrentHashMap.newKeySet();
+    /**
+     * The items whose time zone was corrected ({@link #setCaptureZone}) since the last complete
+     * {@link #analyseDeferred()}: it checks their new target at the destination.
+     */
+    private final Set<WorkItemExecution> zoneRecheck = ConcurrentHashMap.newKeySet();
+    /** The manual resume point in force at the last {@link #setCaptureZone}, null for the proposed one. */
+    private volatile ResumePoint recheckOverride;
     /** {@link #analyseDeferred()} runs its phase. Guarded by phaseLock. */
     private boolean analysing;
     /** {@link #prepare()} runs and has not published PREPARED yet: {@link #cancelPreparation()} stops it. Guarded by phaseLock. */
@@ -143,10 +153,15 @@ public class MainExecutor implements Runnable {
      */
     private volatile boolean analysisOnDemand;
 
-    /** Where the own out patterns are kept (spec own-out-pattern §2); null: in memory only. */
+    /**
+     * Where the own out patterns (spec own-out-pattern §2) and the time zone corrections (spec timezone-correction §3)
+     * are kept; null: in memory only.
+     */
     private volatile ResumeStateStore outPatternStore;
     /** The own out patterns by item, read at the start of a listing phase; given to the listed items that match. */
     private final Map<ItemKey, String> ownPatterns = new ConcurrentHashMap<>();
+    /** The time zone corrections by item, read and given like {@link #ownPatterns}. */
+    private final Map<ItemKey, ZoneCorrection> zoneCorrections = new ConcurrentHashMap<>();
 
     private ResumeResolver resolver;
     private ResumeProposal proposal;
@@ -620,7 +635,10 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    /** @param store where the own out patterns are read and kept, null: in memory only (spec own-out-pattern §2) */
+    /**
+     * @param store where the own out patterns (spec own-out-pattern §2) and the time zone corrections (spec
+     *              timezone-correction §3) are read and kept, null: in memory only
+     */
     void setOutPatternStore(ResumeStateStore store) {
         outPatternStore = store;
     }
@@ -630,8 +648,8 @@ public class MainExecutor implements Runnable {
     }
 
     /**
-     * The own out patterns of the state file, read again at the start of a listing phase; without a store, the ones
-     * in memory are kept.
+     * The own out patterns and the time zone corrections of the state file, read again at the start of a listing
+     * phase; without a store, the ones in memory are kept.
      *
      * @throws CopybotException resume.state.invalid, a preparation failure like an unreadable cursor
      */
@@ -641,14 +659,33 @@ public class MainExecutor implements Runnable {
             return;
         }
         Map<ItemKey, String> read = store.readOutPatterns();
+        Map<ItemKey, ZoneCorrection> corrections = store.readZoneCorrections();
         ownPatterns.clear();
         ownPatterns.putAll(read);
+        zoneCorrections.clear();
+        zoneCorrections.putAll(corrections);
     }
 
     /** A listed item whose key has an own out pattern gets it. */
     private void applyOwnPattern(WorkItem workItem) {
         if (!ownPatterns.isEmpty()) {
             ItemKey.of(workItem).map(ownPatterns::get).ifPresent(workItem::setOutPattern);
+        }
+    }
+
+    /**
+     * A listed item whose key has a time zone correction gets its zone keys, as if corrected in this plan: analysed,
+     * probed and filed in that zone, with no analysis again.
+     */
+    private void applyZoneCorrection(WorkItem workItem) {
+        if (!zoneCorrections.isEmpty()) {
+            ItemKey.of(workItem).map(zoneCorrections::get).ifPresent(correction -> {
+                Map<String, Object> raw = workItem.getMetadatas().raw();
+                raw.put(WorkItemMetadata.CAPTURE_ZONE, correction.place());
+                if (correction.clock() != null) {
+                    raw.put(WorkItemMetadata.CAMERA_CLOCK, correction.clock());
+                }
+            });
         }
     }
 
@@ -725,6 +762,7 @@ public class MainExecutor implements Runnable {
         preparing = true;
         markRunning();
         startPhase();
+        boolean complete = false;
         try {
             checkCancelled();
             phaseEnd = barrierIndex;
@@ -737,6 +775,7 @@ public class MainExecutor implements Runnable {
                 tasks.awaitCompletion();
                 projectItems();
             }
+            complete = true;
         } catch (InterruptedException e) {
             stopAfterInterrupt(false); // the plan stays PREPARED
         } finally {
@@ -753,6 +792,10 @@ public class MainExecutor implements Runnable {
                 }
             });
             requestedAnalysis.removeAll(items);
+            if (complete && !zoneRecheck.isEmpty() && endStatus == PipelineStatus.PREPARED) {
+                // a stopped analysis leaves them to the execution, which analyses them before any copy
+                recheckTheDestination();
+            }
             synchronized (phaseLock) {
                 analysing = false;
                 cancelRequested = false; // requested during this analysis (checked above): it only stopped it
@@ -899,7 +942,7 @@ public class MainExecutor implements Runnable {
             if (override != null) {
                 resolver.apply(override, ResumeSource.MANUAL, orderedItems);
             } else {
-                resolver.apply(proposal.point(), proposal.source(), orderedItems);
+                resolver.apply(proposedPoint(), proposedSource(), orderedItems);
             }
         }
     }
@@ -969,6 +1012,127 @@ public class MainExecutor implements Runnable {
             }
         }
         notifier.changed();
+    }
+
+    /**
+     * Corrects the time zone of these analysed items (spec timezone-correction §3), or cancels the correction
+     * (place null): the zone keys of their metadata are set or removed, then they are to analyse again
+     * ({@link #toAnalyse()}), the skipped ones as if asked for ({@link #requestAnalysis}: they stay skipped).
+     * {@link #analyseDeferred()} computes nothing more than their analysis, then checks their new target at the
+     * destination ({@link #recheckTheDestination}). Only the items to copy or skipped, already analysed (or deferred
+     * by a previous correction: the last one wins). A cancel also reaches the items to copy or skipped not analysed
+     * (a correction restored at the listing, before the resume point): their zone keys are removed, nothing more.
+     * <p>
+     * Kept in the state file like an own out pattern, with its key, before anything changes: a failing write changes
+     * nothing; restored at the next listing ({@link #applyZoneCorrection}).
+     *
+     * @param place    the zone of the place of the capture, null to cancel the correction
+     * @param clock    the zone of the camera clock, null for the one of the place
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED (being prepared, executed or already executed)
+     * @throws CopybotException      resume.state.write-error: nothing changed
+     */
+    void setCaptureZone(Collection<WorkItemExecution> items, ZoneId place, ZoneId clock, ResumePoint override) {
+        if (state.getStatus() != PipelineStatus.PREPARED) {
+            throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
+        }
+        List<WorkItemExecution> corrected = new ArrayList<>();
+        List<WorkItemExecution> unanalysed = new ArrayList<>();
+        for (WorkItemExecution item : items) {
+            if (item.getStatus() != ItemStatus.PENDING && item.getStatus() != ItemStatus.SKIPPED) {
+                continue;
+            }
+            // not analysed yet: left out, unless a previous correction is what defers it (the last one wins)
+            if (!item.isAnalysisDeferred() || zoneRecheck.contains(item)) {
+                corrected.add(item);
+            } else if (place == null) {
+                unanalysed.add(item); // restored at the listing: it could never lose it otherwise
+            }
+        }
+        ZoneCorrection correction = place == null ? null : new ZoneCorrection(place, clock);
+        Map<ItemKey, ZoneCorrection> corrections = new HashMap<>(zoneCorrections);
+        List<WorkItemExecution> changed = new ArrayList<>(corrected);
+        changed.addAll(unanalysed);
+        for (WorkItemExecution item : changed) {
+            item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).ifPresent(key -> {
+                if (correction == null) {
+                    corrections.remove(key);
+                } else {
+                    corrections.put(key, correction);
+                }
+            });
+        }
+        ResumeStateStore store = outPatternStore;
+        if (store != null && !corrections.equals(zoneCorrections)) {
+            store.writeZoneCorrections(corrections); // first: a failing write changes nothing
+        }
+        zoneCorrections.clear();
+        zoneCorrections.putAll(corrections);
+        for (WorkItemExecution item : unanalysed) {
+            item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAPTURE_ZONE);
+            item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAMERA_CLOCK);
+        }
+        for (WorkItemExecution item : corrected) {
+            Map<String, Object> raw = item.getWorkItem().getMetadatas().raw();
+            if (place == null) {
+                raw.remove(WorkItemMetadata.CAPTURE_ZONE);
+            } else {
+                raw.put(WorkItemMetadata.CAPTURE_ZONE, place);
+            }
+            if (place == null || clock == null) {
+                raw.remove(WorkItemMetadata.CAMERA_CLOCK);
+            } else {
+                raw.put(WorkItemMetadata.CAMERA_CLOCK, clock);
+            }
+            item.markAnalysisDeferred();
+            item.setProjection(null);
+            item.setTargetCheck(null);
+            if (item.getStatus() == ItemStatus.SKIPPED) {
+                requestedAnalysis.add(item);
+            }
+            zoneRecheck.add(item);
+        }
+        recheckOverride = override;
+    }
+
+    /**
+     * Once {@link #analyseDeferred()} analysed the corrected items again ({@link #setCaptureZone}): with the resume
+     * point "not at the destination" in force, their new target decides again whether they are imported, like at the
+     * preparation. With the dichotomy nothing changes: its verdict is a key, which the correction does not move.
+     * Phase thread, before the plan is PREPARED again.
+     */
+    private void recheckTheDestination() {
+        try {
+            ResumePoint point = recheckOverride != null ? recheckOverride : proposedPoint();
+            ResumeSource source = recheckOverride != null ? ResumeSource.MANUAL : proposedSource();
+            if (point.kind() == ResumePoint.Kind.NOT_AT_DESTINATION) {
+                resolver.recheck(zoneRecheck);
+                resolver.apply(point, source, orderedItems);
+            }
+        } catch (RuntimeException e) {
+            // never in the way of the end of the analysis: the statuses stay as the analysis left them
+            LOGGER.log(System.Logger.Level.WARNING, "the destination check of the corrected files failed", e);
+        } finally {
+            zoneRecheck.clear();
+        }
+    }
+
+    /**
+     * The proposed resume point, as applied again to the items: when every file was checked at the destination
+     * and none was found there, "not at the destination" rather than everything, so that a file whose time zone
+     * correction gives a target found there is skipped too ({@link #recheckTheDestination}); for the other files
+     * both select the same ones.
+     */
+    private ResumePoint proposedPoint() {
+        return everyFileFoundNothing() ? ResumePoint.notAtDestination() : proposal.point();
+    }
+
+    private ResumeSource proposedSource() {
+        return everyFileFoundNothing() ? ResumeSource.DESTINATION : proposal.source();
+    }
+
+    private boolean everyFileFoundNothing() {
+        return proposal.point().kind() == ResumePoint.Kind.ALL && resolver.checkedEveryFile();
     }
 
     /**
@@ -1285,6 +1449,7 @@ public class MainExecutor implements Runnable {
             throw stopListing(); // woken by the pause cancel() lifted: emit nothing more
         }
         applyOwnPattern(workItem); // before any analysis, projection, probe or target check
+        applyZoneCorrection(workItem); // likewise
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
         deferAtTheListing(exec);
         state.getWorkItems().add(exec);

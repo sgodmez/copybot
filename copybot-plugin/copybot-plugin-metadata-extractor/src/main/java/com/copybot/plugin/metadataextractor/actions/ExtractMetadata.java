@@ -46,8 +46,35 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
             throw CopybotException.ofResource(e, "plugin.metadata-extractor.extract.error.io", item.getSourceLocationDisplay());
         }
         Path local = item.getLocalLocation();
-        captureDate(metadata, ZoneId.systemDefault(), () -> local == null ? Optional.empty() : sonySidecarOffset(local))
-                .ifPresent(date -> item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, date));
+        Optional<Capture> capture = captureDate(metadata, ZoneId.systemDefault(),
+                () -> local == null ? Optional.empty() : sonySidecarOffset(local));
+        if (capture.isEmpty()) {
+            return;
+        }
+        WorkItemMetadata metadatas = item.getMetadatas();
+        metadatas.raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, capture.get().clockUnknown());
+        Optional<ZoneId> place = metadatas.getZone(WorkItemMetadata.CAPTURE_ZONE);
+        metadatas.setTime(WorkItemMetadata.CAPTURE_DATE, place.isPresent()
+                ? corrected(capture.get(), place.get(), metadatas.getZone(WorkItemMetadata.CAMERA_CLOCK).orElse(null))
+                : capture.get().date());
+    }
+
+    /**
+     * A capture date, and whether its clock is unknown: an EXIF photo without recorded offset, whose wall time
+     * is only known to be that of some clock. A video is never unknown: its UTC creation date is reliable.
+     */
+    record Capture(ZonedDateTime date, boolean clockUnknown) {
+    }
+
+    /**
+     * The capture date shown in the zone of the {@code place} where it was shot. A recorded offset is exact.
+     * An unknown clock is read in the camera {@code clock} (nullable), else in the place itself.
+     */
+    static ZonedDateTime corrected(Capture capture, ZoneId place, ZoneId clock) {
+        if (!capture.clockUnknown()) {
+            return capture.date().withZoneSameInstant(place);
+        }
+        return capture.date().toLocalDateTime().atZone(clock != null ? clock : place).withZoneSameInstant(place);
     }
 
     /**
@@ -57,20 +84,21 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
      * shown in the offset of the creationdate key when the camera wrote one, else in {@code sidecarOffset}
      * (read only for a video), else in {@code localZone}.
      */
-    static Optional<ZonedDateTime> captureDate(Metadata metadata, ZoneId localZone,
-                                               Supplier<Optional<ZoneOffset>> sidecarOffset) {
+    static Optional<Capture> captureDate(Metadata metadata, ZoneId localZone,
+                                         Supplier<Optional<ZoneOffset>> sidecarOffset) {
         ExifSubIFDDirectory exif = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
         if (exif != null) {
-            ZoneId cameraZone = offset(exif.getString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL)).orElse(localZone);
+            Optional<ZoneId> recorded = offset(exif.getString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL));
+            ZoneId cameraZone = recorded.orElse(localZone);
             Date original = exif.getDateOriginal(TimeZone.getTimeZone(cameraZone));
             if (original != null) {
-                return Optional.of(original.toInstant().atZone(cameraZone));
+                return Optional.of(new Capture(original.toInstant().atZone(cameraZone), recorded.isEmpty()));
             }
         }
         return videoDate(metadata, QuickTimeDirectory.class, QuickTimeDirectory.TAG_CREATION_TIME)
                 .or(() -> videoDate(metadata, Mp4Directory.class, Mp4Directory.TAG_CREATION_TIME))
-                .map(instant -> instant.atZone(videoOffset(metadata).or(sidecarOffset)
-                        .<ZoneId>map(offset -> offset).orElse(localZone)));
+                .map(instant -> new Capture(instant.atZone(videoOffset(metadata).or(sidecarOffset)
+                        .<ZoneId>map(offset -> offset).orElse(localZone)), false));
     }
 
     /** The offset of the QuickTime creationdate key (local time with offset, e.g. 2026-10-25T23:30:00-0600). */

@@ -5,6 +5,7 @@ import com.copybot.engine.Plan;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ResumePoint;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.MediaPreview;
 import com.copybot.ui.model.OutPatternModel;
@@ -55,6 +56,7 @@ import javafx.util.StringConverter;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -135,12 +137,26 @@ public class PlanController implements PlanOperations.View {
         nameColumn.setCellValueFactory(c -> new SimpleStringProperty(c.getValue().getWorkItem().getNameDisplay()));
         nameColumn.setCellFactory(column -> new NameCell());
         dateColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
-        dateColumn.setCellFactory(column -> textCell(PlanViewModel::dateText));
+        dateColumn.setCellFactory(column -> new TableCell<>() {
+            /** The mark of a row whose time zone was corrected (spec timezone-correction §4). */
+            private final SVGPath zoneMark = mark(CLOCK);
+
+            @Override
+            protected void updateItem(WorkItemExecution item, boolean empty) {
+                super.updateItem(item, empty);
+                PlanViewModel.DateCell cell = empty || item == null ? null : PlanViewModel.dateCell(item);
+                setText(cell == null ? null : cell.text());
+                setGraphic(cell != null && cell.corrected() ? zoneMark : null);
+                setTooltip(cell == null || cell.tooltip() == null ? null : new Tooltip(cell.tooltip()));
+            }
+        });
         dateColumn.setComparator(PlanViewModel.DATE_ORDER);
         targetColumn.setCellValueFactory(c -> new SimpleStringProperty(targetText(c.getValue())));
         targetColumn.setCellFactory(column -> new TableCell<>() {
             /** The mark of a file with its own out pattern (spec own-out-pattern §3). */
-            private final SVGPath ownPatternMark = ownPatternMark();
+            private final SVGPath ownPatternMark = mark(PENCIL);
+            /** The marks present, side by side. */
+            private final HBox marksBox = new HBox(3);
 
             @Override
             protected void updateItem(String text, boolean empty) {
@@ -150,13 +166,15 @@ public class PlanController implements PlanOperations.View {
                 Plan shown = ops.targetsPlan();
                 String tooltip = item == null || shown == null || !PlanViewModel.showsTarget(item)
                         ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
-                Optional<String> own = item == null ? Optional.empty() : item.getWorkItem().getOutPattern();
-                setGraphic(own.isPresent() ? ownPatternMark : null);
-                if (own.isPresent()) {
-                    String line = ResourcesEngine.getString("plan.target.own-pattern", own.get());
-                    tooltip = tooltip == null ? line : line + "\n" + tooltip;
+                // an own pattern (pencil): a mark, and a tooltip line before the folders
+                PlanViewModel.TargetMarks marks = PlanViewModel.targetMarks(item, tooltip);
+                if (marks.marks().isEmpty()) {
+                    setGraphic(null);
+                } else {
+                    marksBox.getChildren().setAll(marks.marks().stream().map(mark -> ownPatternMark).toList());
+                    setGraphic(marksBox);
                 }
-                setTooltip(tooltip == null ? null : new Tooltip(tooltip));
+                setTooltip(marks.tooltip() == null ? null : new Tooltip(marks.tooltip()));
             }
         });
         sizeColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
@@ -405,6 +423,10 @@ public class PlanController implements PlanOperations.View {
         detail.setOnAction(e -> showDetails(PlanViewModel.detailable(selectedRows()), row.getItem()));
         MenuItem analyse = new MenuItem();
         analyse.setOnAction(e -> analyse(model().analysable(selectedRows())));
+        MenuItem zone = new MenuItem();
+        zone.setOnAction(e -> correctZone(model().correctable(selectedRows())));
+        MenuItem zoneClear = new MenuItem();
+        zoneClear.setOnAction(e -> clearZone(model().uncorrectable(selectedRows())));
         MenuItem ignore = new MenuItem();
         ignore.setOnAction(e -> ignoreForThisRun(model().ignorable(selectedRows()), true));
         MenuItem unignore = new MenuItem();
@@ -415,8 +437,8 @@ public class PlanController implements PlanOperations.View {
         outPattern.setOnAction(e -> chooseOutPattern(model().patternable(selectedRows())));
         MenuItem pipelinePattern = new MenuItem();
         pipelinePattern.setOnAction(e -> pipelinePattern(model().withOwnPattern(selectedRows())));
-        ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, new SeparatorMenuItem(), ignore,
-                unignore, exclude, new SeparatorMenuItem(), outPattern, pipelinePattern);
+        ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, zone, zoneClear, new SeparatorMenuItem(),
+                ignore, unignore, exclude, new SeparatorMenuItem(), outPattern, pipelinePattern);
         menu.setOnShowing(e -> {
             PlanViewModel model = model();
             boolean busy = ops.busy();
@@ -426,6 +448,8 @@ public class PlanController implements PlanOperations.View {
             // both apply to the selection, whatever the clicked row
             setCountedItem(detail, "plan.menu.details", PlanViewModel.detailable(selected).size());
             setCountedItem(analyse, "plan.menu.analyse", busy ? 0 : model.analysable(selected).size());
+            setCountedItem(zone, "plan.menu.zone", busy ? 0 : model.correctable(selected).size());
+            setCountedItem(zoneClear, "plan.menu.zone-clear", busy ? 0 : model.uncorrectable(selected).size());
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
             setCountedItem(exclude, "plan.menu.exclude", busy || excluding ? 0 : model.excludable(selected).size());
@@ -444,9 +468,13 @@ public class PlanController implements PlanOperations.View {
     /** A pencil, drawn: the target of this file follows its own out pattern. */
     private static final String PENCIL = "M9 0l3 3-7.5 7.5H1.5V7.5z";
 
-    private static SVGPath ownPatternMark() {
+    /** A clock, drawn: the time zone of this file was corrected, in this plan or a previous one (kept in the state). */
+    private static final String CLOCK = "M6 0a6 6 0 1 1 0 12A6 6 0 0 1 6 0zm0 1.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zM5.25 3h1.5v2.69l1.83 1.83-1.06 1.06-2.27-2.27z";
+
+    /** A mark of the Target column, in the grey of the marks. */
+    private static SVGPath mark(String content) {
         SVGPath mark = new SVGPath();
-        mark.setContent(PENCIL);
+        mark.setContent(content);
         mark.setStyle("-fx-fill: #6b7280;");
         return mark;
     }
@@ -751,6 +779,50 @@ public class PlanController implements PlanOperations.View {
         if (!toAnalyse.isEmpty()) {
             // one file asked for: its planned processing opens once analysed
             ops.analyse(toAnalyse, items.size() == 1 ? items.getFirst() : null);
+        }
+    }
+
+    /** "Correct the time zone": the dialog, then the files are analysed again in the zone chosen. */
+    private void correctZone(List<WorkItemExecution> items) {
+        Plan plan = ops.plan();
+        if (plan == null || items.isEmpty() || ops.busy()) {
+            return;
+        }
+        // the zone the selection already shares, else the one of this computer
+        ZoneId initial = PlanViewModel.sharedZone(items, WorkItemMetadata.CAPTURE_ZONE).orElse(ZoneId.systemDefault());
+        // and the camera clock it already shares, as a place (without summer time) or a zone
+        PlanViewModel.ClockPrefill clock = PlanViewModel.clockPrefill(initial, PlanViewModel.sharedZone(items, WorkItemMetadata.CAMERA_CLOCK));
+        ZoneCorrectionDialog.create(initial, PlanViewModel.clockUnknownCount(items), clock).showAndWait().ifPresent(choice -> {
+            try {
+                plan.correctZone(items, choice.place(), choice.clock(), model().override());
+            } catch (RuntimeException e) {
+                PopinUtil.showError(e);
+                return;
+            }
+            reanalyseCorrected(plan);
+        });
+    }
+
+    /** "Cancel the correction": the files go back to the zone of their metadata, analysed again. */
+    private void clearZone(List<WorkItemExecution> items) {
+        Plan plan = ops.plan();
+        if (plan == null || items.isEmpty() || ops.busy()) {
+            return;
+        }
+        try {
+            plan.clearZone(items, model().override());
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+            return;
+        }
+        reanalyseCorrected(plan);
+    }
+
+    /** The corrected files are to analyse again, their destination rechecked. */
+    private void reanalyseCorrected(Plan plan) {
+        List<WorkItemExecution> toAnalyse = plan.toAnalyse();
+        if (!toAnalyse.isEmpty()) {
+            ops.analyse(toAnalyse, null);
         }
     }
 

@@ -15,6 +15,8 @@ import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -274,5 +276,87 @@ public class ResumeStateStoreTest {
 
         Files.writeString(file, "{\"cursor\":{\"date\":\"yesterday\",\"name\":\"A\"}}");
         assertThrows(CopybotException.class, () -> new ResumeStateStore(file).readCursor());
+    }
+
+    // ---- zone corrections (spec timezone-correction §3, kept in the state) ----
+
+    private static Map<ItemKey, ZoneCorrection> twoCorrections() {
+        Map<ItemKey, ZoneCorrection> corrections = new LinkedHashMap<>();
+        corrections.put(KEY_B, new ZoneCorrection(ZoneId.of("America/Mexico_City"), null));
+        corrections.put(KEY_A, new ZoneCorrection(ZoneId.of("Europe/Paris"), ZoneOffset.ofHours(1)));
+        return corrections;
+    }
+
+    @Test
+    public void zoneCorrectionsRoundTrip() throws Exception {
+        ResumeStateStore store = new ResumeStateStore(tempDir.resolve("p.state.json"));
+
+        store.writeZoneCorrections(twoCorrections());
+
+        assertEquals(twoCorrections(), store.readZoneCorrections());
+        assertEquals(List.of(KEY_A, KEY_B), List.copyOf(store.readZoneCorrections().keySet()), "ordered by key");
+        String json = Files.readString(store.getPath());
+        assertTrue(json.contains("\"Europe/Paris\"") && json.contains("\"+01:00\""), "human readable: " + json);
+        assertInstanceOf(ZoneOffset.class, store.readZoneCorrections().get(KEY_A).clock(), "a fixed offset stays one");
+    }
+
+    @Test
+    public void zoneCorrectionsKeepTheCursorAndTheOutPatterns() {
+        ResumeStateStore store = new ResumeStateStore(tempDir.resolve("p.state.json"));
+        store.writeCursor(KEY_B);
+        store.writeOutPatterns(twoPatterns());
+
+        store.writeZoneCorrections(twoCorrections());
+        store.writeCursor(KEY_A);
+        store.writeOutPatterns(Map.of(KEY_A, "x/{name}"));
+
+        assertEquals(KEY_A, store.readCursor().orElseThrow());
+        assertEquals(Map.of(KEY_A, "x/{name}"), store.readOutPatterns());
+        assertEquals(twoCorrections(), store.readZoneCorrections());
+    }
+
+    @Test
+    public void anEmptyMapRemovesTheZoneCorrections() throws Exception {
+        ResumeStateStore store = new ResumeStateStore(tempDir.resolve("p.state.json"));
+        store.writeCursor(KEY_A);
+        store.writeZoneCorrections(twoCorrections());
+
+        store.writeZoneCorrections(Map.of());
+
+        assertTrue(store.readZoneCorrections().isEmpty());
+        assertFalse(Files.readString(store.getPath()).contains("zoneCorrections"));
+        assertEquals(KEY_A, store.readCursor().orElseThrow());
+    }
+
+    @Test
+    public void oldStateFileHasNoZoneCorrections() throws Exception {
+        assertTrue(new ResumeStateStore(tempDir.resolve("none.state.json")).readZoneCorrections().isEmpty());
+        Path file = tempDir.resolve("p.state.json");
+        Files.writeString(file, "{\"cursor\":{\"date\":\"2026-09-28T15:42:10Z\",\"name\":\"A.NEF\"},"
+                + "\"outPatterns\":[{\"date\":\"2026-09-28T15:42:10Z\",\"name\":\"A.NEF\",\"pattern\":\"p/{name}\"}]}");
+
+        assertTrue(new ResumeStateStore(file).readZoneCorrections().isEmpty());
+    }
+
+    @Test
+    public void invalidZoneCorrectionsAreAnInvalidStateFile() throws Exception {
+        Path file = tempDir.resolve("p.state.json");
+        Files.writeString(file, "{\"outPatterns\":3}");
+        String invalid = assertThrows(CopybotException.class, () -> new ResumeStateStore(file).readOutPatterns()).getMessage();
+        for (String json : new String[]{
+                "{\"zoneCorrections\":3}",
+                "{\"zoneCorrections\":[3]}",
+                "{\"zoneCorrections\":[{\"name\":\"A\",\"zone\":\"Europe/Paris\"}]}",
+                "{\"zoneCorrections\":[{\"date\":\"2026-09-28T15:42:10Z\",\"zone\":\"Europe/Paris\"}]}",
+                "{\"zoneCorrections\":[{\"date\":\"2026-09-28T15:42:10Z\",\"name\":\"A\"}]}",
+                "{\"zoneCorrections\":[{\"date\":\"yesterday\",\"name\":\"A\",\"zone\":\"Europe/Paris\"}]}",
+                "{\"zoneCorrections\":[{\"date\":\"2026-09-28T15:42:10Z\",\"name\":\"A\",\"zone\":\"Europe/Nowhere\"}]}",
+                "{\"zoneCorrections\":[{\"date\":\"2026-09-28T15:42:10Z\",\"name\":\"A\",\"zone\":\"Europe/Paris\",\"clock\":\"+25:00\"}]}"}) {
+            Files.writeString(file, json);
+
+            CopybotException e = assertThrows(CopybotException.class, () -> new ResumeStateStore(file).readZoneCorrections(), json);
+
+            assertEquals(invalid, e.getMessage(), "like an own pattern edited by hand: " + json);
+        }
     }
 }

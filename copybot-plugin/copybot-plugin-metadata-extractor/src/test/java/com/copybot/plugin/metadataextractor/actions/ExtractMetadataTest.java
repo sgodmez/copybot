@@ -37,6 +37,112 @@ public class ExtractMetadataTest {
     private static final ZoneId PARIS = ZoneId.of("Europe/Paris");
     private static final Supplier<Optional<ZoneOffset>> NO_SIDECAR = Optional::empty;
 
+    private static final ZoneId MEXICO = ZoneId.of("America/Mexico_City");
+
+    private static Optional<ZonedDateTime> date(Metadata metadata, ZoneId localZone, Supplier<Optional<ZoneOffset>> sidecarOffset) {
+        return ExtractMetadata.captureDate(metadata, localZone, sidecarOffset).map(ExtractMetadata.Capture::date);
+    }
+
+    // ---- correction: the capture zone and the camera clock ----
+
+    @Test
+    public void correctedShowsARecordedOffsetInThePlaceZone() {
+        // Sony without daylight saving time, offset noted +01:00, July, place Paris -> 14:00 in Paris
+        assertEquals(ZonedDateTime.parse("2026-07-10T14:00:00+02:00[Europe/Paris]"),
+                ExtractMetadata.corrected(new ExtractMetadata.Capture(ZonedDateTime.parse("2026-07-10T13:00:00+01:00"), false), PARIS, null));
+    }
+
+    @Test
+    public void correctedReadsAnUnknownClockInTheCameraClock() {
+        assertEquals(ZonedDateTime.parse("2026-07-10T14:00:00+02:00[Europe/Paris]"),
+                ExtractMetadata.corrected(new ExtractMetadata.Capture(ZonedDateTime.parse("2026-07-10T13:00:00+02:00[Europe/Paris]"), true),
+                        PARIS, ZoneOffset.ofHours(1)));
+    }
+
+    @Test
+    public void correctedMovesAParisClockToMexico() {
+        assertEquals(ZonedDateTime.parse("2026-10-25T13:00:00-06:00[America/Mexico_City]"),
+                ExtractMetadata.corrected(new ExtractMetadata.Capture(ZonedDateTime.parse("2026-10-25T20:00:00+01:00[Europe/Paris]"), true),
+                        MEXICO, PARIS));
+    }
+
+    @Test
+    public void correctedReadsAnUnknownClockInThePlaceByDefault() {
+        assertEquals(ZonedDateTime.parse("2026-10-25T20:00:00-06:00[America/Mexico_City]"),
+                ExtractMetadata.corrected(new ExtractMetadata.Capture(ZonedDateTime.parse("2026-10-25T20:00:00+01:00[Europe/Paris]"), true),
+                        MEXICO, null));
+    }
+
+    @Test
+    public void correctedSurvivesADstGap() {
+        // 02:30 does not exist in Paris on 2026-03-29: moved forward by the gap
+        assertEquals(ZonedDateTime.parse("2026-03-29T03:30:00+02:00[Europe/Paris]"), ExtractMetadata.corrected(
+                new ExtractMetadata.Capture(ZonedDateTime.parse("2026-03-29T02:30:00+01:00"), true), PARIS, PARIS));
+    }
+
+    @Test
+    public void captureTellsWhetherTheClockIsUnknown() {
+        Metadata photo = new Metadata();
+        ExifSubIFDDirectory exif = new ExifSubIFDDirectory();
+        exif.setString(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL, "2026:09:28 17:42:10");
+        photo.addDirectory(exif);
+        Metadata withOffset = new Metadata();
+        ExifSubIFDDirectory exifWithOffset = new ExifSubIFDDirectory();
+        exifWithOffset.setString(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL, "2026:09:28 17:42:10");
+        exifWithOffset.setString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL, "+01:00");
+        withOffset.addDirectory(exifWithOffset);
+        Metadata video = new Metadata();
+        QuickTimeDirectory qt = new QuickTimeDirectory();
+        qt.setDate(QuickTimeDirectory.TAG_CREATION_TIME, Date.from(Instant.parse("2026-09-28T15:00:00Z")));
+        video.addDirectory(qt);
+
+        assertTrue(ExtractMetadata.captureDate(photo, PARIS, NO_SIDECAR).orElseThrow().clockUnknown());
+        assertFalse(ExtractMetadata.captureDate(withOffset, PARIS, NO_SIDECAR).orElseThrow().clockUnknown());
+        assertFalse(ExtractMetadata.captureDate(video, PARIS, NO_SIDECAR).orElseThrow().clockUnknown());
+    }
+
+    @Test
+    public void analyzeTellsWhetherTheClockIsUnknown() throws IOException {
+        byte[] without = jpegWithDateOriginal("2026:10:25 23:30:00");
+        byte[] with = jpegWithDateOriginal("2026:10:25 23:30:00", "+01:00");
+        WorkItem unknown = item(() -> new ByteArrayInputStream(without));
+        WorkItem known = item(() -> new ByteArrayInputStream(with));
+
+        new ExtractMetadata().doAnalyze(unknown);
+        new ExtractMetadata().doAnalyze(known);
+
+        assertEquals(Boolean.TRUE, unknown.getMetadatas().raw().get(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN));
+        assertEquals(Boolean.FALSE, known.getMetadatas().raw().get(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN));
+    }
+
+    @Test
+    public void analyzeAppliesTheCaptureZone() throws IOException {
+        // recorded +02:00: 01:30 on the 25th is 23:30Z on the 24th, 17:30 on the 24th in Mexico
+        byte[] jpeg = jpegWithDateOriginal("2026:10:25 01:30:00", "+02:00");
+        WorkItem photo = item(() -> new ByteArrayInputStream(jpeg));
+        photo.getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, MEXICO);
+
+        new ExtractMetadata().doAnalyze(photo);
+
+        assertEquals("24", photo.getMetadatas().display().get("captureDate.D"));
+        assertEquals("10", photo.getMetadatas().display().get("captureDate.m"));
+        assertEquals(Optional.of(Instant.parse("2026-10-24T23:30:00Z")), photo.getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE));
+    }
+
+    @Test
+    public void analyzeReadsAnUnknownClockInTheCameraClock() throws IOException {
+        // no offset, camera on Paris time (still +02:00 at 01:30): 23:30Z on the 24th, 17:30 on the 24th in Mexico
+        byte[] jpeg = jpegWithDateOriginal("2026:10:25 01:30:00");
+        WorkItem photo = item(() -> new ByteArrayInputStream(jpeg));
+        photo.getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, MEXICO);
+        photo.getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, PARIS);
+
+        new ExtractMetadata().doAnalyze(photo);
+
+        assertEquals("24", photo.getMetadatas().display().get("captureDate.D"));
+        assertEquals(Optional.of(Instant.parse("2026-10-24T23:30:00Z")), photo.getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE));
+    }
+
     @Test
     public void exifOriginalDateIsReadAsLocalTime() {
         Metadata metadata = new Metadata();
@@ -44,7 +150,7 @@ public class ExtractMetadataTest {
         exif.setString(ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL, "2026:09:28 17:42:10");
         metadata.addDirectory(exif);
 
-        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:42:10+02:00[Europe/Paris]")), ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR));
+        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:42:10+02:00[Europe/Paris]")), date(metadata, PARIS, NO_SIDECAR));
     }
 
     @Test
@@ -56,7 +162,7 @@ public class ExtractMetadataTest {
         exif.setString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL, "-06:00");
         metadata.addDirectory(exif);
 
-        assertEquals(Optional.of(ZonedDateTime.parse("2026-10-25T23:30:00-06:00")), ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR));
+        assertEquals(Optional.of(ZonedDateTime.parse("2026-10-25T23:30:00-06:00")), date(metadata, PARIS, NO_SIDECAR));
     }
 
     @Test
@@ -67,7 +173,7 @@ public class ExtractMetadataTest {
         exif.setString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL, "   ");
         metadata.addDirectory(exif);
 
-        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:42:10+02:00[Europe/Paris]")), ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR));
+        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:42:10+02:00[Europe/Paris]")), date(metadata, PARIS, NO_SIDECAR));
     }
 
     @Test
@@ -77,7 +183,7 @@ public class ExtractMetadataTest {
         qt.setDate(QuickTimeDirectory.TAG_CREATION_TIME, Date.from(Instant.parse("2026-09-28T15:00:00Z")));
         metadata.addDirectory(qt);
 
-        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:00:00+02:00[Europe/Paris]")), ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR));
+        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:00:00+02:00[Europe/Paris]")), date(metadata, PARIS, NO_SIDECAR));
     }
 
     @Test
@@ -92,7 +198,7 @@ public class ExtractMetadataTest {
         metadata.addDirectory(keys);
 
         assertEquals(Optional.of(ZonedDateTime.parse("2026-10-25T23:30:00-06:00")),
-                ExtractMetadata.captureDate(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(9))));
+                date(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(9))));
     }
 
     @Test
@@ -103,7 +209,7 @@ public class ExtractMetadataTest {
         metadata.addDirectory(mp4);
 
         assertEquals(Optional.of(ZonedDateTime.parse("2026-10-25T23:30:00-06:00")),
-                ExtractMetadata.captureDate(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(-6))));
+                date(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(-6))));
     }
 
     @Test
@@ -117,7 +223,7 @@ public class ExtractMetadataTest {
         metadata.addDirectory(keys);
 
         assertEquals(Optional.of(ZonedDateTime.parse("2026-10-25T23:30:00-06:00")),
-                ExtractMetadata.captureDate(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(-6))));
+                date(metadata, PARIS, () -> Optional.of(ZoneOffset.ofHours(-6))));
     }
 
     @Test
@@ -128,7 +234,7 @@ public class ExtractMetadataTest {
         metadata.addDirectory(exif);
 
         assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:42:10+02:00[Europe/Paris]")),
-                ExtractMetadata.captureDate(metadata, PARIS, () -> fail("the sidecar of a photo must not be read")));
+                date(metadata, PARIS, () -> fail("the sidecar of a photo must not be read")));
     }
 
     // ---- Sony sidecar: C0099.MP4 -> C0099M01.XML ----
@@ -168,7 +274,7 @@ public class ExtractMetadataTest {
         qt.setDate(QuickTimeDirectory.TAG_CREATION_TIME, Date.from(Instant.parse("1904-01-01T00:00:00Z")));
         metadata.addDirectory(qt);
 
-        assertTrue(ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR).isEmpty());
+        assertTrue(date(metadata, PARIS, NO_SIDECAR).isEmpty());
     }
 
     @Test
@@ -181,12 +287,12 @@ public class ExtractMetadataTest {
         mp4.setDate(Mp4Directory.TAG_CREATION_TIME, Date.from(Instant.parse("2026-09-28T15:00:00Z")));
         metadata.addDirectory(mp4);
 
-        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:00:00+02:00[Europe/Paris]")), ExtractMetadata.captureDate(metadata, PARIS, NO_SIDECAR));
+        assertEquals(Optional.of(ZonedDateTime.parse("2026-09-28T17:00:00+02:00[Europe/Paris]")), date(metadata, PARIS, NO_SIDECAR));
     }
 
     @Test
     public void noUsableDateGivesNothing() {
-        assertTrue(ExtractMetadata.captureDate(new Metadata(), PARIS, NO_SIDECAR).isEmpty());
+        assertTrue(date(new Metadata(), PARIS, NO_SIDECAR).isEmpty());
     }
 
     // ---- doAnalyze: the item content is read ----

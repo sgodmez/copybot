@@ -16,6 +16,12 @@ public record WorkItemMetadata(
     public static final String LAST_MODIFIED = "lastModified";
     /** raw key: SHA-256 of the content (hex), computed by file.write during the copy. */
     public static final String SHA256 = "sha256";
+    /** raw key: {@code ZoneId} of the place where the item was shot, set by the engine from the plan, or at the listing from the state file where the plan kept it. */
+    public static final String CAPTURE_ZONE = "captureZone";
+    /** raw key: optional {@code ZoneId} (possibly a {@code ZoneOffset}) the camera clock was set to. */
+    public static final String CAMERA_CLOCK = "cameraClock";
+    /** raw key: {@code Boolean} set by the metadata plugin at each analysis finding a date, true for an EXIF photo without recorded offset. */
+    public static final String CAPTURE_CLOCK_UNKNOWN = "captureClockUnknown";
 
     public WorkItemMetadata() {
         this(new HashMap<>(), new HashMap<>());
@@ -49,5 +55,9 @@ public record WorkItemMetadata(
 
     public Optional<Instant> getTime(String key) {
         return raw.get(key) instanceof Instant instant ? Optional.of(instant) : Optional.empty();
+    }
+
+    public Optional<ZoneId> getZone(String key) {
+        return raw.get(key) instanceof ZoneId zone ? Optional.of(zone) : Optional.empty();
     }
 }

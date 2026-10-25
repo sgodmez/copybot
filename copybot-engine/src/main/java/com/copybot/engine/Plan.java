@@ -23,6 +23,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 
 /** A prepared pipeline: what would be imported, and from where, before anything is written. */
@@ -261,6 +262,38 @@ public final class Plan {
     /** True when this file has its own out pattern. */
     public static boolean hasOwnPattern(WorkItemExecution item) {
         return item.getWorkItem().getOutPattern().isPresent();
+    }
+
+    /**
+     * Corrects the time zone of these analysed files (spec timezone-correction §3): where they were shot, and what
+     * the camera clock was set to when it was not the local time there. They are to analyse again
+     * ({@link #toAnalyse()}): {@link CopybotEngine#analyse} gives them their new capture date and target, keeps their
+     * status (skipped for the same reason, ignored still ignored), and with the resume point "not at the destination"
+     * checks their new target at the destination. The files not analysed yet are left out. The last correction of a
+     * file replaces the previous one. Kept in the state file beside the own out patterns, with the same key: the next
+     * listing, whatever the resume mode, gives the files their zone again before their analysis.
+     *
+     * @param place the zone of the place where the files were shot
+     * @param clock the zone the camera clock was set to, null for the one of the place
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     * @throws CopybotException      resume.state.write-error: nothing changed
+     */
+    public void correctZone(Collection<WorkItemExecution> items, ZoneId place, ZoneId clock, ResumePoint override) {
+        executor.setCaptureZone(items, Objects.requireNonNull(place, "place"), clock, override);
+    }
+
+    /**
+     * Cancels the time zone correction of these files ({@link #correctZone}), also in the state file: the analysed
+     * ones are analysed again as they were listed; the ones not analysed (a correction restored at the listing,
+     * before the resume point) just lose it.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     * @throws CopybotException      resume.state.write-error: nothing changed
+     */
+    public void clearZone(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setCaptureZone(items, null, null, override);
     }
 
     /**

@@ -33,6 +33,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
@@ -695,6 +696,159 @@ public class PlanViewModelTest {
 
         assertEquals(List.of(), model.ignorable(all), "not once the copy started");
         assertEquals(List.of(), model.unignorable(all));
+    }
+
+    private WorkItemExecution shot(String name, String captureDate) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        if (captureDate != null) {
+            item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_DATE, Instant.parse(captureDate));
+        }
+        return item;
+    }
+
+    @Test
+    public void correctableKeepsAnalysedFilesWithACaptureDate() throws IOException {
+        WorkItemExecution dated = shot("a.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution undated = shot("b.jpg", null);
+        WorkItemExecution deferred = shot("c.jpg", "2026-10-26T05:30:00Z");
+        deferred.deferAnalysis("before the cursor");
+        WorkItemExecution skipped = shot("d.jpg", "2026-10-26T05:30:00Z");
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution failed = shot("e.jpg", "2026-10-26T05:30:00Z");
+        failed.setError(new IllegalStateException("no date"));
+        PlanViewModel model = prepared(false, dated, undated, deferred, skipped, failed);
+        List<WorkItemExecution> all = List.of(dated, undated, deferred, skipped, failed);
+
+        assertEquals(List.of(dated, skipped), model.correctable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.correctable(all), "not once the copy started");
+    }
+
+    @Test
+    public void uncorrectableKeepsTheCorrectedFiles() throws IOException {
+        WorkItemExecution corrected = shot("a.jpg", "2026-10-26T05:30:00Z");
+        corrected.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        WorkItemExecution plain = shot("b.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, corrected, plain);
+
+        assertEquals(List.of(corrected), model.uncorrectable(List.of(corrected, plain)));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.uncorrectable(List.of(corrected, plain)));
+    }
+
+    @Test
+    public void uncorrectableSkipsTheRowsTheUndoCannotTouch() throws IOException {
+        WorkItemExecution pending = shot("a.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution skipped = shot("b.jpg", "2026-10-26T05:30:00Z");
+        skipped.setSkipped("before the cursor");
+        WorkItemExecution failed = shot("c.jpg", "2026-10-26T05:30:00Z");
+        failed.setError(new IOException("unreadable"));
+        for (WorkItemExecution row : List.of(pending, skipped, failed)) {
+            row.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        }
+        PlanViewModel model = prepared(false, pending, skipped, failed);
+
+        assertEquals(List.of(pending, skipped), model.uncorrectable(List.of(pending, skipped, failed)));
+    }
+
+    @Test
+    public void sharedZoneIsTheOneAllTheRowsHave() throws IOException {
+        WorkItemExecution paris = shot("a.jpg", "2026-10-26T05:30:00Z");
+        paris.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Europe/Paris"));
+        WorkItemExecution paris2 = shot("b.jpg", "2026-10-26T05:30:00Z");
+        paris2.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Europe/Paris"));
+        WorkItemExecution tokyo = shot("c.jpg", "2026-10-26T05:30:00Z");
+        tokyo.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Asia/Tokyo"));
+        WorkItemExecution none = shot("d.jpg", "2026-10-26T05:30:00Z");
+
+        assertEquals(Optional.of(ZoneId.of("Europe/Paris")), PlanViewModel.sharedZone(List.of(paris, paris2), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(paris, tokyo), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(paris, none), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(), WorkItemMetadata.CAMERA_CLOCK));
+    }
+
+    @Test
+    public void clockPrefillReadsAFixedOffsetAsTheNoSummerTimeOfThePlace() {
+        ZoneId paris = ZoneId.of("Europe/Paris");
+        ZoneId tokyo = ZoneId.of("Asia/Tokyo");
+
+        assertEquals(new PlanViewModel.ClockPrefill(paris, true), PlanViewModel.clockPrefill(paris, Optional.of(ZoneOffset.ofHours(1))));
+        assertEquals(new PlanViewModel.ClockPrefill(tokyo, false), PlanViewModel.clockPrefill(paris, Optional.of(tokyo)));
+        assertEquals(new PlanViewModel.ClockPrefill(ZoneOffset.ofHours(9), false), PlanViewModel.clockPrefill(paris, Optional.of(ZoneOffset.ofHours(9))));
+        assertEquals(new PlanViewModel.ClockPrefill(paris, false), PlanViewModel.clockPrefill(paris, Optional.empty()));
+    }
+
+    @Test
+    public void clockUnknownCountCountsThePhotosWithoutOffset() throws IOException {
+        WorkItemExecution unknown = shot("a.jpg", "2026-10-26T05:30:00Z");
+        unknown.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.TRUE);
+        WorkItemExecution known = shot("b.jpg", "2026-10-26T05:30:00Z");
+        known.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.FALSE);
+        WorkItemExecution stale = shot("c.jpg", null); // a stale flag, the re-analysis found no date
+        stale.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.TRUE);
+
+        assertEquals(1, PlanViewModel.clockUnknownCount(List.of(unknown, known, stale, shot("d.jpg", "2026-10-26T05:30:00Z"))));
+    }
+
+    @Test
+    public void correctionTextTellsTheZoneAndTheCorrectedDate() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(Optional.empty(), PlanViewModel.correctionText(item));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.corrected", "America/Mexico_City", "2026-10-25 23:30")),
+                PlanViewModel.correctionText(item));
+    }
+
+    @Test
+    public void targetMarksArePencilWithItsTooltipLineBeforeTheFoldersAndNeverTheCorrection() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(item, null));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), "folders"), PlanViewModel.targetMarks(item, "folders"));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(null, null), "an empty cell");
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(item, null),
+                "a corrected row has no mark in the target: the clock is in the date cell");
+
+        item.getWorkItem().setOutPattern("x/{name}");
+        String own = ResourcesEngine.getString("plan.target.own-pattern", "x/{name}");
+        assertEquals(new PlanViewModel.TargetMarks(List.of(PlanViewModel.TargetMark.OWN_PATTERN), own + "\nfolders"),
+                PlanViewModel.targetMarks(item, "folders"));
+
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAPTURE_ZONE);
+        assertEquals(new PlanViewModel.TargetMarks(List.of(PlanViewModel.TargetMark.OWN_PATTERN), own),
+                PlanViewModel.targetMarks(item, null));
+    }
+
+    @Test
+    public void dateCellOfACorrectedRowShowsTheClockAndTheShotDateInTheCorrectedZone() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel.DateCell plain = PlanViewModel.dateCell(item);
+        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, null), plain, "not corrected: unchanged");
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(new PlanViewModel.DateCell("25/10/2026 23:30", true,
+                        ResourcesEngine.getString("plan.date.corrected", "America/Mexico_City", PlanViewModel.dateText(item))),
+                PlanViewModel.dateCell(item));
+    }
+
+    @Test
+    public void detailTextShowsTheCorrection() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals(PlanViewModel.correctionText(item).orElseThrow(), lines.get(3));
+        assertEquals("", lines.get(4));
     }
 
     @Test

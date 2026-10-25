@@ -14,7 +14,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.format.DateTimeParseException;
 import java.util.Map;
 import java.util.Optional;
@@ -23,13 +25,16 @@ import java.util.TreeMap;
 /**
  * The resume state of a pipeline, kept in a small human-editable JSON file next to the pipeline:
  * {@code { "cursor": { "date": "2026-09-28T15:42:10Z", "name": "DSC_4821.NEF" },
- * "outPatterns": [ { "date": "2026-09-28T15:42:10Z", "name": "DSC_4821.NEF", "pattern": "..." } ] }}.
- * Each write replaces its own member and keeps the other.
+ * "outPatterns": [ { "date": "2026-09-28T15:42:10Z", "name": "DSC_4821.NEF", "pattern": "..." } ],
+ * "zoneCorrections": [ { "date": "2026-09-28T15:42:10Z", "name": "DSC_4821.NEF", "zone": "Europe/Paris",
+ * "clock": "+01:00" } ] }}.
+ * Each write replaces its own member and keeps the others.
  */
 public final class ResumeStateStore {
 
     private static final String STATE_SUFFIX = ".state.json";
     private static final String OUT_PATTERNS = "outPatterns";
+    private static final String ZONE_CORRECTIONS = "zoneCorrections";
 
     private final Path stateFile;
 
@@ -151,11 +156,71 @@ public final class ResumeStateStore {
     }
 
     /**
+     * The time zone corrections made in the plan, by item (spec timezone-correction §3), with the key of an own out
+     * pattern.
+     *
+     * @return the corrections ordered by key, empty when the file does not exist or holds none
+     * @throws CopybotException resume.state.invalid, like {@link #readOutPatterns()}: an unknown zone too (the file
+     *                          can be edited by hand)
+     */
+    public Map<ItemKey, ZoneCorrection> readZoneCorrections() {
+        Map<ItemKey, ZoneCorrection> corrections = new TreeMap<>();
+        if (!Files.exists(stateFile)) {
+            return corrections;
+        }
+        try {
+            JsonElement member = JsonParser.parseString(Files.readString(stateFile)).getAsJsonObject().get(ZONE_CORRECTIONS);
+            if (member == null || member.isJsonNull()) {
+                return corrections;
+            }
+            for (JsonElement element : member.getAsJsonArray()) {
+                JsonObject entry = element.getAsJsonObject();
+                ZoneId place = ZoneId.of(requiredString(entry, "zone"));
+                JsonElement clock = entry.get("clock");
+                corrections.put(new ItemKey(Instant.parse(requiredString(entry, "date")), requiredString(entry, "name")),
+                        new ZoneCorrection(place, clock == null || clock.isJsonNull() ? null : ZoneId.of(clock.getAsString())));
+            }
+            return corrections;
+        } catch (IOException | JsonParseException | IllegalStateException | UnsupportedOperationException
+                 | DateTimeException e) {
+            // DateTimeException: a date, or a zone, that cannot be understood
+            throw CopybotException.ofResource(e, "resume.state.invalid", stateFile.toAbsolutePath());
+        }
+    }
+
+    /**
+     * Replaces the whole {@code zoneCorrections} member, the cursor and the own out patterns kept; an empty map
+     * removes the member.
+     *
+     * @throws CopybotException resume.state.write-error, the state file left as it was
+     */
+    public void writeZoneCorrections(Map<ItemKey, ZoneCorrection> corrections) {
+        JsonObject root = existingRoot();
+        if (corrections.isEmpty()) {
+            root.remove(ZONE_CORRECTIONS);
+        } else {
+            JsonArray array = new JsonArray();
+            new TreeMap<>(corrections).forEach((key, correction) -> {
+                JsonObject entry = new JsonObject();
+                entry.addProperty("date", key.date().toString());
+                entry.addProperty("name", key.name());
+                entry.addProperty("zone", correction.place().getId());
+                if (correction.clock() != null) {
+                    entry.addProperty("clock", correction.clock().getId());
+                }
+                array.add(entry);
+            });
+            root.add(ZONE_CORRECTIONS, array);
+        }
+        write(root);
+    }
+
+    /**
      * The current content, to replace one member of it; a missing file or a content that cannot be understood gives an
      * empty object.
      *
      * @throws CopybotException resume.state.write-error when the file cannot be read: writing would erase what it
-     *                          keeps (the own out patterns), the file is left as it was
+     *                          keeps (the own out patterns, the zone corrections), the file is left as it was
      */
     private JsonObject existingRoot() {
         String content;

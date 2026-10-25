@@ -489,6 +489,26 @@ public class ResumeResolverDestinationTest {
     }
 
     @Test
+    public void theRecheckOfCorrectedFilesFollowsTheSameRuleAsEveryFile() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("all");
+        day("south");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+        ResumeProposal p = resolver.propose(ordered);
+        assertTrue(resolver.checkedEveryFile());
+
+        ordered.get(1).getWorkItem().setOutPattern("north/{day}/{name}");
+        day("north/2026-09-02");
+        resolver.recheck(ordered);
+        resolver.apply(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, ordered);
+
+        assertEquals(List.of(ItemStatus.PENDING, ItemStatus.SKIPPED, ItemStatus.PENDING), statuses(ordered),
+                "the fixed pipeline and own directories tell nothing; the own varying one is found");
+    }
+
+    @Test
     public void whileStreamingAFileWithItsOwnVaryingPatternIsCheckedOnItsTarget() throws Exception {
         List<WorkItemExecution> ordered = card();
         ordered.get(1).getWorkItem().setOutPattern("south/{day}/{name}");
