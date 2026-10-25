@@ -4,6 +4,7 @@ import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -129,6 +130,42 @@ public class DryRunnerTest {
         assertEquals(List.of(
                 new Projection.Step("fork", List.of("DSC_1.NEF", "thumb_DSC_1.NEF")),
                 new Projection.Step("conv", List.of("DSC_1.jpg", "thumb_DSC_1.jpg"))), projection.trace());
+    }
+
+    @Test
+    public void dryRunNoteGoesToTheStep() throws IOException {
+        FakeProcess rewrite = new FakeProcess(item -> {
+            item.getMetadatas().raw().put(WorkItemMetadata.NOTE, "EXIF réécrit");
+            return Optional.of(List.of(item));
+        });
+
+        Projection projection = DryRunner.project(nef(), List.of(step("p", rewrite)));
+
+        assertEquals(List.of(new Projection.Step("p", List.of("DSC_1.NEF"), "EXIF réécrit")), projection.trace());
+        assertFalse(assertInstanceOf(Projection.Projected.class, projection).items().getFirst()
+                .getMetadatas().raw().containsKey(WorkItemMetadata.NOTE));
+    }
+
+    @Test
+    public void distinctNotesAreJoinedAndRepeatedOnesKeptOnce() throws IOException {
+        FakeProcess fork = new FakeProcess(item -> {
+            WorkItem thumb = item.copyForDryRun();
+            item.getMetadatas().raw().put(WorkItemMetadata.NOTE, "one");
+            thumb.getMetadatas().raw().put(WorkItemMetadata.NOTE, "two");
+            WorkItem third = item.copyForDryRun();
+            third.getMetadatas().raw().put(WorkItemMetadata.NOTE, "one");
+            return Optional.of(List.of(item, thumb, third));
+        });
+
+        Projection projection = DryRunner.project(nef(), List.of(step("p", fork)));
+
+        assertEquals("one; two", projection.trace().getFirst().note());
+    }
+
+    @Test
+    public void stepWithoutNoteIsUnchanged() {
+        assertEquals(new Projection.Step("p", List.of("a")), new Projection.Step("p", List.of("a"), null));
+        assertNull(new Projection.Step("p", List.of("a")).note());
     }
 
     @Test

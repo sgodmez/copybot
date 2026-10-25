@@ -23,6 +23,9 @@ public record WorkItemMetadata(
     /** raw key: {@code Boolean} set by the metadata plugin at each analysis finding a date, true for an EXIF photo without recorded offset. */
     public static final String CAPTURE_CLOCK_UNKNOWN = "captureClockUnknown";
 
+    /** raw key: {@code String}, a remark of a process step on the item (set in a dry run for the projection, or at execution). */
+    public static final String NOTE = "note";
+
     public WorkItemMetadata() {
         this(new HashMap<>(), new HashMap<>());
     }

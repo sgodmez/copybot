@@ -3,10 +3,13 @@ package com.copybot.engine;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * Chains the dry run of the process steps on a copy of an item (spec pattern-helper §4.2).
@@ -43,7 +46,7 @@ public final class DryRunner {
                 return new Projection.Filtered(actionName(step), trace);
             }
             current = next;
-            trace.add(new Projection.Step(actionName(step), current.stream().map(DryRunner::itemName).toList()));
+            trace.add(new Projection.Step(actionName(step), current.stream().map(DryRunner::itemName).toList(), takeNotes(current)));
         }
         return new Projection.Projected(current, trace);
     }
@@ -55,6 +58,17 @@ public final class DryRunner {
         if (produced != null && produced != parent && produced.getOutPattern().isEmpty()) {
             parent.getOutPattern().ifPresent(produced::setOutPattern);
         }
+    }
+
+    /** Removes the note a step left on each item and joins the distinct ones with "; "; null when there is none. */
+    private static String takeNotes(List<WorkItem> items) {
+        Set<String> notes = new LinkedHashSet<>();
+        for (WorkItem item : items) {
+            if (item.getMetadatas().raw().remove(WorkItemMetadata.NOTE) instanceof String note && !note.isEmpty()) {
+                notes.add(note);
+            }
+        }
+        return notes.isEmpty() ? null : String.join("; ", notes);
     }
 
     /** The action code of the step, as written in the pipeline. */

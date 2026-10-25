@@ -1336,6 +1336,33 @@ public class PlanViewModelTest {
                 lastLine(item, new ItemDetail(converted, TargetProjection.NONE, List.of())));
     }
 
+    @Test
+    public void detailTextShowsTheStepNote() throws IOException {
+        WorkItemExecution item = item("a.jpg", 1);
+        ItemDetail detail = new ItemDetail(List.of(
+                new Projection.Step("write-date", List.of("a.jpg"), "EXIF réécrit"),
+                new Projection.Step("rename", List.of("b.jpg"))),
+                TargetProjection.NONE, List.of());
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertTrue(lines.contains("⚙ write-date → a.jpg — EXIF réécrit"), lines.toString());
+        assertTrue(lines.contains("⚙ rename → b.jpg"), lines.toString());
+    }
+
+    @Test
+    public void detailTextShowsTheItemNote() throws IOException {
+        WorkItemExecution item = item("a.jpg", 1);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+        assertFalse(PlanViewModel.detailText(item, detail).contains("⚠"));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.NOTE, "EXIF réécrit");
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals("⚠ EXIF réécrit", lines.get(3));
+        assertEquals("", lines.get(4));
+    }
+
     private static String lastLine(WorkItemExecution item, ItemDetail detail) {
         return PlanViewModel.detailText(item, detail).lines().toList().getLast();
     }

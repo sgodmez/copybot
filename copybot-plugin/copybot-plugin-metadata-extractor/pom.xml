@@ -18,6 +18,12 @@
             <version>2.21.0</version>
         </dependency>
         <dependency>
+            <!-- lossless EXIF rewrite of a JPEG (write-date) -->
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-imaging</artifactId>
+            <version>1.0.0-alpha6</version>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
             <version>${junit.version}</version>
@@ -30,5 +36,37 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <!-- the end-to-end tests of write-date: copied with the engine's file.write, then run through the engine -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.plugin.embedded.actions=com.copybot.plugin.metadataextractor</arg>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.engine=com.copybot.plugin.metadataextractor</arg>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.engine.pipeline=com.copybot.plugin.metadataextractor</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-exports com.copybot.engine/com.copybot.plugin.embedded.actions=com.copybot.plugin.metadataextractor --add-exports com.copybot.engine/com.copybot.engine=com.copybot.plugin.metadataextractor --add-exports com.copybot.engine/com.copybot.engine.pipeline=com.copybot.plugin.metadataextractor --enable-native-access=com.copybot.engine</argLine>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

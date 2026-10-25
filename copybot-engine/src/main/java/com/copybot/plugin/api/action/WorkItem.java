@@ -44,6 +44,23 @@ public class WorkItem {
         return copy;
     }
 
+    /**
+     * A copy of this item (as {@link #copyForDryRun()}) whose content is {@code content}, of {@code size} bytes: for a
+     * process step that rewrites the file. The name and source are kept; this item is unchanged.
+     * <p>
+     * The copy may be kept until the end of the plan (with every other item of it) and its content may be opened
+     * several times (the write, its comparison with an existing target, its verification): {@code content} must be
+     * cheap to keep and to open again, and must not hold large buffers (a whole file in memory, per item, ends in an
+     * {@link OutOfMemoryError} on a big card). Regenerate the content at each open, e.g. from this item's content,
+     * and report a failure to do so as an {@link IOException} of the returned stream.
+     */
+    public WorkItem withContent(Supplier<InputStream> content, long size) {
+        WorkItem copy = copyForDryRun();
+        copy.inputStreamSupplier = content;
+        copy.metadatas.setSize(size);
+        return copy;
+    }
+
     public WorkItem(URL sourceLocationUrl, Supplier<InputStream> inputStreamSupplier) {
         this.sourceLocationUrl = sourceLocationUrl;
         this.inputStreamSupplier = inputStreamSupplier;

@@ -947,9 +947,14 @@ public final class PlanViewModel {
         lines.add(ResourcesEngine.getString("plan.detail.status", reason.isPresent()
                 ? ResourcesEngine.getString("item.status.SKIPPED", reason.get()) : statusText(item)));
         correctionText(item).ifPresent(lines::add);
+        // a remark left at execution by a process step (the dry-run ones are on the step lines)
+        if (source.getMetadatas().raw().get(WorkItemMetadata.NOTE) instanceof String note && !note.isEmpty()) {
+            lines.add("⚠ " + note);
+        }
         lines.add("");
         for (Projection.Step step : detail.steps()) {
-            lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced()));
+            lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced())
+                    + (step.note() == null ? "" : " — " + step.note()));
         }
         switch (detail.outcome()) {
             case TargetProjection.Targets t -> {

@@ -46,4 +46,31 @@ public class WorkItemCopyTest {
         assertFalse(item.getMetadatas().raw().containsKey("extra"));
         assertEquals(item.getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE), copy.getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE));
     }
+
+    @Test
+    public void withContentKeepsTheSourceAndReplacesTheContent() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("a.jpg"), "old");
+        WorkItem item = new WorkItem(file);
+        item.getMetadatas().display().put("name", "a.jpg");
+        item.getMetadatas().setSize(3);
+        item.setDeleted(true);
+        item.setOutPattern("own/{name}");
+
+        WorkItem replaced = item.withContent(() -> new java.io.ByteArrayInputStream("brand new".getBytes()), 9);
+
+        assertEquals(Optional.of("own/{name}"), replaced.getOutPattern(), "the rewritten copy keeps its own pattern");
+        assertEquals(item.getNameDisplay(), replaced.getNameDisplay());
+        assertEquals(file, replaced.getLocalLocation());
+        assertTrue(replaced.isLocal());
+        assertTrue(replaced.isDeleted());
+        assertEquals("a.jpg", replaced.getMetadatas().display().get("name"));
+        try (var in = replaced.openInputStream()) {
+            assertEquals("brand new", new String(in.readAllBytes()));
+        }
+        assertEquals(9L, replaced.getMetadatas().getSize());
+        assertEquals(3L, item.getMetadatas().getSize());
+        try (var in = item.openInputStream()) {
+            assertEquals("old", new String(in.readAllBytes()));
+        }
+    }
 }

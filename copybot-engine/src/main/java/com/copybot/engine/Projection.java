@@ -13,10 +13,14 @@ public sealed interface Projection {
     /** The process steps that produced items, in order; the step that ended the dry run is not in it. */
     List<Step> trace();
 
-    /** One process step of the dry run: its action and the names of the items it produced. */
-    record Step(String action, List<String> produced) {
+    /** One process step of the dry run: its action, the names of the items it produced and its remark on them (nullable). */
+    record Step(String action, List<String> produced, String note) {
         public Step {
             produced = List.copyOf(produced);
+        }
+
+        public Step(String action, List<String> produced) {
+            this(action, produced, null);
         }
     }
 

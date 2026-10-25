@@ -158,6 +158,7 @@ when several versions are installed.
 | `file.read` | built in | in | Lists a folder, recursively or not, with include/exclude globs and the hidden-file policy |
 | `file.write` | built in | out | Safe write to a pattern-built path: temporary file and rename, verification, conflict policy, optional move |
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
+| `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
 
 ## Plugins
 
@@ -229,6 +230,9 @@ copybot-ui/target/copybot/bin/java --enable-native-access=com.copybot.engine \
     -m com.copybot.engine/com.copybot.Copybot \
     -p photos.json -c config.json --dry-run
 ```
+
+The metadata plugin needs the `java.desktop` module. The runtime image holds
+it; with a custom image or `--limit-modules`, add `--add-modules java.desktop`.
 
 | Exit code | Meaning |
 |---|---|

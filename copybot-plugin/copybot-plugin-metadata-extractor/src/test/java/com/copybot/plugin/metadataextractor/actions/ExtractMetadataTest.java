@@ -30,6 +30,7 @@ import java.util.Date;
 import java.util.Optional;
 import java.util.function.Supplier;
 
+import static com.copybot.plugin.metadataextractor.actions.TestJpegs.jpegWithDateOriginal;
 import static org.junit.jupiter.api.Assertions.*;
 
 public class ExtractMetadataTest {
@@ -296,43 +297,6 @@ public class ExtractMetadataTest {
     }
 
     // ---- doAnalyze: the item content is read ----
-
-    /** A JPEG holding only an EXIF segment whose sub-IFD has DateTimeOriginal (little-endian TIFF). */
-    private static byte[] jpegWithDateOriginal(String exifDate) {
-        ByteBuffer tiff = ByteBuffer.allocate(64).order(ByteOrder.LITTLE_ENDIAN);
-        tiff.put(new byte[]{'I', 'I'}).putShort((short) 42).putInt(8);
-        // IFD0 at 8: one entry, the pointer to the EXIF sub-IFD at 26
-        tiff.putShort((short) 1).putShort((short) 0x8769).putShort((short) 4).putInt(1).putInt(26).putInt(0);
-        // sub-IFD at 26: one entry, DateTimeOriginal (ASCII, 20 bytes at 44)
-        tiff.putShort((short) 1).putShort((short) ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL).putShort((short) 2)
-                .putInt(20).putInt(44).putInt(0);
-        tiff.put((exifDate + "\0").getBytes(StandardCharsets.US_ASCII));
-        return jpeg(tiff.array());
-    }
-
-    /** As jpegWithDateOriginal, the sub-IFD also holding OffsetTimeOriginal. */
-    private static byte[] jpegWithDateOriginal(String exifDate, String offset) {
-        ByteBuffer tiff = ByteBuffer.allocate(96).order(ByteOrder.LITTLE_ENDIAN);
-        tiff.put(new byte[]{'I', 'I'}).putShort((short) 42).putInt(8);
-        // IFD0 at 8: one entry, the pointer to the EXIF sub-IFD at 26
-        tiff.putShort((short) 1).putShort((short) 0x8769).putShort((short) 4).putInt(1).putInt(26).putInt(0);
-        // sub-IFD at 26: two entries, DateTimeOriginal (ASCII, 20 bytes at 56), OffsetTimeOriginal (7 bytes at 76)
-        tiff.putShort((short) 2).putShort((short) ExifSubIFDDirectory.TAG_DATETIME_ORIGINAL).putShort((short) 2)
-                .putInt(20).putInt(56)
-                .putShort((short) ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL).putShort((short) 2)
-                .putInt(7).putInt(76).putInt(0);
-        tiff.put((exifDate + "\0").getBytes(StandardCharsets.US_ASCII));
-        tiff.put((offset + "\0").getBytes(StandardCharsets.US_ASCII));
-        return jpeg(tiff.array());
-    }
-
-    private static byte[] jpeg(byte[] exif) {
-
-        ByteBuffer jpeg = ByteBuffer.allocate(2 + 4 + 6 + exif.length + 2).order(ByteOrder.BIG_ENDIAN);
-        jpeg.putShort((short) 0xFFD8).putShort((short) 0xFFE1).putShort((short) (2 + 6 + exif.length));
-        jpeg.put("Exif\0\0".getBytes(StandardCharsets.US_ASCII)).put(exif).putShort((short) 0xFFD9);
-        return jpeg.array();
-    }
 
     private static WorkItem item(Supplier<InputStream> content) throws MalformedURLException {
         return new WorkItem(URI.create("file:///card/item").toURL(), content);
