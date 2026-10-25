@@ -11,14 +11,26 @@ import com.drew.metadata.Directory;
 import com.drew.metadata.Metadata;
 import com.drew.metadata.exif.ExifSubIFDDirectory;
 import com.drew.metadata.mov.QuickTimeDirectory;
+import com.drew.metadata.mov.metadata.QuickTimeMetadataDirectory;
 import com.drew.metadata.mp4.Mp4Directory;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.DateTimeException;
 import java.time.Instant;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.ZonedDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Date;
 import java.util.Optional;
 import java.util.TimeZone;
+import java.util.function.Supplier;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Sets the item capture date (metadata "captureDate") from the EXIF or video creation date. */
 public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
@@ -33,31 +45,95 @@ public class ExtractMetadata extends AbstractAction implements IAnalyzeAction {
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "plugin.metadata-extractor.extract.error.io", item.getSourceLocationDisplay());
         }
-        captureDate(metadata, TimeZone.getDefault())
+        Path local = item.getLocalLocation();
+        captureDate(metadata, ZoneId.systemDefault(), () -> local == null ? Optional.empty() : sonySidecarOffset(local))
                 .ifPresent(date -> item.getMetadatas().setTime(WorkItemMetadata.CAPTURE_DATE, date));
     }
 
     /**
-     * EXIF DateTimeOriginal is a local time without zone: it is read in {@code localZone}, as the OS
-     * does for FAT file dates. QuickTime / MP4 creation dates are already UTC.
+     * The capture date in the zone of the camera clock, so that a photo is filed on the day its camera showed.
+     * EXIF DateTimeOriginal is a local time: in the zone of its OffsetTimeOriginal when the camera wrote one,
+     * else in {@code localZone}, as the OS does for FAT file dates. QuickTime / MP4 creation dates are UTC:
+     * shown in the offset of the creationdate key when the camera wrote one, else in {@code sidecarOffset}
+     * (read only for a video), else in {@code localZone}.
      */
-    static Optional<Instant> captureDate(Metadata metadata, TimeZone localZone) {
+    static Optional<ZonedDateTime> captureDate(Metadata metadata, ZoneId localZone,
+                                               Supplier<Optional<ZoneOffset>> sidecarOffset) {
         ExifSubIFDDirectory exif = metadata.getFirstDirectoryOfType(ExifSubIFDDirectory.class);
         if (exif != null) {
-            Date original = exif.getDateOriginal(localZone);
+            ZoneId cameraZone = offset(exif.getString(ExifSubIFDDirectory.TAG_TIME_ZONE_ORIGINAL)).orElse(localZone);
+            Date original = exif.getDateOriginal(TimeZone.getTimeZone(cameraZone));
             if (original != null) {
-                return Optional.of(original.toInstant());
+                return Optional.of(original.toInstant().atZone(cameraZone));
             }
         }
-        return videoDate(metadata.getFirstDirectoryOfType(QuickTimeDirectory.class), QuickTimeDirectory.TAG_CREATION_TIME)
-                .or(() -> videoDate(metadata.getFirstDirectoryOfType(Mp4Directory.class), Mp4Directory.TAG_CREATION_TIME));
+        return videoDate(metadata, QuickTimeDirectory.class, QuickTimeDirectory.TAG_CREATION_TIME)
+                .or(() -> videoDate(metadata, Mp4Directory.class, Mp4Directory.TAG_CREATION_TIME))
+                .map(instant -> instant.atZone(videoOffset(metadata).or(sidecarOffset)
+                        .<ZoneId>map(offset -> offset).orElse(localZone)));
     }
 
-    private static Optional<Instant> videoDate(Directory directory, int tag) {
-        if (directory == null) {
+    /** The offset of the QuickTime creationdate key (local time with offset, e.g. 2026-10-25T23:30:00-0600). */
+    private static Optional<ZoneOffset> videoOffset(Metadata metadata) {
+        QuickTimeMetadataDirectory keys = metadata.getFirstDirectoryOfType(QuickTimeMetadataDirectory.class);
+        String text = keys == null ? null : keys.getString(QuickTimeMetadataDirectory.TAG_CREATION_DATE);
+        return dateOffset(text);
+    }
+
+    private static final DateTimeFormatter DATE_WITH_OFFSET = DateTimeFormatter.ofPattern("uuuu-MM-dd'T'HH:mm:ss[.SSS][XXX][XX]");
+
+    private static Optional<ZoneOffset> dateOffset(String text) {
+        if (text == null) {
             return Optional.empty();
         }
-        Date date = directory.getDate(tag);
+        try {
+            return Optional.of(OffsetDateTime.parse(text.strip(), DATE_WITH_OFFSET).getOffset());
+        } catch (DateTimeException e) {
+            return Optional.empty(); // malformed or without offset: as if the camera wrote none
+        }
+    }
+
+    private static final Pattern SONY_CREATION_DATE = Pattern.compile("<CreationDate\\s+value=\"([^\"]*)\"");
+    private static final long SIDECAR_MAX_SIZE = 1 << 20;
+
+    /**
+     * The offset of the Sony XAVC sidecar next to a video (C0099.MP4 -> C0099M01.XML), whose CreationDate is
+     * the local time of the camera with its offset. Nothing when there is none or it cannot be read.
+     */
+    static Optional<ZoneOffset> sonySidecarOffset(Path video) {
+        String name = video.getFileName().toString();
+        int dot = name.lastIndexOf('.');
+        Path sidecar = video.resolveSibling((dot < 0 ? name : name.substring(0, dot)) + "M01.XML");
+        try {
+            if (!Files.isRegularFile(sidecar) || Files.size(sidecar) > SIDECAR_MAX_SIZE) {
+                return Optional.empty();
+            }
+            Matcher matcher = SONY_CREATION_DATE.matcher(Files.readString(sidecar));
+            return matcher.find() ? dateOffset(matcher.group(1)) : Optional.empty();
+        } catch (IOException e) {
+            return Optional.empty(); // the sidecar only refines the date: the video is still analyzed
+        }
+    }
+
+    private static Optional<ZoneId> offset(String text) {
+        if (text == null) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(ZoneOffset.of(text.strip()));
+        } catch (DateTimeException e) {
+            return Optional.empty(); // blank or malformed: as if the camera wrote none
+        }
+    }
+
+    private static Optional<Instant> videoDate(Metadata metadata, Class<? extends Directory> type, int tag) {
+        // exact type: QuickTimeMetadataDirectory is a QuickTimeDirectory without creation time
+        Optional<? extends Directory> directory = metadata.getDirectoriesOfType(type).stream()
+                .filter(candidate -> candidate.getClass() == type).findFirst();
+        if (directory.isEmpty()) {
+            return Optional.empty();
+        }
+        Date date = directory.get().getDate(tag);
         // an unset creation time (0) decodes to the QuickTime epoch 1904-01-01: not a capture date
         return Optional.ofNullable(date).map(Date::toInstant).filter(instant -> instant.isAfter(Instant.EPOCH));
     }

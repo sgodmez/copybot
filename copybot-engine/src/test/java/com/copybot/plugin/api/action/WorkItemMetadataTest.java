@@ -3,6 +3,7 @@ package com.copybot.plugin.api.action;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.time.ZonedDateTime;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -22,6 +23,20 @@ public class WorkItemMetadataTest {
         assertEquals(Optional.of(modified), m.getTime("lastModified"));
         assertFalse(m.raw().containsKey("key"), "the literal key \"key\" must not be used anymore");
         assertEquals("2026", m.display().get("captureDate.Y"));
+    }
+
+    @Test
+    public void setTimeWithAZoneShowsTheWallTimeOfThatZone() {
+        WorkItemMetadata m = new WorkItemMetadata();
+        // 23:30 in Mexico City is already the next day in Paris
+        ZonedDateTime shot = ZonedDateTime.parse("2026-10-25T23:30:00-06:00");
+
+        m.setTime(WorkItemMetadata.CAPTURE_DATE, shot);
+
+        assertEquals(Optional.of(shot.toInstant()), m.getTime("captureDate"));
+        assertEquals("2026", m.display().get("captureDate.Y"));
+        assertEquals("10", m.display().get("captureDate.m"));
+        assertEquals("25", m.display().get("captureDate.D"));
     }
 
     @Test

@@ -1,8 +1,8 @@
 package com.copybot.plugin.api.action;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -30,10 +30,16 @@ public record WorkItemMetadata(
         return (Long) raw.getOrDefault("size", null);
     }
 
+    /** Shows the time in the zone of this computer: for file dates, which hold no zone. */
     public void setTime(String key, Instant time) {
-        raw.put(key, time);
+        setTime(key, time.atZone(ZoneId.systemDefault()));
+    }
 
-        var localDateTime = LocalDateTime.ofInstant(time, ZoneOffset.systemDefault());
+    /** Stores the instant; shows the wall time of {@code time}'s own zone (e.g. the camera clock). */
+    public void setTime(String key, ZonedDateTime time) {
+        raw.put(key, time.toInstant());
+
+        var localDateTime = time.toLocalDateTime();
         display.put(key + ".Y", String.format("%04d", localDateTime.getYear()));
         display.put(key + ".y", String.format("%02d", localDateTime.getYear() % 100));
         display.put(key + ".m", String.format("%02d", localDateTime.getMonthValue()));
