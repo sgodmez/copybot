@@ -64,10 +64,12 @@ public class MainExecutorResumeTest {
 
     static final class RecordingAnalyze extends FakeAction implements IAnalyzeAction {
         final Set<String> seen = ConcurrentHashMap.newKeySet();
+        final java.util.concurrent.atomic.AtomicInteger analyses = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
         public void doAnalyze(WorkItem item) {
             seen.add(item.getNameDisplay());
+            analyses.incrementAndGet();
         }
     }
 
@@ -544,6 +546,35 @@ public class MainExecutorResumeTest {
         assertTrue(items.stream().allMatch(WorkItemExecution::isPrepared), "the preparation progress is complete");
         assertTrue(items.subList(0, 20).stream().filter(w -> !oldAnalysed.contains(w.getWorkItem().getNameDisplay()))
                 .allMatch(w -> w.isAnalysisDeferred() && w.getProjection() == null), "the others are not analysed");
+    }
+
+    @Test
+    public void theSearchFromTheEndAnalysesEachFileOnce() throws IOException {
+        RecordingAnalyze analyze = new RecordingAnalyze();
+        MainExecutor exec = destination(5, analyze, new DayOut(Set.of()), ResumeMode.DESTINATION);
+        Files.delete(tempDir.resolve("nas").resolve("03")); // deleted after its import: the point does not move back
+
+        exec.prepare();
+
+        assertEquals(ResumePoint.after(day(5)), exec.getState().getResumeProposal().point());
+        assertTrue(analyze.seen.containsAll(days(6, 30)));
+        assertEquals(analyze.seen.size(), analyze.analyses.get(), "no file analysed twice");
+        assertTrue(exec.getOrderedItems().subList(5, 30).stream()
+                .allMatch(w -> w.getStatus() == ItemStatus.PENDING && !w.isAnalysisDeferred()));
+    }
+
+    @Test
+    public void aDestinationPointToCheckWritesNoCursor() throws IOException {
+        MainExecutor exec = destination(10, new RecordingAnalyze(), new DayOut(Set.of()),
+                ResumeMode.STATE_THEN_DESTINATION);
+        Files.createDirectories(tempDir.resolve("nas").resolve("30")); // another source, or a file dated in the future
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(ResumePoint.after(day(30)), exec.getState().getResumeProposal().point());
+        assertEquals(1, exec.getState().getResumeProposal().warnings().size());
+        assertTrue(store().readCursor().isEmpty(), "the next run probes the destination again, warned again");
     }
 
     @Test

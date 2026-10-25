@@ -8,10 +8,10 @@ import com.google.gson.annotations.SerializedName;
  */
 public enum DestinationCheck {
     /**
-     * the destination is assumed filled up to a point, found by a dichotomy: only the files it probes are analysed
-     * (the default)
+     * the import stopped after the last file found at the destination, searched from the end: only the files after it
+     * (to copy) and a batch before it are analysed (the default)
      */
-    @SerializedName("dichotomy") DICHOTOMY("dichotomy"),
+    @SerializedName("lastFound") LAST_FOUND("lastFound"),
     /** every file is analysed and skipped when its own target is at the destination (a missing day is imported) */
     @SerializedName("everyFile") EVERY_FILE("everyFile");
 

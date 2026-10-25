@@ -3,7 +3,7 @@ package com.copybot.engine.resume;
 /**
  * The "resume" block of a pipeline.
  *
- * @param destinationCheck how the destination-based modes go through the destination, null for the dichotomy
+ * @param destinationCheck how the destination-based modes go through the destination, null for the search from the end
  * @param destinationMatch what counts as imported for them, null for the target directory
  */
 public record ResumeConfig(ResumeMode mode, DestinationCheck destinationCheck, DestinationMatch destinationMatch) {
@@ -14,7 +14,7 @@ public record ResumeConfig(ResumeMode mode, DestinationCheck destinationCheck, D
     }
 
     public DestinationCheck effectiveDestinationCheck() {
-        return destinationCheck == null ? DestinationCheck.DICHOTOMY : destinationCheck;
+        return destinationCheck == null ? DestinationCheck.LAST_FOUND : destinationCheck;
     }
 
     public DestinationMatch effectiveDestinationMatch() {

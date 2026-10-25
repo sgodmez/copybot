@@ -537,7 +537,17 @@ public class MainExecutor implements Runnable {
             orderedItems = ResumeResolver.order(state.getWorkItems());
             proposal = chosen != null
                     ? new ResumeProposal(chosen, ResumeSource.MANUAL, List.of())
-                    : resolver.propose(orderedItems, this::analyseNow);
+                    : resolver.propose(orderedItems, new ResumeResolver.Analyser() {
+                        @Override
+                        public boolean analyse(WorkItemExecution item) throws InterruptedException {
+                            return analyseNow(item);
+                        }
+
+                        @Override
+                        public void analyseAll(List<WorkItemExecution> items) throws InterruptedException {
+                            analyseInParallel(items);
+                        }
+                    });
             state.setResumeProposal(proposal);
             resolver.apply(proposal.point(), proposal.source(), orderedItems);
             analyseTheSelectedItems();
@@ -768,6 +778,17 @@ public class MainExecutor implements Runnable {
             checkCancelled();
         }
         return exec.getStatus() != ItemStatus.ERROR;
+    }
+
+    /** With the analysis on demand: a batch of items the destination probe checks, analysed at once. */
+    private void analyseInParallel(List<WorkItemExecution> items) throws InterruptedException {
+        for (WorkItemExecution exec : items) {
+            if (exec.isAnalysisDeferred()) {
+                itemRunner.submit(exec, 0, barrierIndex);
+            }
+        }
+        tasks.awaitCompletion();
+        checkCancelled();
     }
 
     /**

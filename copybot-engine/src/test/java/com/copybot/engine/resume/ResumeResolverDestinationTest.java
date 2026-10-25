@@ -231,7 +231,7 @@ public class ResumeResolverDestinationTest {
         file("2026-09-01", "A.JPG");
         day("2026-09-02"); // the directory of B exists, B itself was deleted
 
-        ResumeProposal p = resolver(ResumeMode.DESTINATION, DestinationCheck.DICHOTOMY, DestinationMatch.FILE,
+        ResumeProposal p = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND, DestinationMatch.FILE,
                 dayOut(Optional.of(true))).propose(ordered);
 
         assertEquals(ResumePoint.after(key(ordered.get(0))), p.point());
@@ -239,11 +239,11 @@ public class ResumeResolverDestinationTest {
     }
 
     @Test
-    public void theReasonOfTheDichotomyNamesWhatItChecked() throws Exception {
+    public void theReasonOfTheSearchFromTheEndNamesWhatItChecked() throws Exception {
         file("2026-09-01", "A.JPG");
         List<WorkItemExecution> ordered = card();
         for (DestinationMatch match : DestinationMatch.values()) {
-            ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.DICHOTOMY, match,
+            ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND, match,
                     dayOut(Optional.of(true)));
             ResumeProposal p = resolver.propose(ordered);
 
@@ -263,10 +263,10 @@ public class ResumeResolverDestinationTest {
         file("all", "A.JPG");
         file("all", "B.JPG");
 
-        ResumeProposal dichotomy = resolver(ResumeMode.DESTINATION, DestinationCheck.DICHOTOMY, DestinationMatch.FILE,
+        ResumeProposal lastFound = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND, DestinationMatch.FILE,
                 flatOut(Optional.of(false))).propose(ordered);
-        assertEquals(ResumePoint.after(key(ordered.get(1))), dichotomy.point());
-        assertTrue(dichotomy.warnings().isEmpty(), "no single-directory guard in file mode");
+        assertEquals(ResumePoint.after(key(ordered.get(1))), lastFound.point());
+        assertTrue(lastFound.warnings().isEmpty(), "no single-directory guard in file mode");
 
         ResumeResolver everyFile = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE, DestinationMatch.FILE,
                 flatOut(Optional.of(false)));
@@ -303,19 +303,19 @@ public class ResumeResolverDestinationTest {
         ResumeProposal state = resolver(ResumeMode.STATE, null, null, null).streamingProposal();
         assertEquals(ResumePoint.after(cursor), state.point());
         assertEquals(ResumeSource.STATE, state.source());
-        ResumeProposal withCursor = resolver(ResumeMode.STATE_THEN_DESTINATION, DestinationCheck.DICHOTOMY,
+        ResumeProposal withCursor = resolver(ResumeMode.STATE_THEN_DESTINATION, DestinationCheck.LAST_FOUND,
                 DestinationMatch.DIRECTORY, dayOut(Optional.of(true))).streamingProposal();
         assertEquals(ResumePoint.after(cursor), withCursor.point());
         assertTrue(withCursor.warnings().isEmpty());
     }
 
     @Test
-    public void theDestinationIsCheckedFileByFileWhileStreamingTheDichotomyWithAWarning() {
-        ResumeProposal dichotomy = resolver(ResumeMode.DESTINATION, DestinationCheck.DICHOTOMY,
+    public void theDestinationIsCheckedFileByFileWhileStreamingTheSearchFromTheEndWithAWarning() {
+        ResumeProposal lastFound = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND,
                 DestinationMatch.DIRECTORY, dayOut(Optional.of(true))).streamingProposal();
-        assertEquals(ResumePoint.notAtDestination(), dichotomy.point());
-        assertEquals(ResumeSource.DESTINATION, dichotomy.source());
-        assertEquals(List.of(ResourcesEngine.getString("execution.streaming.dichotomy")), dichotomy.warnings());
+        assertEquals(ResumePoint.notAtDestination(), lastFound.point());
+        assertEquals(ResumeSource.DESTINATION, lastFound.source());
+        assertEquals(List.of(ResourcesEngine.getString("execution.streaming.last-found")), lastFound.warnings());
 
         ResumeProposal everyFile = resolver(ResumeMode.STATE_THEN_DESTINATION, DestinationCheck.EVERY_FILE,
                 DestinationMatch.FILE, dayOut(Optional.of(true))).streamingProposal();

@@ -190,7 +190,7 @@ public class PipelineDocumentTest {
     @Test
     public void theDestinationOptionsLiveInTheResumeBlockAndTheirDefaultsAreNotWritten() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
-        assertEquals("dichotomy", document.destinationCheck());
+        assertEquals("lastFound", document.destinationCheck());
         assertEquals("directory", document.destinationMatch());
 
         document.setDestinationCheck("everyFile");
@@ -201,7 +201,7 @@ public class PipelineDocumentTest {
         assertEquals("everyFile", document.destinationCheck());
         assertEquals("file", document.destinationMatch());
 
-        document.setDestinationCheck("dichotomy");
+        document.setDestinationCheck("lastFound");
         document.setDestinationMatch("directory");
         assertEquals(tree("{\"mode\":\"state\"}"), tree(document.toJson()).getAsJsonObject("resume"));
         assertThrows(IllegalArgumentException.class, () -> document.setDestinationCheck("sometimes"));

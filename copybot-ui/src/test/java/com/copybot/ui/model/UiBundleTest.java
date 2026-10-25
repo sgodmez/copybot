@@ -56,7 +56,7 @@ public class UiBundleTest {
             "editor.section.ANALYZE", "editor.section.PROCESS", "editor.section.OUT", "editor.add", "editor.up",
             "editor.down", "editor.remove", "editor.save", "editor.save-as", "editor.show-json",
             "editor.execution", "editor.execution.plan", "editor.execution.auto", "editor.execution.streaming",
-            "editor.execution.streaming-dichotomy", "editor.destination-check", "editor.destination-check.dichotomy",
+            "editor.execution.streaming-last-found", "editor.destination-check", "editor.destination-check.lastFound",
             "editor.destination-check.everyFile", "editor.destination-match", "editor.destination-match.directory",
             "editor.destination-match.file", "plan.prepare-and-copy", "plan.stream", "plan.resume.missing",
             "editor.resume-mode", "editor.advanced",

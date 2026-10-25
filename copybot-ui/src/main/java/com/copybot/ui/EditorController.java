@@ -423,7 +423,7 @@ public class EditorController {
             }
         });
         execution.setValue(document.executionMode());
-        Label executionWarning = new Label("⚠ " + ResourcesEngine.getString("editor.execution.streaming-dichotomy"));
+        Label executionWarning = new Label("⚠ " + ResourcesEngine.getString("editor.execution.streaming-last-found"));
         executionWarning.setWrapText(true);
         executionWarning.setStyle("-fx-text-fill: #c87f0a;");
 

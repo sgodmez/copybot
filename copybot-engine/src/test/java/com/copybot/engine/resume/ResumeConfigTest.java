@@ -23,9 +23,9 @@ public class ResumeConfigTest {
     }
 
     @Test
-    public void theDestinationOptionsDefaultToTheDichotomyOnTheDirectory() {
+    public void theDestinationOptionsDefaultToTheLastFoundOnTheDirectory() {
         ResumeConfig config = parse("{\"resume\":{\"mode\":\"destination\"}}").resume();
-        assertEquals(DestinationCheck.DICHOTOMY, config.effectiveDestinationCheck());
+        assertEquals(DestinationCheck.LAST_FOUND, config.effectiveDestinationCheck());
         assertEquals(DestinationMatch.DIRECTORY, config.effectiveDestinationMatch());
     }
 
@@ -34,8 +34,8 @@ public class ResumeConfigTest {
         ResumeConfig config = parse("{\"resume\":{\"destinationCheck\":\"everyFile\",\"destinationMatch\":\"file\"}}").resume();
         assertEquals(DestinationCheck.EVERY_FILE, config.effectiveDestinationCheck());
         assertEquals(DestinationMatch.FILE, config.effectiveDestinationMatch());
-        assertEquals(DestinationCheck.DICHOTOMY,
-                parse("{\"resume\":{\"destinationCheck\":\"dichotomy\"}}").resume().effectiveDestinationCheck());
+        assertEquals(DestinationCheck.LAST_FOUND,
+                parse("{\"resume\":{\"destinationCheck\":\"lastFound\"}}").resume().effectiveDestinationCheck());
         assertEquals(DestinationMatch.DIRECTORY,
                 parse("{\"resume\":{\"destinationMatch\":\"directory\"}}").resume().effectiveDestinationMatch());
     }

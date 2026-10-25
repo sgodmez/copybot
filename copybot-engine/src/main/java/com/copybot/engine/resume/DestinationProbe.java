@@ -3,33 +3,60 @@ package com.copybot.engine.resume;
 import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
  * "Resume from destination": an item counts as imported when its target directory exists (one
  * directory per day: deleting photos inside it afterwards does not move the resume point back).
- * The destination is assumed filled up to a point, so a dichotomy finds it in ~log2(n) checks, and only
- * the targets of the items it probes are resolved (resolving one may need its analysis).
+ * The import stopped after the last item found at the destination, whatever was deleted there before it: the items
+ * are gone through from the last one until one is found. Every item after it is to copy, hence analysed anyway: only
+ * the targets of the last batch gone through that are before the point are resolved for nothing (resolving one may
+ * need its analysis).
  */
 public final class DestinationProbe {
 
     public record Candidate(ItemKey key, Path targetDir) {
     }
 
-    /** @param warning message to show the user, null when none */
-    public record Result(ResumePoint point, String warning) {
+    /**
+     * @param warning message to show the user, null when none
+     * @param toCheck the point follows a missing target ({@code resume.warn.isolated-point}): it must not become the
+     *                cursor, the next run probes the destination again
+     */
+    public record Result(ResumePoint point, String warning, boolean toCheck) {
+        public Result(ResumePoint point, String warning) {
+            this(point, warning, false);
+        }
     }
 
     /** The target directory of the item at this index, resolved on demand. */
     @FunctionalInterface
     public interface Targets {
-        /** @return empty when this item cannot be probed (it is left to the dichotomy around it) */
+        /** @return empty when this item cannot be probed (it stays selected) */
         Optional<Path> dirOf(int index) throws InterruptedException;
+
+        /** Resolves the targets of these items at once (e.g. analyses them in parallel), before {@link #dirOf}. */
+        default void resolve(List<Integer> indices) throws InterruptedException {
+        }
     }
+
+    /**
+     * The first batch of items gone through from the end, then each batch twice as large up to {@link #MAX_BATCH};
+     * also the number of items a round of the search for the target before the point resolves.
+     */
+    private static final int FIRST_BATCH = 16;
+    /**
+     * At most this many items before the point have their target resolved by the search from the end; the search for
+     * the target before the point adds ~log2(n) + 16 log16(n) (by batches too).
+     */
+    private static final int MAX_BATCH = 64;
 
     private DestinationProbe() {
     }
@@ -46,8 +73,8 @@ public final class DestinationProbe {
 
     /**
      * Resolves the first and the last target (an out pattern without variable directory makes the probe
-     * meaningless), then those of the items the dichotomy checks; an item that cannot be probed is replaced by
-     * the nearest one that can, within the interval still searched.
+     * meaningless), then goes through the items from the last one, by batches, until one is found at the destination;
+     * an item that cannot be probed is passed.
      *
      * @param ordered the keys of the items, sorted
      */
@@ -62,11 +89,13 @@ public final class DestinationProbe {
     public static Result probe(List<ItemKey> ordered, Targets targets, Predicate<Path> dirExists,
                                boolean singleDirectoryGuard) throws InterruptedException {
         Map<Integer, Optional<Path>> resolved = new HashMap<>();
+        Set<Integer> known = new HashSet<>(); // the items resolved by a batch, or one by one (in resolved)
         Targets cached = i -> {
             Optional<Path> dir = resolved.get(i);
             if (dir == null) {
                 dir = targets.dirOf(i);
                 resolved.put(i, dir);
+                known.add(i);
             }
             return dir;
         };
@@ -80,24 +109,125 @@ public final class DestinationProbe {
             // the out pattern has no variable directory: existence of the only directory tells nothing
             return new Result(ResumePoint.all(), ResourcesEngine.getString("resume.warn.single-directory", firstDir));
         }
-        int lastExisting = -1;
-        int firstMissing = ordered.size();
-        while (firstMissing - lastExisting > 1) {
-            int mid = (lastExisting + firstMissing) >>> 1;
-            int probed = nextProbeable(cached, mid, firstMissing);
-            if (probed < 0) {
-                probed = previousProbeable(cached, mid - 1, lastExisting + 1);
+        Map<Path, Boolean> existing = new HashMap<>(); // a directory is checked once for all its items
+        Predicate<Path> exists = dir -> existing.computeIfAbsent(dir, dirExists::test);
+        int found = -1;
+        int batch = FIRST_BATCH;
+        for (int end = last + 1; end > first && found < 0; end -= batch, batch = Math.min(2 * batch, MAX_BATCH)) {
+            int from = Math.max(first, end - batch);
+            List<Integer> indices = new ArrayList<>();
+            for (int i = end - 1; i >= from; i--) {
+                indices.add(i);
             }
-            if (probed < 0) {
-                break; // nothing left to probe between the last existing and the first missing
-            }
-            if (dirExists.test(cached.dirOf(probed).orElseThrow())) {
-                lastExisting = probed;
-            } else {
-                firstMissing = probed;
+            targets.resolve(indices);
+            known.addAll(indices);
+            for (int i = end - 1; i >= from && found < 0; i--) {
+                Optional<Path> dir = cached.dirOf(i);
+                if (dir.isPresent() && exists.test(dir.get())) {
+                    found = i;
+                }
             }
         }
-        return new Result(lastExisting < 0 ? ResumePoint.all() : ResumePoint.after(ordered.get(lastExisting)), null);
+        if (found < 0) {
+            return new Result(ResumePoint.all(), null);
+        }
+        ItemKey point = ordered.get(found);
+        if (!isolated(targets, cached, known, exists, found)) {
+            return new Result(ResumePoint.after(point), null);
+        }
+        return new Result(ResumePoint.after(point), ResourcesEngine.getString("resume.warn.isolated-point",
+                point.name(), ResumeResolver.displayDate(point.date())), true);
+    }
+
+    /**
+     * True when the previous target, the one of the last item before the point with another target, is missing:
+     * deleted at the destination, or the point comes from elsewhere (another source writing in the same directories, a
+     * file dated in the future) and skips what is not imported yet. Looks back by doubling steps down to the first
+     * item, then narrows the interval between the last item with another target and the first with the point's one
+     * (the items of a target follow each other) by {@link #FIRST_BATCH} items a round; each round is one batch.
+     *
+     * @param targets  resolves the batches
+     * @param cached   the targets, each one resolved once
+     * @param known    the items already resolved
+     */
+    private static boolean isolated(Targets targets, Targets cached, Set<Integer> known,
+                                    Predicate<Path> exists, int found)
+            throws InterruptedException {
+        Path target = cached.dirOf(found).orElseThrow();
+        List<Integer> back = new ArrayList<>();
+        for (int step = 1; found > 0 && (back.isEmpty() || back.getLast() > 0); step *= 2) {
+            back.add(Math.max(found - step, 0));
+        }
+        // the items of the last batch gone through (the first steps back) tell it most of the time: nothing more is
+        // resolved then
+        int knownSteps = 0;
+        while (knownSteps < back.size() && known.contains(back.get(knownSteps))) {
+            knownSteps++;
+        }
+        List<Integer> steps = back.subList(0, knownSteps);
+        int other = narrow(cached, cached, target, steps, -1);
+        if (other < 0) {
+            steps = back;
+            other = narrow(targets, cached, target, steps, -1);
+        }
+        if (other < 0) {
+            return false; // the point is in the first target (or nothing before it can be probed)
+        }
+        int same = nearestSame(cached, steps, other, found);
+        while (same - other > 1) {
+            int gap = same - other;
+            int count = Math.min(gap - 1, FIRST_BATCH);
+            List<Integer> probes = new ArrayList<>();
+            for (int k = count; k >= 1; k--) {
+                probes.add(other + (int) ((long) gap * k / (count + 1)));
+            }
+            int nearer = narrow(targets, cached, target, probes, other);
+            int nearerSame = nearestSame(cached, probes, nearer, same);
+            if (nearer == other && nearerSame == same) {
+                // no probe can be probed: the items between them, one by one (they mostly cannot be probed either)
+                int probed = previousProbeable(cached, same - 1, other + 1);
+                if (probed < 0) {
+                    break;
+                }
+                if (cached.dirOf(probed).orElseThrow().equals(target)) {
+                    nearerSame = probed;
+                } else {
+                    nearer = probed;
+                }
+            }
+            other = nearer;
+            same = nearerSame;
+        }
+        return !exists.test(cached.dirOf(other).orElseThrow());
+    }
+
+    /** The first of these items after {@code other} that can be probed (they have the point's target), else {@code same}. */
+    private static int nearestSame(Targets cached, List<Integer> items, int other, int same) throws InterruptedException {
+        int nearest = same;
+        for (int i : items) {
+            if (i > other && i < nearest && cached.dirOf(i).isPresent()) {
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    /**
+     * Resolves these items (sorted from the last) as one batch.
+     *
+     * @return the first of them with a target other than this one, {@code other} when none (all with this target, or
+     * none that can be probed)
+     */
+    private static int narrow(Targets targets, Targets cached, Path target, List<Integer> descending, int other)
+            throws InterruptedException {
+        targets.resolve(descending);
+        for (int i : descending) {
+            Optional<Path> dir = cached.dirOf(i);
+            if (dir.isPresent() && !dir.get().equals(target)) {
+                return i;
+            }
+        }
+        return other;
     }
 
     /** The first probeable index in [from, to), -1 when none. */

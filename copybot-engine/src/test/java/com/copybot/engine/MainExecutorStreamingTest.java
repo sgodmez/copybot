@@ -375,7 +375,7 @@ public class MainExecutorStreamingTest {
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
         assertEquals(List.of("IMG_02.JPG", "IMG_03.JPG"), in.processedWhileListing, "never prepared first");
         assertEquals(Set.of("IMG_02.JPG", "IMG_03.JPG"), out.written);
-        assertEquals(List.of(ResourcesEngine.getString("execution.streaming.dichotomy")), exec.getState().getWarnings());
+        assertEquals(List.of(ResourcesEngine.getString("execution.streaming.last-found")), exec.getState().getWarnings());
     }
 
     /** An out step that cannot tell where it writes (no target path at all). */

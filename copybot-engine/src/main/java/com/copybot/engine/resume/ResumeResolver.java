@@ -8,6 +8,7 @@ import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -42,6 +43,8 @@ public final class ResumeResolver {
 
     private Optional<ItemKey> previousCursor = Optional.empty();
     private boolean cursorRead;
+    /** The destination point follows a missing target ({@link DestinationProbe.Result#toCheck()}): no cursor from it. */
+    private boolean pointToCheck;
 
     /**
      * The files found at the destination by a check of every file, with the path checked: the point
@@ -58,7 +61,7 @@ public final class ResumeResolver {
     private final Queue<String> streamingWarnings = new ConcurrentLinkedQueue<>();
 
     /**
-     * The dichotomy on the target directories.
+     * The search from the end, on the target directories.
      *
      * @param store state file, unused when mode is NONE
      * @param out   the pipeline out action, null when there is none
@@ -99,6 +102,13 @@ public final class ResumeResolver {
     public interface Analyser {
         /** @return false when the item cannot be probed (its analysis failed) */
         boolean analyse(WorkItemExecution item) throws InterruptedException;
+
+        /** Analyses these items before the probe asks them one by one with {@link #analyse} (e.g. in parallel). */
+        default void analyseAll(List<WorkItemExecution> items) throws InterruptedException {
+            for (WorkItemExecution item : items) {
+                analyse(item);
+            }
+        }
     }
 
     /** The items are already analysed: those in error cannot be probed. */
@@ -211,7 +221,7 @@ public final class ResumeResolver {
                 item.setReady();
             } else {
                 item.setSkippedByResumePoint(source == ResumeSource.DESTINATION && match == DestinationMatch.FILE
-                        ? skipReason(point, "resume.skip.destination-file") // the dichotomy probed the files
+                        ? skipReason(point, "resume.skip.destination-file") // the search from the end checked the files
                         : skipReason(point, source));
             }
         }
@@ -223,9 +233,15 @@ public final class ResumeResolver {
      * A selected item succeeded when it ended DONE, or SKIPPED during the execution (the out step found it
      * already at the destination: spec safe-write §2) or by the user (ignored), and none of its forks failed.
      *
+     * The destination point to check (it follows a missing target) writes nothing: the next run probes the destination
+     * again, warned again, instead of resuming from a cursor that would skip for good what is not imported yet.
+     *
      * @return empty when there is nothing (new) to write
      */
     public Optional<ItemKey> nextCursor(List<WorkItemExecution> ordered, ResumePoint point, ResumeSource source) {
+        if (pointToCheck && source == ResumeSource.DESTINATION) {
+            return Optional.empty();
+        }
         ItemKey lastSuccess = null;
         for (WorkItemExecution item : ordered) {
             // the frozen key: a step after the barrier may have replaced the work item
@@ -271,16 +287,29 @@ public final class ResumeResolver {
                 .filter(item -> item.getStatus() != ItemStatus.ERROR && item.getResumeKey().isPresent())
                 .toList();
         try {
-            return check == DestinationCheck.EVERY_FILE ? everyFile(candidates, analyser) : dichotomy(candidates, analyser);
+            return check == DestinationCheck.EVERY_FILE ? everyFile(candidates, analyser) : lastFound(candidates, analyser);
         } catch (NoTarget e) {
             return noTarget(explicit);
         }
     }
 
-    private ResumeProposal dichotomy(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
+    /** After the last file found at the destination, the files gone through from the end by batches. */
+    private ResumeProposal lastFound(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
+        DestinationProbe.Targets targets = new DestinationProbe.Targets() {
+            @Override
+            public Optional<Path> dirOf(int index) throws InterruptedException {
+                return checkedPath(candidates.get(index), analyser);
+            }
+
+            @Override
+            public void resolve(List<Integer> indices) throws InterruptedException {
+                analyser.analyseAll(indices.stream().map(candidates::get).toList());
+            }
+        };
         DestinationProbe.Result result = DestinationProbe.probe(
                 candidates.stream().map(item -> item.getResumeKey().orElseThrow()).toList(),
-                i -> checkedPath(candidates.get(i), analyser), this::atDestination, match == DestinationMatch.DIRECTORY);
+                targets, this::atDestination, match == DestinationMatch.DIRECTORY);
+        pointToCheck = result.toCheck();
         ResumeSource source = result.point().kind() == ResumePoint.Kind.AFTER ? ResumeSource.DESTINATION : ResumeSource.NONE;
         return new ResumeProposal(result.point(), source, result.warning() == null ? List.of() : List.of(result.warning()));
     }
@@ -371,7 +400,7 @@ public final class ResumeResolver {
     /**
      * The resume point of a run that processes each file as soon as it is listed: known before the listing. After
      * the cursor in the modes that start from it when there is one; with a destination-based mode, every file is
-     * checked by {@link #checkDestination} once analysed (the dichotomy needs every file listed: a warning says it is
+     * checked by {@link #checkDestination} once analysed (the search from the end needs every file listed: a warning says it is
      * not used).
      *
      * @throws CopybotException the state file cannot be understood, or mode destination without target to probe
@@ -390,8 +419,8 @@ public final class ResumeResolver {
         if (out == null) {
             return noTarget(mode == ResumeMode.DESTINATION);
         }
-        List<String> warnings = check == DestinationCheck.DICHOTOMY
-                ? List.of(ResourcesEngine.getString("execution.streaming.dichotomy")) : List.of();
+        List<String> warnings = check == DestinationCheck.LAST_FOUND
+                ? List.of(ResourcesEngine.getString("execution.streaming.last-found")) : List.of();
         return new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, warnings);
     }
 
@@ -464,6 +493,11 @@ public final class ResumeResolver {
         return new ResumeProposal(ResumePoint.all(), ResumeSource.NONE, warnings);
     }
 
+    /** A date as the messages show it. */
+    public static String displayDate(Instant date) {
+        return DISPLAY_DATE.format(date);
+    }
+
     /** Only for an item the point does not select: never for ALL, which selects everything (hence a key). */
     public static String skipReason(ResumePoint point, ResumeSource source) {
         String resourceKey = switch (source) {
@@ -476,7 +510,7 @@ public final class ResumeResolver {
 
     /** With the message of this resource key (file name, date), or the one of a date alone. */
     private static String skipReason(ResumePoint point, String resourceKey) {
-        String date = DISPLAY_DATE.format(point.key().date());
+        String date = displayDate(point.key().date());
         if (point.key().name().isEmpty()) {
             // a resume point chosen by date only (--from-date): no file name to show
             return ResourcesEngine.getString("resume.skip.manual-date", date);

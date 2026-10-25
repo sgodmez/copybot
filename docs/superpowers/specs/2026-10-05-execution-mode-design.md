@@ -34,13 +34,28 @@ Options du bloc de reprise, utiles aux modes fondés sur la destination (`destin
 quand il se rabat sur la destination faute de curseur) :
 
 ```json
-"resume": { "mode": "destination", "destinationCheck": "dichotomy", "destinationMatch": "directory" }
+"resume": { "mode": "destination", "destinationCheck": "lastFound", "destinationMatch": "directory" }
 ```
 
 ### `destinationCheck` : comment la destination est parcourue
 
-- `dichotomy` (défaut) : le comportement d'aujourd'hui (la destination est supposée remplie jusqu'à un point,
-  dichotomie paresseuse : seuls les fichiers sondés sont analysés, puis ceux que le point sélectionne).
+- `lastFound` (défaut, l'ancien `lastFound`) : l'import
+  s'est arrêté après le **dernier** fichier (dans l'ordre des clés) trouvé à la destination, quoi qu'on y ait
+  supprimé avant lui (ajout du 2026-10-25 : une dichotomie tombait dans un jour supprimé et recopiait toute la
+  suite). `DestinationProbe` parcourt donc les fichiers depuis la fin jusqu'au premier trouvé : le point est exact.
+  - Coût : chaque fichier après le point est à copier, donc analysé de toute façon ; seuls les fichiers du dernier
+    lot parcouru qui sont avant le point sont analysés pour rien. Les lots (16, 32, puis 64 au plus) sont analysés
+    en parallèle (`Analyser.analyseAll`, `Targets.resolve`) ; un dossier n'est vérifié qu'une fois.
+  - Les fichiers sans cible (analyse en échec, valeur manquante) sont passés : ils restent sélectionnés.
+  - Garde-fou du dossier unique : inchangé (première et dernière cibles).
+  - Avertissement `resume.warn.isolated-point` quand la cible précédente (celle du dernier fichier avant le point
+    ayant une autre cible) manque : jours supprimés juste avant, ou point venu d'ailleurs (autre source écrivant
+    dans les mêmes dossiers jour, fichier daté dans le futur) qui sauterait ce qui n'est pas encore importé. Le
+    point reste proposé, l'utilisateur le vérifie ; il n'écrit **pas** de curseur (`Result.toCheck`,
+    `nextCursor`) : le run suivant sonde de nouveau la destination et avertit de nouveau, au lieu de reprendre
+    d'un curseur qui sauterait pour de bon ce qui manque. Recherche de cette cible : d'abord parmi les fichiers du
+    dernier lot (rien de plus à analyser le plus souvent), sinon pas doublés en arrière jusqu'au premier fichier en
+    un lot, puis l'intervalle restant est resserré par tours de 16 fichiers analysés en un lot.
 - `everyFile` : chaque fichier est analysé et décidé par **sa** cible (pas de dichotomie, pas d'hypothèse
   « remplie jusqu'à un point » : un jour manquant au milieu est réimporté). Valable en deux phases (`plan`,
   `auto` : la préparation analyse tout, puis chaque fichier est décidé) comme en streaming.
@@ -54,7 +69,7 @@ quand il se rabat sur la destination faute de curseur) :
 
 - `directory` (défaut, aujourd'hui) : le **dossier** cible existe (supprimer des photos dedans ne les fait pas
   réimporter).
-- `file` : le **fichier** cible existe. La dichotomie sonde l'existence des fichiers (le prédicat de
+- `file` : le **fichier** cible existe. La recherche depuis la fin vérifie l'existence des fichiers (le prédicat de
   `DestinationProbe`) ; le garde-fou du dossier unique ne s'applique pas (un dossier fixe va très bien : chaque
   fichier est vérifié).
 
@@ -63,7 +78,7 @@ quand il se rabat sur la destination faute de curseur) :
 Un motif dont la partie dossier n'a pas de variable (ex. `out/{name}`) sauterait tout pour toujours une fois le
 dossier créé : tout est alors sélectionné avec l'avertissement `resume.warn.single-directory`.
 
-- `dichotomy` : inchangé (première et dernière cibles dans le même dossier).
+- `lastFound` : inchangé (première et dernière cibles dans le même dossier).
 - `everyFile` : l'action de sortie le dit si elle le sait (`IOutAction.targetDirectoryVaries()`, défaut vide ;
   `file.write` : `OutPattern.directoryVaries()`, une expression avant le dernier séparateur). Si elle ne le sait
   pas : en deux phases, au moins deux cibles toutes dans le même dossier ; en streaming, un fichier n'est sauté
@@ -90,9 +105,9 @@ jamais sur une préparation.
   - sans action de sortie : comme la préparation (`destination` échoue avec `resume.error.no-target`,
     `stateThenDestination` sélectionne tout avec `resume.warn.no-target`) ;
   - sinon `NOT_AT_DESTINATION` : chaque fichier est analysé dès qu'il est listé, sauté si sa cible (dossier ou
-    fichier selon `destinationMatch`) existe, sinon traité et copié aussitôt. Avec `dichotomy`, impossible en
+    fichier selon `destinationMatch`) existe, sinon traité et copié aussitôt. Avec `lastFound`, impossible en
     streaming (le point dépend de l'ensemble des fichiers) : on vérifie chaque fichier, avec l'avertissement
-    `execution.streaming.dichotomy`.
+    `execution.streaming.last-found`.
 
 Dans tous les cas :
 
@@ -128,12 +143,12 @@ préparation puis exécution avec reprise).
 - Les cases « Traiter pendant le listing » et « Exécution automatique » sont remplacées par une liste
   « Exécution » à trois choix. `PipelineDocument.executionMode()` / `setExecutionMode()` : `plan` retire le champ
   (défaut), les autres l'écrivent.
-- Listes « Vérification de la destination » (dichotomie / chaque fichier) et « Déjà importé quand » (le dossier
+- Listes « Vérification de la destination » (depuis la fin \/ chaque fichier) et « Déjà importé quand » (le dossier
   cible existe / le fichier cible existe), actives seulement pour `destination` et `stateThenDestination`.
   `PipelineDocument.destinationCheck()` / `destinationMatch()` et leurs setters : la valeur par défaut retire le
   membre.
-- Avertissement sous la liste d'exécution quand `streaming` est combiné à une reprise par la destination en
-  dichotomie (chaque fichier sera vérifié).
+- Avertissement sous la liste d'exécution quand `streaming` est combiné à une reprise par la destination
+  depuis la fin (chaque fichier sera vérifié).
 
 ### Vue plan
 

@@ -54,7 +54,8 @@ libraries.
 - **Resume where the last import stopped.** A cursor (capture date and file
   name) is saved next to the pipeline after each run. It marks the end of the
   longest run of successful files. Copybot can also look at what is already
-  at the destination: with a dichotomy for a large tree, or file by file.
+  at the destination: from the end for a large tree (after the last file
+  found there, whatever was deleted there before it), or file by file.
   The detected resume point is only a proposal: you can resume from a
   chosen file or day, or copy everything (`--from-file`, `--from-date`,
   `--all`), even before preparing: a chosen point acts like a cursor there.

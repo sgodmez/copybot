@@ -84,7 +84,7 @@ public final class PipelineDocument {
     private static final String DEFAULT_RESUME_MODE = "stateThenDestination";
 
     /** The destination checks, as written ("resume.destinationCheck"), the default first (spec execution-mode §2). */
-    public static final List<String> DESTINATION_CHECKS = List.of("dichotomy", "everyFile");
+    public static final List<String> DESTINATION_CHECKS = List.of("lastFound", "everyFile");
 
     /** What counts as imported at the destination, as written ("resume.destinationMatch"), the default first. */
     public static final List<String> DESTINATION_MATCHES = List.of("directory", "file");
@@ -319,13 +319,13 @@ public final class PipelineDocument {
         modified = true;
     }
 
-    /** "resume.destinationCheck" (spec execution-mode §2), the dichotomy when absent or unknown. */
+    /** "resume.destinationCheck" (spec execution-mode §2), the search from the end when absent or unknown. */
     public String destinationCheck() {
         return resumeOption("destinationCheck", DESTINATION_CHECKS);
     }
 
     /**
-     * @param check one of {@link #DESTINATION_CHECKS}; the default (dichotomy) removes the member
+     * @param check one of {@link #DESTINATION_CHECKS}; the default (lastFound) removes the member
      * @throws IllegalStateException without resume block: writing one would turn the resume on
      */
     public void setDestinationCheck(String check) {

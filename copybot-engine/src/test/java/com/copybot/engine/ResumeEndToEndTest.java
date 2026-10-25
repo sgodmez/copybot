@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.Copybot;
+import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -386,14 +387,14 @@ public class ResumeEndToEndTest {
     }
 
     @Test
-    public void aStreamingRunWithTheDestinationDichotomyChecksEveryFileAndSaysSo() throws IOException {
+    public void aStreamingRunWithTheSearchFromTheEndChecksEveryFileAndSaysSo() throws IOException {
         Path pipeline = streaming("destination", "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}");
         Files.createDirectories(nas.resolve("2026-09-01"));
 
         String[] result = capture(pipeline);
 
         assertEquals("0", result[0], result[2]);
-        assertTrue(result[2].contains(ResourcesEngine.getString("execution.streaming.dichotomy")), result[2]);
+        assertTrue(result[2].contains(ResourcesEngine.getString("execution.streaming.last-found")), result[2]);
         assertFalse(Files.exists(nas.resolve("2026-09-01").resolve("IMG_01.JPG")), "day 1 counts as imported");
         assertTrue(Files.exists(nas.resolve("2026-09-02").resolve("IMG_02.JPG")));
     }
@@ -426,13 +427,44 @@ public class ResumeEndToEndTest {
                 "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}"), "\"destinationMatch\":\"file\"");
         Files.createDirectories(nas.resolve("2026-09-01"));
         Files.createDirectories(nas.resolve("2026-09-02"));
-        Files.writeString(nas.resolve("2026-09-02").resolve("IMG_02.JPG"), "IMG_02.JPG");
+        Files.writeString(nas.resolve("2026-09-01").resolve("IMG_01.JPG"), "IMG_01.JPG");
 
         String[] result = capture(pipeline);
 
         assertEquals("0", result[0], result[2]);
-        assertTrue(Files.exists(nas.resolve("2026-09-01").resolve("IMG_01.JPG")),
+        assertTrue(Files.exists(nas.resolve("2026-09-02").resolve("IMG_02.JPG")),
                 "its directory exists, not its file: imported again");
+    }
+
+    @Test
+    public void aResumePointWhoseDayBeforeIsMissingIsWarned() throws IOException {
+        Path pipeline = pipeline("destination", "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}");
+        Files.createDirectories(nas.resolve("2026-09-02"));
+
+        String[] plan = capture(pipeline, "--dry-run");
+
+        assertEquals("0", plan[0], plan[2]);
+        assertTrue(plan[1].contains(ResourcesEngine.getString("resume.warn.isolated-point", "IMG_02.JPG",
+                ResumeResolver.displayDate(Instant.parse("2026-09-02T10:00:00Z")))), plan[1]);
+    }
+
+    @Test
+    public void aDayDeletedAtTheDestinationIsNotImportedAgain() throws IOException {
+        for (int day = 3; day <= 6; day++) {
+            photo(String.format("IMG_%02d.JPG", day), String.format("2026-09-%02dT10:00:00Z", day));
+        }
+        Path pipeline = pipeline("destination", "{lastModified.Y}-{lastModified.m}-{lastModified.D}/{name}");
+        // 2026-09-01 to 03 deleted after their import: a dichotomy would probe only missing days
+        Files.createDirectories(nas.resolve("2026-09-04"));
+        Files.createDirectories(nas.resolve("2026-09-05"));
+
+        String[] result = capture(pipeline);
+
+        assertEquals("0", result[0], result[2]);
+        for (int day = 1; day <= 3; day++) {
+            assertFalse(Files.exists(nas.resolve("2026-09-0" + day)), "left deleted");
+        }
+        assertTrue(Files.exists(nas.resolve("2026-09-06").resolve("IMG_06.JPG")), "the new day is imported");
     }
 
     @Test
