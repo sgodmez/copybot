@@ -151,6 +151,27 @@ public class DryRunnerTest {
     }
 
     @Test
+    public void producedItemsInheritTheOwnPattern() throws IOException {
+        WorkItem item = nef();
+        item.setOutPattern("D:/south/{name}");
+        FakeProcess fork = new FakeProcess(parent -> {
+            WorkItem fresh = parent.copyForDryRun();
+            fresh.setOutPattern(null);
+            fresh.getMetadatas().display().put("name", "fresh");
+            WorkItem own = parent.copyForDryRun();
+            own.getMetadatas().display().put("name", "own");
+            own.setOutPattern("D:/north/{name}");
+            return Optional.of(List.of(fresh, own));
+        });
+
+        Projection.Projected projected = assertInstanceOf(Projection.Projected.class,
+                DryRunner.project(item, List.of(step("fork", fork))));
+
+        assertEquals(List.of(Optional.of("D:/south/{name}"), Optional.of("D:/north/{name}")),
+                projected.items().stream().map(WorkItem::getOutPattern).toList());
+    }
+
+    @Test
     public void theRealItemIsNeverTouchedByTheDryRun() throws IOException {
         WorkItem item = nef();
 

@@ -237,6 +237,33 @@ public final class Plan {
     }
 
     /**
+     * The out pattern of the files without own pattern (the out step's), empty when the out step supports no own
+     * pattern or there is no out step (spec own-out-pattern §2).
+     */
+    public Optional<String> defaultOutPattern() {
+        return executor.defaultOutPattern();
+    }
+
+    /**
+     * Gives these files their own out pattern; null, blank or {@link #defaultOutPattern()} removes it. A pattern is
+     * given to the analysed files only (with a projection), removed from all of them; the target of the analysed ones
+     * is checked again (conflictCheck) and the patterns are kept in the state file of the pipeline (spec
+     * own-out-pattern §2). Blocking: never on the JavaFX thread.
+     *
+     * @throws IllegalStateException the plan is neither PREPARED nor {@link #isStoppedAfterTheListing()}, or
+     *                               {@link #defaultOutPattern()} is empty
+     * @throws CopybotException      pattern.syntax (an invalid pattern) or resume.state.write-error: nothing changed
+     */
+    public void setOutPattern(Collection<WorkItemExecution> items, String pattern) {
+        executor.setOutPattern(items, pattern);
+    }
+
+    /** True when this file has its own out pattern. */
+    public static boolean hasOwnPattern(WorkItemExecution item) {
+        return item.getWorkItem().getOutPattern().isPresent();
+    }
+
+    /**
      * Resume from this listed file (its name when it was listed), included.
      *
      * @throws CopybotException resume.from-file.not-found, or resume.from-file.no-date for a listed file

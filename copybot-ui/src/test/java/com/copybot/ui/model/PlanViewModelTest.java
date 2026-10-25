@@ -698,6 +698,37 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void patternableRowsAreTheAnalysedOnesOfAPlanWithADefaultOutPattern() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.setProjection(new Projection.Projected(List.of(analysed.getWorkItem())));
+        WorkItemExecution deferred = item("b.jpg", 1);
+        PlanViewModel model = prepared(false, analysed, deferred);
+        List<WorkItemExecution> all = List.of(analysed, deferred);
+
+        assertEquals(List.of(), model.patternable(all), "the out step takes no own pattern");
+
+        model.setDefaultOutPattern(java.util.Optional.of("{name}"));
+        assertEquals(List.of(analysed), model.patternable(all), "not the deferred file");
+
+        model.startExecuting();
+        assertEquals(List.of(), model.patternable(all), "not once the copy started");
+    }
+
+    @Test
+    public void withOwnPatternRowsAreThoseGivenOneOnAPreparedPlan() throws IOException {
+        WorkItemExecution own = item("a.jpg", 1);
+        own.getWorkItem().setOutPattern("x/{name}");
+        WorkItemExecution plain = item("b.jpg", 1);
+        PlanViewModel model = prepared(false, own, plain);
+        List<WorkItemExecution> all = List.of(own, plain);
+
+        assertEquals(List.of(own), model.withOwnPattern(all));
+
+        model.startExecuting();
+        assertEquals(List.of(), model.withOwnPattern(all));
+    }
+
+    @Test
     public void alwaysIgnoreExcludesTheListedFilesOnceEachWhenTheEngineIsIdle() throws IOException {
         WorkItemExecution a = item("a.jpg", 1);
         WorkItemExecution fork = item("a-2.jpg", 1);

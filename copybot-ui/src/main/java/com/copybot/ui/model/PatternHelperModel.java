@@ -161,8 +161,7 @@ public final class PatternHelperModel {
 
     /** The summary of the pattern over the sample, the effect of a missing key according to the step's policy. */
     public static Summary summary(String pattern, String onMissingKey, Sample sample) {
-        String effect = ResourcesEngine.getString("helper.effect."
-                + ("skip".equals(onMissingKey) || "literal".equals(onMissingKey) ? onMissingKey : "error"));
+        String effect = effect(onMissingKey);
         Optional<String> error = syntaxError(pattern);
         if (error.isPresent()) {
             return new Summary(error, 0, 0, effect, Optional.empty(), List.of());
@@ -174,6 +173,12 @@ public final class PatternHelperModel {
         rows.stream().filter(row -> !row.hasMissing()).forEach(ordered::add);
         Optional<Row> example = ordered.stream().findFirst();
         return new Summary(Optional.empty(), ok, missing, effect, example, ordered);
+    }
+
+    /** What the out step does with a file lacking a key, by its "onMissingKey" (error when unknown or absent). */
+    public static String effect(String onMissingKey) {
+        return ResourcesEngine.getString("helper.effect."
+                + ("skip".equals(onMissingKey) || "literal".equals(onMissingKey) ? onMissingKey : "error"));
     }
 
     /** The text with <code>{key}</code> inserted at the caret (clamped to the text). */

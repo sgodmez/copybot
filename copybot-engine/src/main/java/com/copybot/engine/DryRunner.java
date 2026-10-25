@@ -34,7 +34,10 @@ public final class DryRunner {
                 if (result == null || result.isEmpty()) {
                     return new Projection.Unsupported(actionName(step), current, trace);
                 }
-                next.addAll(result.get());
+                for (WorkItem child : result.get()) {
+                    inheritOutPattern(produced, child);
+                    next.add(child);
+                }
             }
             if (next.isEmpty()) {
                 return new Projection.Filtered(actionName(step), trace);
@@ -43,6 +46,15 @@ public final class DryRunner {
             trace.add(new Projection.Step(actionName(step), current.stream().map(DryRunner::itemName).toList()));
         }
         return new Projection.Projected(current, trace);
+    }
+
+    /**
+     * A produced item without its own out pattern takes the one of the item it comes from (spec own-out-pattern §2).
+     */
+    static void inheritOutPattern(WorkItem parent, WorkItem produced) {
+        if (produced != null && produced != parent && produced.getOutPattern().isEmpty()) {
+            parent.getOutPattern().ifPresent(produced::setOutPattern);
+        }
     }
 
     /** The action code of the step, as written in the pipeline. */

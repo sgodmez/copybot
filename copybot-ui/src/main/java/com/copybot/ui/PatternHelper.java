@@ -334,7 +334,7 @@ final class PatternHelper extends VBox {
     }
 
     /** "name → " (on the example line) then the path, each missing expression in red; or the error in red. */
-    private static List<Node> pathTexts(Row row, boolean withName) {
+    static List<Node> pathTexts(Row row, boolean withName) {
         List<Node> texts = new ArrayList<>();
         if (withName) {
             texts.add(new Text(row.name() + " → "));

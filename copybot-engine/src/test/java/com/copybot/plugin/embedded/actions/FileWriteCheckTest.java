@@ -53,6 +53,19 @@ public class FileWriteCheckTest {
     }
 
     @Test
+    public void checkTargetUsesTheOwnPattern() throws IOException {
+        WorkItem item = source("a.jpg", "abc");
+        item.setOutPattern(tempDir.resolve("sud").toString().replace("\\", "/") + "/{name}");
+        assertEquals(Kind.FREE, action("").checkTarget(item, false).kind());
+
+        Files.writeString(Files.createDirectories(tempDir.resolve("sud")).resolve("a.jpg"), "abc");
+
+        TargetCheck check = action("").checkTarget(item, false); // the pipeline's nas/a.jpg stays free
+        assertTrue(check.exists());
+        assertEquals(tempDir.resolve("sud").resolve("a.jpg"), check.existing().toAbsolutePath().normalize());
+    }
+
+    @Test
     public void aFreeTargetIsFree() throws IOException {
         TargetCheck check = action("").checkTarget(source("a.jpg", "abc"), false);
 

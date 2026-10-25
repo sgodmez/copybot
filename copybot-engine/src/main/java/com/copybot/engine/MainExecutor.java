@@ -17,6 +17,7 @@ import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeResolver;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IInAction;
@@ -24,6 +25,7 @@ import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
@@ -140,6 +142,11 @@ public class MainExecutor implements Runnable {
      * the listing, the probe analyses the ones it checks, then the point the ones it selects.
      */
     private volatile boolean analysisOnDemand;
+
+    /** Where the own out patterns are kept (spec own-out-pattern §2); null: in memory only. */
+    private volatile ResumeStateStore outPatternStore;
+    /** The own out patterns by item, read at the start of a listing phase; given to the listed items that match. */
+    private final Map<ItemKey, String> ownPatterns = new ConcurrentHashMap<>();
 
     private ResumeResolver resolver;
     private ResumeProposal proposal;
@@ -411,6 +418,7 @@ public class MainExecutor implements Runnable {
             // failed run (status ERROR + watcher notified), not as an exception out of a state-less run.
             // It is this run's preparation: its failure is a preparation failure.
             resolveStepsIfNeeded();
+            loadOwnPatterns();
             ResumeProposal streamed = streaming && resume != null ? resumeAtTheListing() : null;
             beginActions(inSteps); // nothing written yet: a failure of beforeAll is a preparation failure
             beginActions(itemSteps);
@@ -510,6 +518,7 @@ public class MainExecutor implements Runnable {
         try {
             checkCancelled();
             resolveStepsIfNeeded();
+            loadOwnPatterns();
             phaseEnd = barrierIndex;
             itemRunner.setFinalPhase(false);
             itemRunner.setDryRunSteps(processSteps());
@@ -608,6 +617,38 @@ public class MainExecutor implements Runnable {
                 item.markAnalysisDeferred();
                 requestedAnalysis.add(item);
             }
+        }
+    }
+
+    /** @param store where the own out patterns are read and kept, null: in memory only (spec own-out-pattern §2) */
+    void setOutPatternStore(ResumeStateStore store) {
+        outPatternStore = store;
+    }
+
+    ResumeStateStore outPatternStore() {
+        return outPatternStore;
+    }
+
+    /**
+     * The own out patterns of the state file, read again at the start of a listing phase; without a store, the ones
+     * in memory are kept.
+     *
+     * @throws CopybotException resume.state.invalid, a preparation failure like an unreadable cursor
+     */
+    private void loadOwnPatterns() {
+        ResumeStateStore store = outPatternStore;
+        if (store == null) {
+            return;
+        }
+        Map<ItemKey, String> read = store.readOutPatterns();
+        ownPatterns.clear();
+        ownPatterns.putAll(read);
+    }
+
+    /** A listed item whose key has an own out pattern gets it. */
+    private void applyOwnPattern(WorkItem workItem) {
+        if (!ownPatterns.isEmpty()) {
+            ItemKey.of(workItem).map(ownPatterns::get).ifPresent(workItem::setOutPattern);
         }
     }
 
@@ -861,6 +902,73 @@ public class MainExecutor implements Runnable {
                 resolver.apply(proposal.point(), proposal.source(), orderedItems);
             }
         }
+    }
+
+    /** The pattern the out step applies to a file without own pattern; empty: no own pattern supported. */
+    Optional<String> defaultOutPattern() {
+        IOutAction out = findOutAction();
+        return out == null ? Optional.empty() : out.defaultOutPattern();
+    }
+
+    /**
+     * Gives these items their own out pattern, on the analysed ones only (they have a projection), or removes it (null,
+     * blank or the out step's default) from all of them: on the work item and on the items its dry run projected, in
+     * memory and in the state file, then the target of the analysed ones is checked again (spec own-out-pattern §2).
+     * Blocking.
+     *
+     * @throws IllegalStateException the plan is neither PREPARED nor stopped after its listing, or the out step
+     *                               supports no own pattern
+     * @throws CopybotException      pattern.syntax or resume.state.write-error: nothing changed
+     */
+    void setOutPattern(Collection<WorkItemExecution> items, String pattern) {
+        synchronized (phaseLock) {
+            if (state.getStatus() != PipelineStatus.PREPARED && !stoppedAfterTheListing()) {
+                throw new IllegalStateException(ResourcesEngine.getString("engine.not-prepared", state.getStatus()));
+            }
+        }
+        String fallback = defaultOutPattern().orElseThrow(
+                () -> new IllegalStateException(ResourcesEngine.getString("plan.out-pattern.unsupported")));
+        String own = pattern == null || pattern.isBlank() || pattern.trim().equals(fallback.trim()) ? null : pattern.trim();
+        if (own != null) {
+            OutPattern.parse(own); // refused now, never at the write
+        }
+        List<WorkItemExecution> analysed = items.stream().filter(item -> item.getProjection() != null).toList();
+        // a removal reaches the unanalysed items too: restored at the listing, they could never lose it otherwise
+        List<WorkItemExecution> changed = own == null ? List.copyOf(items) : analysed;
+        Map<ItemKey, String> patterns = new HashMap<>(ownPatterns);
+        for (WorkItemExecution item : changed) {
+            item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).ifPresent(key -> {
+                if (own == null) {
+                    patterns.remove(key);
+                } else {
+                    patterns.put(key, own);
+                }
+            });
+        }
+        ResumeStateStore store = outPatternStore;
+        if (store != null && !patterns.equals(ownPatterns)) {
+            store.writeOutPatterns(patterns); // first: a failing write changes nothing
+        }
+        ownPatterns.clear();
+        ownPatterns.putAll(patterns);
+        for (WorkItemExecution item : changed) {
+            item.getWorkItem().setOutPattern(own);
+            if (item.getProjection() instanceof Projection.Projected projected) {
+                projected.items().forEach(produced -> produced.setOutPattern(own));
+            }
+        }
+        for (WorkItemExecution item : analysed) {
+            item.setTargetCheck(null); // a file not selected is not checked: no result about its former target
+            try {
+                itemRunner.checkTarget(item, registry.ticket()); // nothing for conflictCheck "none"
+            } catch (InterruptedException e) {
+                if (!cancelRequested) { // a pending cancel of the plan is not an interrupt of the caller
+                    Thread.currentThread().interrupt();
+                }
+                break;
+            }
+        }
+        notifier.changed();
     }
 
     /**
@@ -1176,6 +1284,7 @@ public class MainExecutor implements Runnable {
         if (cancelRequested) {
             throw stopListing(); // woken by the pause cancel() lifted: emit nothing more
         }
+        applyOwnPattern(workItem); // before any analysis, projection, probe or target check
         WorkItemExecution exec = new WorkItemExecution(workItem, itemSteps);
         deferAtTheListing(exec);
         state.getWorkItems().add(exec);

@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,6 +15,19 @@ public class WorkItemCopyTest {
 
     @TempDir
     Path tempDir;
+
+    @Test
+    public void copyKeepsTheOwnPattern() throws IOException {
+        WorkItem item = new WorkItem(Files.writeString(tempDir.resolve("a.jpg"), "x"));
+        assertEquals(Optional.empty(), item.getOutPattern());
+
+        item.setOutPattern("x/{name}");
+        assertEquals(Optional.of("x/{name}"), item.copyForDryRun().getOutPattern());
+
+        item.setOutPattern(" ");
+        assertEquals(Optional.empty(), item.getOutPattern());
+        assertEquals(Optional.empty(), item.copyForDryRun().getOutPattern());
+    }
 
     @Test
     public void aCopyHasTheSameSourceAndIndependentMetadata() throws IOException {

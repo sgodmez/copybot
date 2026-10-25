@@ -7,6 +7,8 @@ import com.copybot.engine.plugin.PluginDefinition;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumeStateStore;
@@ -21,6 +23,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -463,6 +467,50 @@ public class CopybotEngineTest {
             Path valid = pipelineWithout("valid.json", inStep(in) + ",", outStep);
             assertEquals(PipelineStatus.SUCCESS, engine.run(valid, null).await());
         }
+    }
+
+    @Test
+    public void aNewPreparationRestoresOwnPatterns() throws Exception {
+        Path in = dir("in");
+        Instant date = Instant.parse("2026-07-03T10:12:00Z");
+        Files.setLastModifiedTime(Files.writeString(in.resolve("a.jpg"), "a"), FileTime.from(date.plusMillis(400)));
+        Files.writeString(in.resolve("b.jpg"), "b");
+        Path out = tempDir.resolve("out");
+        Path south = tempDir.resolve("south");
+        Path pipeline = pipeline("p.json", in, out, "file.write", "");
+        ResumeStateStore.forPipeline(pipeline).writeOutPatterns(Map.of(new ItemKey(date, "a.jpg"), json(south) + "/{name}"));
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            Plan plan = engine.prepare(pipeline, null);
+            assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus(), String.valueOf(plan.getState().getFailure()));
+            WorkItemExecution a = plan.getOrderedItems().stream()
+                    .filter(w -> w.getWorkItem().getNameDisplay().equals("a.jpg")).findFirst().orElseThrow();
+            WorkItemExecution b = plan.getOrderedItems().stream()
+                    .filter(w -> w.getWorkItem().getNameDisplay().equals("b.jpg")).findFirst().orElseThrow();
+            assertEquals(new TargetProjection.Targets(List.of(south.toAbsolutePath().normalize())), plan.projectionOf(a));
+            assertEquals(new TargetProjection.Targets(List.of(out.toAbsolutePath().normalize())), plan.projectionOf(b));
+
+            Path streaming = Files.writeString(pipeline,
+                    Files.readString(pipeline).replaceFirst("\\{", "{ \"execution\": \"streaming\","));
+            assertEquals(PipelineStatus.SUCCESS, engine.run(streaming, null).await());
+        }
+        assertTrue(Files.exists(south.resolve("a.jpg")), "written at its own target");
+        assertFalse(Files.exists(out.resolve("a.jpg")));
+        assertTrue(Files.exists(out.resolve("b.jpg")));
+    }
+
+    @Test
+    public void anUnreadableStateFileFailsThePreparationOfAPipelineWithoutResume() throws Exception {
+        Path in = dir("in");
+        Files.writeString(in.resolve("a.jpg"), "a");
+        Path pipeline = pipeline("p.json", in, tempDir.resolve("out"), "file.write", "");
+        Files.writeString(ResumeStateStore.forPipeline(pipeline).getPath(), "{ not json");
+        try (CopybotEngine engine = CopybotEngine.create(Optional.of(CONFIG))) {
+            Plan plan = engine.prepare(pipeline, null);
+            assertEquals(PipelineStatus.ERROR, plan.getState().getStatus());
+            assertTrue(plan.getState().isPreparationFailed());
+            assertEquals(PipelineStatus.ERROR, engine.run(pipeline, null).await());
+        }
+        assertFalse(Files.exists(tempDir.resolve("out").resolve("a.jpg")), "nothing written");
     }
 
     @Test

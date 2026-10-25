@@ -213,6 +213,7 @@ public final class CopybotEngine implements AutoCloseable {
             PipelineConfig pipelineConfig = PipelineReader.read(pipelinePath);
             PipelineChecks.requirePreparable(pipelineConfig);
             MainExecutor prepared = new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
+            prepared.setOutPatternStore(ResumeStateStore.forPipeline(pipelinePath)); // whatever the resume mode
             prepared.chooseResumePoint(chosen);
             return prepared;
         });
@@ -314,6 +315,7 @@ public final class CopybotEngine implements AutoCloseable {
                     ? null
                     : resumeContext(pipelinePath, pipelineConfig);
             MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
+            mainExecutor.setOutPatternStore(ResumeStateStore.forPipeline(pipelinePath)); // whatever the resume mode
             mainExecutor.chooseResumePoint(chosen);
             return start(mainExecutor, pipelineConfig.executionMode() == ExecutionMode.STREAMING
                     ? mainExecutor::stream : mainExecutor::run);

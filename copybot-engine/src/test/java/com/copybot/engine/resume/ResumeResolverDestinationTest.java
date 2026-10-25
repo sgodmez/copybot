@@ -375,4 +375,192 @@ public class ResumeResolverDestinationTest {
                 resolver.drainWarnings());
         assertTrue(resolver.drainWarnings().isEmpty(), "once");
     }
+    // ---- own out pattern (spec own-out-pattern §2) ----
+
+    /**
+     * Under nas: the pipeline pattern, declared fixed or varying, or the item's own pattern; {day} and {name} come from
+     * the key.
+     */
+    private IOutAction outWithOwnPatterns(String pipeline, boolean pipelineVaries) {
+        return new IOutAction() {
+            @Override
+            public WriteResult write(WorkItem workItem, WriteContext context) {
+                return WriteResult.written(null);
+            }
+
+            @Override
+            public Optional<Path> resolveTarget(WorkItem workItem) {
+                ItemKey key = ItemKey.of(workItem).orElseThrow();
+                return Optional.of(nas().resolve(workItem.getOutPattern().orElse(pipeline)
+                        .replace("{day}", key.date().toString().substring(0, 10)).replace("{name}", key.name())));
+            }
+
+            @Override
+            public Optional<Boolean> targetDirectoryVaries() {
+                return Optional.of(pipelineVaries);
+            }
+
+            @Override
+            public void setPlugin(IPlugin plugin) {
+            }
+        };
+    }
+
+    private IOutAction fixedPipeline() {
+        return outWithOwnPatterns("all/{name}", false);
+    }
+
+    private IOutAction dailyPipeline() {
+        return outWithOwnPatterns("{day}/{name}", true);
+    }
+
+    private String singleDirectory(String dir) {
+        return ResourcesEngine.getString("resume.warn.single-directory", nas().resolve(dir).toAbsolutePath());
+    }
+
+    @Test
+    public void everyFileDecidesAFileWithItsOwnVaryingDirectoryByItsOwnTarget() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(1).getWorkItem().setOutPattern("south/{day}/{name}");
+        day("all");
+        day("south/2026-09-02");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(ResumePoint.notAtDestination(), p.point(), "not everything");
+        assertEquals(List.of(singleDirectory("all")), p.warnings(),
+                "the files on the pipeline pattern keep the fixed-directory rule");
+        assertEquals(List.of(ItemStatus.PENDING, ItemStatus.SKIPPED, ItemStatus.PENDING), statuses(ordered),
+                "only the file with its own varying pattern is decided by its own directory");
+    }
+
+    @Test
+    public void everyFileKeepsAFileWithItsOwnVaryingDirectoryMissingSelected() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(1).getWorkItem().setOutPattern("south/{day}/{name}");
+        day("all");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(ResumePoint.all(), p.point());
+        assertEquals(List.of(singleDirectory("all")), p.warnings());
+        assertEquals(List.of(ItemStatus.PENDING, ItemStatus.PENDING, ItemStatus.PENDING), statuses(ordered));
+    }
+
+    @Test
+    public void everyFileKeepsTheFilesOfAFixedOwnDirectorySelectedWithAWarning() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(1).getWorkItem().setOutPattern("south/{name}");
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("2026-09-01");
+        day("south"); // created by the copy of B alone: C was never copied
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, dailyPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(List.of(singleDirectory("south")), p.warnings(), "once for the directory");
+        assertEquals(List.of(ItemStatus.SKIPPED, ItemStatus.PENDING, ItemStatus.PENDING), statuses(ordered),
+                "the existing fixed own directory tells nothing about its files");
+    }
+
+    @Test
+    public void everyFileWithAFixedPipelineAndAFixedOwnDirectorySelectsEverything() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("all");
+        day("south");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(ResumePoint.all(), p.point());
+        assertEquals(List.of(singleDirectory("all"), singleDirectory("south")), p.warnings());
+        assertEquals(List.of(ItemStatus.PENDING, ItemStatus.PENDING, ItemStatus.PENDING), statuses(ordered));
+    }
+
+    @Test
+    public void whileStreamingAFileWithItsOwnVaryingPatternIsCheckedOnItsTarget() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(1).getWorkItem().setOutPattern("south/{day}/{name}");
+        day("south/2026-09-02");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+        resolver.streamingProposal();
+
+        assertEquals(Optional.of(ResourcesEngine.getString("resume.skip.at-destination",
+                nas().resolve("south/2026-09-02").toAbsolutePath())), resolver.checkDestination(ordered.get(1)));
+        assertTrue(resolver.drainWarnings().isEmpty(), "its directory varies: no warning");
+    }
+
+    @Test
+    public void whileStreamingAFixedOwnDirectorySkipsNothingAndWarnsOnce() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(1).getWorkItem().setOutPattern("south/{name}");
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("2026-09-01");
+        day("south");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.EVERY_FILE,
+                DestinationMatch.DIRECTORY, dailyPipeline());
+        resolver.streamingProposal();
+
+        assertTrue(resolver.checkDestination(ordered.get(0)).isPresent(), "the pipeline's varying directory is checked");
+        assertEquals(Optional.empty(), resolver.checkDestination(ordered.get(1)));
+        assertEquals(Optional.empty(), resolver.checkDestination(ordered.get(2)));
+        assertEquals(List.of(singleDirectory("south")), resolver.drainWarnings());
+    }
+
+    @Test
+    public void theSearchFromTheEndKeepsItsSingleDirectoryGuardWithAnOwnPatternAtAnEnd() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("south"); // C copied alone: A and B never were
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND,
+                DestinationMatch.DIRECTORY, fixedPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(ResumePoint.all(), p.point());
+        assertEquals(List.of(singleDirectory("all")), p.warnings());
+        assertEquals(List.of(ItemStatus.PENDING, ItemStatus.PENDING, ItemStatus.PENDING), statuses(ordered));
+    }
+
+    @Test
+    public void theSearchFromTheEndTakesNoEvidenceFromAFixedOwnDirectory() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(2).getWorkItem().setOutPattern("south/{name}");
+        day("2026-09-01");
+        day("south");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND,
+                DestinationMatch.DIRECTORY, dailyPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+        resolver.apply(p.point(), p.source(), ordered);
+
+        assertEquals(ResumePoint.after(key(ordered.get(0))), p.point(), "after the last file found by a varying directory");
+        assertEquals(List.of(ItemStatus.SKIPPED, ItemStatus.PENDING, ItemStatus.PENDING), statuses(ordered));
+    }
+
+    @Test
+    public void theSearchFromTheEndProbesAFileWithItsOwnVaryingDirectory() throws Exception {
+        List<WorkItemExecution> ordered = card();
+        ordered.get(2).getWorkItem().setOutPattern("south/{day}/{name}");
+        day("south/2026-09-03");
+        ResumeResolver resolver = resolver(ResumeMode.DESTINATION, DestinationCheck.LAST_FOUND,
+                DestinationMatch.DIRECTORY, dailyPipeline());
+
+        ResumeProposal p = resolver.propose(ordered);
+
+        assertEquals(ResumePoint.after(key(ordered.get(2))), p.point());
+    }
 }

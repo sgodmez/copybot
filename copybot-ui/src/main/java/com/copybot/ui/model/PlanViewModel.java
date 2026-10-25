@@ -100,6 +100,8 @@ public final class PlanViewModel {
             Comparator.nullsLast(Comparator.naturalOrder()));
 
     private Phase phase = Phase.NOT_PREPARED;
+    /** The out step's own-pattern default of the prepared plan (empty: no own pattern possible). */
+    private Optional<String> defaultOutPattern = Optional.empty();
     private boolean executing;
     private boolean autoExecute;
     private boolean autoExecuteArmed;
@@ -623,6 +625,30 @@ public final class PlanViewModel {
     /** Among these rows, those "Include again" brings back: a prepared plan, rows ignored for this run. */
     public List<WorkItemExecution> unignorable(List<WorkItemExecution> rows) {
         return phase == Phase.PREPARED ? rows.stream().filter(WorkItemExecution::isIgnored).toList() : List.of();
+    }
+
+    // ---- own out pattern (context menu of the rows, spec own-out-pattern §3) ----
+
+    /** The out pattern of the files without own one; empty when the plan's out step takes no own pattern. */
+    public Optional<String> defaultOutPattern() {
+        return defaultOutPattern;
+    }
+
+    public void setDefaultOutPattern(Optional<String> defaultOutPattern) {
+        this.defaultOutPattern = defaultOutPattern;
+    }
+
+    /** Among these rows, those "Out pattern" applies to: a prepared plan with a default pattern, analysed rows. */
+    public List<WorkItemExecution> patternable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED || defaultOutPattern.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> i.getProjection() != null).toList();
+    }
+
+    /** Among these rows, those with an own out pattern ("Reset the out pattern"). */
+    public List<WorkItemExecution> withOwnPattern(List<WorkItemExecution> rows) {
+        return phase == Phase.PREPARED ? rows.stream().filter(Plan::hasOwnPattern).toList() : List.of();
     }
 
     /**

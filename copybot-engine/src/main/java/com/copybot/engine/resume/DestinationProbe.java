@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 
 /**
@@ -88,6 +89,15 @@ public final class DestinationProbe {
      */
     public static Result probe(List<ItemKey> ordered, Targets targets, Predicate<Path> dirExists,
                                boolean singleDirectoryGuard) throws InterruptedException {
+        return probe(ordered, targets, dirExists, singleDirectoryGuard, i -> true);
+    }
+
+    /**
+     * @param guarded the items whose first and last targets the single-directory guard compares: the ones following the
+     *                pipeline pattern, a file with its own out pattern tells nothing about it (spec own-out-pattern §2)
+     */
+    public static Result probe(List<ItemKey> ordered, Targets targets, Predicate<Path> dirExists,
+                               boolean singleDirectoryGuard, IntPredicate guarded) throws InterruptedException {
         Map<Integer, Optional<Path>> resolved = new HashMap<>();
         Set<Integer> known = new HashSet<>(); // the items resolved by a batch, or one by one (in resolved)
         Targets cached = i -> {
@@ -104,10 +114,17 @@ public final class DestinationProbe {
             return new Result(ResumePoint.all(), null);
         }
         int last = previousProbeable(cached, ordered.size() - 1, first);
-        Path firstDir = cached.dirOf(first).orElseThrow();
-        if (singleDirectoryGuard && last != first && firstDir.equals(cached.dirOf(last).orElseThrow())) {
-            // the out pattern has no variable directory: existence of the only directory tells nothing
-            return new Result(ResumePoint.all(), ResourcesEngine.getString("resume.warn.single-directory", firstDir));
+        if (singleDirectoryGuard) {
+            Targets guardedTargets = i -> guarded.test(i) ? cached.dirOf(i) : Optional.empty();
+            int guardedFirst = nextProbeable(guardedTargets, first, last + 1);
+            int guardedLast = guardedFirst < 0 ? -1 : previousProbeable(guardedTargets, last, guardedFirst);
+            if (guardedLast != guardedFirst) {
+                Path firstDir = cached.dirOf(guardedFirst).orElseThrow();
+                if (firstDir.equals(cached.dirOf(guardedLast).orElseThrow())) {
+                    // the out pattern has no variable directory: existence of the only directory tells nothing
+                    return new Result(ResumePoint.all(), ResourcesEngine.getString("resume.warn.single-directory", firstDir));
+                }
+            }
         }
         Map<Path, Boolean> existing = new HashMap<>(); // a directory is checked once for all its items
         Predicate<Path> exists = dir -> existing.computeIfAbsent(dir, dirExists::test);

@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
 import java.util.function.Supplier;
 
 public class WorkItem {
@@ -17,6 +18,7 @@ public class WorkItem {
     private Path sourceLocationPath;
     private boolean isLocal;
     private boolean isDeleted = false;
+    private String outPattern; // the item's own out pattern (spec own-out-pattern §1), null: the pipeline's
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
@@ -36,6 +38,7 @@ public class WorkItem {
         copy.sourceLocationPath = sourceLocationPath;
         copy.isLocal = isLocal;
         copy.isDeleted = isDeleted;
+        copy.outPattern = outPattern;
         copy.metadatas.raw().putAll(metadatas.raw());
         copy.metadatas.display().putAll(metadatas.display());
         return copy;
@@ -82,6 +85,16 @@ public class WorkItem {
     /** The local file of the item, null for an item read from a URL. */
     public Path getLocalLocation() {
         return sourceLocationPath;
+    }
+
+    /** The own out pattern of the item, empty: the out step's default applies (spec own-out-pattern §1). */
+    public Optional<String> getOutPattern() {
+        return Optional.ofNullable(outPattern);
+    }
+
+    /** @param pattern the own out pattern; null or blank: none */
+    public void setOutPattern(String pattern) {
+        this.outPattern = pattern == null || pattern.isBlank() ? null : pattern;
     }
 
     public boolean isDeleted() {

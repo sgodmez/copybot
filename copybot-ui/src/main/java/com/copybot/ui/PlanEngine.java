@@ -36,6 +36,16 @@ record PlanEngine(Path pipelinePath) implements PlanOperations.Engine<Plan, Exec
     }
 
     @Override
+    public Optional<String> defaultOutPattern(Plan plan) {
+        return plan.defaultOutPattern();
+    }
+
+    @Override
+    public void setOutPattern(Plan plan, List<WorkItemExecution> items, String pattern) {
+        plan.setOutPattern(items, pattern);
+    }
+
+    @Override
     public void await(Execution run) throws InterruptedException {
         run.await();
     }

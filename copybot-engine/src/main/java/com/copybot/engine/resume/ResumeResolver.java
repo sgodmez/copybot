@@ -4,6 +4,7 @@ import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Files;
@@ -16,6 +17,7 @@ import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -55,6 +57,8 @@ public final class ResumeResolver {
     /** While streaming with an out step that cannot tell whether its directory varies: the target directories seen (2 at most). */
     private final Set<Path> seenDirectories = new HashSet<>();
     private final AtomicBoolean fixedDirectoryWarned = new AtomicBoolean();
+    /** While streaming: the fixed directories of own out patterns already warned about (spec own-out-pattern §2). */
+    private final Set<Path> fixedOwnDirectoriesWarned = ConcurrentHashMap.newKeySet();
     /** While streaming: the out step told no target path (mode stateThenDestination), warned once. */
     private final AtomicBoolean noTargetWarned = new AtomicBoolean();
     /** The warnings found while streaming, not yet published ({@link #drainWarnings}). */
@@ -293,22 +297,28 @@ public final class ResumeResolver {
         }
     }
 
-    /** After the last file found at the destination, the files gone through from the end by batches. */
+    /**
+     * After the last file found at the destination, the files gone through from the end by batches. The single-directory
+     * guard compares the files following the pipeline pattern only; a file whose own out pattern has a fixed directory
+     * cannot be probed (spec own-out-pattern §2).
+     */
     private ResumeProposal lastFound(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
         DestinationProbe.Targets targets = new DestinationProbe.Targets() {
             @Override
             public Optional<Path> dirOf(int index) throws InterruptedException {
-                return checkedPath(candidates.get(index), analyser);
+                WorkItemExecution item = candidates.get(index);
+                return fixedOwnDirectory(item) ? Optional.empty() : checkedPath(item, analyser);
             }
 
             @Override
             public void resolve(List<Integer> indices) throws InterruptedException {
-                analyser.analyseAll(indices.stream().map(candidates::get).toList());
+                analyser.analyseAll(indices.stream().map(candidates::get).filter(item -> !fixedOwnDirectory(item)).toList());
             }
         };
         DestinationProbe.Result result = DestinationProbe.probe(
                 candidates.stream().map(item -> item.getResumeKey().orElseThrow()).toList(),
-                targets, this::atDestination, match == DestinationMatch.DIRECTORY);
+                targets, this::atDestination, match == DestinationMatch.DIRECTORY,
+                index -> ownDirectoryVaries(candidates.get(index)).isEmpty());
         pointToCheck = result.toCheck();
         ResumeSource source = result.point().kind() == ResumePoint.Kind.AFTER ? ResumeSource.DESTINATION : ResumeSource.NONE;
         return new ResumeProposal(result.point(), source, result.warning() == null ? List.of() : List.of(result.warning()));
@@ -316,8 +326,10 @@ public final class ResumeResolver {
 
     /**
      * Every file decided by its own target (spec execution-mode §2): the ones found are remembered for
-     * {@link #apply}. A fixed target directory selects everything with a warning: declared by the out step, or
-     * guessed when it cannot tell (at least two targets, all in the same directory).
+     * {@link #apply}. A fixed target directory of the pipeline keeps its files selected, with a warning: declared by
+     * the out step, or guessed when it cannot tell (at least two targets, all in the same directory). A file with its
+     * own out pattern follows the same rule by that pattern: probed on its own target when its directory varies, kept
+     * selected with a warning when fixed (spec own-out-pattern §2).
      */
     private ResumeProposal everyFile(List<WorkItemExecution> candidates, Analyser analyser) throws InterruptedException {
         Map<WorkItemExecution, Path> checked = new LinkedHashMap<>();
@@ -325,23 +337,35 @@ public final class ResumeResolver {
             checkedPath(item, analyser).ifPresent(path -> checked.put(item, path));
         }
         atDestination.clear();
-        if (match == DestinationMatch.DIRECTORY && !checked.isEmpty()) {
-            Path first = checked.values().iterator().next();
-            boolean fixed = out.targetDirectoryVaries()
+        List<Path> shared = checked.entrySet().stream()
+                .filter(entry -> ownDirectoryVaries(entry.getKey()).isEmpty()).map(Map.Entry::getValue).toList();
+        boolean fixed = false;
+        if (match == DestinationMatch.DIRECTORY && !shared.isEmpty()) {
+            Path first = shared.getFirst();
+            fixed = out.targetDirectoryVaries()
                     .map(varies -> !varies)
-                    .orElseGet(() -> checked.size() > 1 && checked.values().stream().allMatch(first::equals));
-            if (fixed) {
-                return everything(List.of(ResourcesEngine.getString("resume.warn.single-directory", first)));
-            }
+                    .orElseGet(() -> shared.size() > 1 && shared.stream().allMatch(first::equals));
         }
+        Set<String> warnings = new LinkedHashSet<>();
+        if (fixed) {
+            warnings.add(ResourcesEngine.getString("resume.warn.single-directory", shared.getFirst()));
+        }
+        boolean pipelineDirectoryFixed = fixed;
         checked.forEach((item, path) -> {
-            if (atDestination(path)) {
+            boolean probed;
+            if (fixedOwnDirectory(item)) {
+                warnings.add(ResourcesEngine.getString("resume.warn.single-directory", path));
+                probed = false;
+            } else {
+                probed = ownDirectoryVaries(item).isPresent() || !pipelineDirectoryFixed;
+            }
+            if (probed && atDestination(path)) {
                 atDestination.put(item, path);
             }
         });
         return atDestination.isEmpty()
-                ? everything(List.of())
-                : new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, List.of());
+                ? everything(List.copyOf(warnings))
+                : new ResumeProposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION, List.copyOf(warnings));
     }
 
     /** The out step cannot tell where it writes (no target path at all): the destination cannot be probed. */
@@ -428,7 +452,9 @@ public final class ResumeResolver {
      * While streaming with the point {@link ResumePoint.Kind#NOT_AT_DESTINATION}: whether this analysed item is at
      * the destination, the skip reason when it is. A fixed target directory skips nothing: declared by the out step
      * (with a warning, once), or while it cannot tell, as long as fewer than two target directories were seen (in
-     * doubt the file is copied: the conflict policy of the out step avoids duplicates). Thread-safe.
+     * doubt the file is copied: the conflict policy of the out step avoids duplicates). A file with its own out
+     * pattern is checked on its own target when that pattern's directory varies, else skips nothing (a warning per
+     * directory, once) (spec own-out-pattern §2). Thread-safe.
      */
     public Optional<String> checkDestination(WorkItemExecution item) {
         Optional<Path> target = target(item);
@@ -447,7 +473,13 @@ public final class ResumeResolver {
             return Optional.empty(); // no value for a pattern expression: the out step decides (its onMissingKey)
         }
         Path checked = checkedPath(target.get());
-        if (match == DestinationMatch.DIRECTORY && !directoryVaries(checked)) {
+        if (fixedOwnDirectory(item)) {
+            if (fixedOwnDirectoriesWarned.add(checked)) {
+                streamingWarnings.add(ResourcesEngine.getString("resume.warn.single-directory", checked));
+            }
+            return Optional.empty();
+        }
+        if (match == DestinationMatch.DIRECTORY && ownDirectoryVaries(item).isEmpty() && !directoryVaries(checked)) {
             return Optional.empty();
         }
         if (!atDestination(checked)) {
@@ -455,6 +487,25 @@ public final class ResumeResolver {
         }
         atDestination.put(item, checked);
         return Optional.of(atDestinationReason(checked));
+    }
+
+    /**
+     * Whether the directory of the item's own out pattern varies, empty when it follows the pipeline pattern (spec
+     * own-out-pattern §2). A pattern that cannot be parsed counts as varying: its target cannot be resolved anyway.
+     */
+    private static Optional<Boolean> ownDirectoryVaries(WorkItemExecution item) {
+        return item.getWorkItem().getOutPattern().map(own -> {
+            try {
+                return OutPattern.parse(own).directoryVaries();
+            } catch (CopybotException e) {
+                return true;
+            }
+        });
+    }
+
+    /** The item's own out pattern has a fixed directory, and the directory tells whether a file is imported. */
+    private boolean fixedOwnDirectory(WorkItemExecution item) {
+        return match == DestinationMatch.DIRECTORY && ownDirectoryVaries(item).map(varies -> !varies).orElse(false);
     }
 
     private boolean directoryVaries(Path directory) {

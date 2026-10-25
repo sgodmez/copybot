@@ -44,6 +44,12 @@ public final class PlanOperations<P, E> {
         /** Analyses the files of the plan selected again; returns once it is PREPARED again. */
         void analyse(P plan) throws Exception;
 
+        /** The out pattern of the files without own one; empty when the out step takes no own pattern. */
+        Optional<String> defaultOutPattern(P plan);
+
+        /** Gives these files their own out pattern (null, blank or the default removes it); blocking. */
+        void setOutPattern(P plan, List<WorkItemExecution> items, String pattern) throws Exception;
+
         /** Returns once the engine has released the execution. */
         void await(E run) throws InterruptedException;
 
@@ -310,6 +316,7 @@ public final class PlanOperations<P, E> {
         plan = prepared;
         preparingPlan = null;
         model.setExecutionRefusal(engine.executionRefusal(prepared));
+        model.setDefaultOutPattern(engine.defaultOutPattern(prepared));
         model.update(engine.planState(prepared), engine.orderedItems(prepared));
         afterUpdate();
         view.scrollToResume();
@@ -475,6 +482,38 @@ public final class PlanOperations<P, E> {
                 done -> onAnalysed(op, hold, analysed, null),
                 // refused (engine busy or closed), an unexpected failure, the application closing
                 failure -> onAnalysed(op, hold, analysed, failure));
+    }
+
+    /**
+     * Gives these files their own out pattern (null or blank removes it), in the background: the engine is busy
+     * meanwhile, the rows follow at the end and a refusal (syntax, state file) is shown (spec own-out-pattern §3).
+     */
+    public void setOutPattern(List<WorkItemExecution> items, String pattern) {
+        if (engineHeld || plan == null || model.phase() != Phase.PREPARED) {
+            return; // not expected: the menu entry is only offered on an idle prepared plan
+        }
+        Object op = operation;
+        Object hold = hold();
+        P target = plan;
+        List<WorkItemExecution> chosen = List.copyOf(items);
+        refresh();
+        run(() -> {
+                    engine.setOutPattern(target, chosen, pattern);
+                    return null;
+                },
+                done -> onOutPatternSet(op, hold, target, null),
+                failure -> onOutPatternSet(op, hold, target, failure));
+    }
+
+    private void onOutPatternSet(Object op, Object hold, P target, Throwable failure) {
+        release(hold);
+        if (op == operation && plan == target) {
+            model.update(engine.planState(target), engine.orderedItems(target));
+        }
+        refresh();
+        if (failure != null) {
+            view.showError(failure);
+        }
     }
 
     /** analyse() has returned: the plan is PREPARED again, the view follows it. */

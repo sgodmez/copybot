@@ -67,6 +67,8 @@ public class PlanOperationsTest {
         Consumer<PipelineState> watcher;
         ResumePoint executedOverride;
         int analysed;
+        Optional<String> defaultOutPattern = Optional.empty();
+        final List<String> ownPatterns = new ArrayList<>();
 
         @Override
         public FakePlan prepare(Consumer<PipelineState> watcher, Consumer<FakePlan> started, ResumePoint chosen) {
@@ -107,6 +109,20 @@ public class PlanOperationsTest {
             analysed++;
             plan.items.forEach(i -> i.setProjection(new Projection.Projected(List.of(i.getWorkItem()))));
             plan.state.setStatus(PipelineStatus.PREPARED);
+        }
+
+        @Override
+        public Optional<String> defaultOutPattern(FakePlan plan) {
+            return defaultOutPattern;
+        }
+
+        @Override
+        public void setOutPattern(FakePlan plan, List<WorkItemExecution> items, String pattern) {
+            if (refusal != null) {
+                throw refusal;
+            }
+            ownPatterns.add(pattern);
+            items.forEach(i -> i.getWorkItem().setOutPattern(pattern));
         }
 
         @Override
@@ -475,6 +491,50 @@ public class PlanOperationsTest {
         assertFalse(ops.isEngineHeld());
         assertEquals(List.of(), view.details);
         assertEquals(1, view.errors.size());
+    }
+
+    // ---- own out pattern ----
+
+    @Test
+    public void theOwnPatternIsSetInTheBackgroundThenTheRowsAreRefreshed() throws IOException {
+        engine.defaultOutPattern = Optional.of("{name}");
+        FakePlan plan = prepared();
+        assertEquals(Optional.of("{name}"), ops.model().defaultOutPattern(), "the plan's default is known to the model");
+        int renders = view.renders;
+
+        ops.setOutPattern(plan.items, "x/{name}");
+        assertTrue(ops.isEngineHeld(), "busy meanwhile");
+        assertEquals(List.of(), engine.ownPatterns, "not on the calling thread");
+        runNext();
+
+        assertFalse(ops.isEngineHeld());
+        assertEquals(List.of("x/{name}"), engine.ownPatterns);
+        assertTrue(view.renders > renders, "the rows are refreshed");
+        assertEquals(List.of(), view.errors);
+    }
+
+    @Test
+    public void aRefusedOwnPatternIsReported() throws IOException {
+        engine.defaultOutPattern = Optional.of("{name}");
+        FakePlan plan = prepared();
+        engine.refusal = new IllegalStateException("syntax");
+
+        ops.setOutPattern(plan.items, "{bad");
+        runNext();
+
+        assertFalse(ops.isEngineHeld());
+        assertEquals(1, view.errors.size());
+    }
+
+    @Test
+    public void noOwnPatternIsSetWhileTheEngineIsHeld() throws IOException {
+        engine.defaultOutPattern = Optional.of("{name}");
+        FakePlan plan = prepared();
+        ops.analyse(plan.items, null);
+
+        ops.setOutPattern(plan.items, "x");
+
+        assertEquals(1, background.size(), "only the analysis");
     }
 
     // ---- editor saves ----

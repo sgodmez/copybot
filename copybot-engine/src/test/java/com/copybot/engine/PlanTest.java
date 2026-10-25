@@ -225,6 +225,24 @@ public class PlanTest {
     }
 
     @Test
+    public void anOutStepWithoutOwnPatternsRefusesOne() {
+        Plan plan = prepared(new TargetOut(null), null);
+        WorkItemExecution first = named(plan, "IMG_01.JPG");
+
+        assertEquals(Optional.empty(), plan.defaultOutPattern());
+        assertThrows(IllegalStateException.class, () -> plan.setOutPattern(List.of(first), "x/{name}"));
+        assertFalse(Plan.hasOwnPattern(first));
+    }
+
+    @Test
+    public void withoutOutStepThereIsNoDefaultOutPattern() {
+        Plan plan = prepared(null, null);
+
+        assertEquals(Optional.empty(), plan.defaultOutPattern());
+        assertThrows(IllegalStateException.class, () -> plan.setOutPattern(List.of(named(plan, "IMG_01.JPG")), "x/{name}"));
+    }
+
+    @Test
     public void countsOfAnyItemsTellSelectedSkippedAndErrors() throws IOException {
         WorkItemExecution pending = item("a.jpg", 10L);
         WorkItemExecution done = item("b.jpg", 20L);

@@ -46,6 +46,9 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     /** The normalized absolute base targets (from outPattern) being resolved and written right now. */
     private final ConcurrentHashMap<Path, TargetLock> targetLocks = new ConcurrentHashMap<>();
 
+    /** The parsed own patterns of the items, by text (few distinct ones). */
+    private final ConcurrentHashMap<String, OutPattern> ownPatterns = new ConcurrentHashMap<>();
+
     private volatile FileWriteSettings settings;
     private volatile ConflictResolver conflicts;
     private volatile SafeFileWriter writer;
@@ -73,7 +76,18 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
 
     @Override
     public Set<Path> touchedPaths(WorkItem item) {
-        return Set.of(Path.of(settings.outPattern().staticPrefix()));
+        return Set.of(Path.of((item == null ? settings.outPattern() : pattern(item)).staticPrefix()));
+    }
+
+    /** The item's own pattern when it has one (spec own-out-pattern §1), else the configured outPattern. */
+    private OutPattern pattern(WorkItem item) {
+        return item.getOutPattern().map(text -> ownPatterns.computeIfAbsent(text, OutPattern::parse))
+                .orElseGet(() -> settings.outPattern());
+    }
+
+    @Override
+    public Optional<String> defaultOutPattern() {
+        return Optional.of(getConfig().outPattern());
     }
 
     /**
@@ -268,7 +282,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
      * @return the resolution; with ERROR or SKIP, check {@link OutPattern.Resolution#complete()} first
      */
     private OutPattern.Resolution resolution(WorkItem workItem) {
-        return settings.outPattern().resolve(workItem.getMetadatas().display());
+        return pattern(workItem).resolve(workItem.getMetadatas().display());
     }
 
     private CopybotException missingKey(WorkItem workItem, OutPattern.Resolution resolution) {

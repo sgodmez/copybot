@@ -188,6 +188,16 @@ public class PipelineDocumentTest {
     }
 
     @Test
+    public void theOutStepsMissingKeyPolicyDefaultsToError() {
+        assertEquals("skip", PipelineDocument.parse(
+                "{\"outStep\":{\"actionName\":\"file.write\",\"actionConfig\":{\"onMissingKey\":\"skip\"}}}")
+                .outOnMissingKey());
+        assertEquals("error", PipelineDocument.parse(
+                "{\"outStep\":{\"actionName\":\"file.write\",\"actionConfig\":{}}}").outOnMissingKey());
+        assertEquals("error", PipelineDocument.parse("{}").outOnMissingKey(), "no out step");
+    }
+
+    @Test
     public void theDestinationOptionsLiveInTheResumeBlockAndTheirDefaultsAreNotWritten() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
         assertEquals("lastFound", document.destinationCheck());

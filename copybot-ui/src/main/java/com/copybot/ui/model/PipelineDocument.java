@@ -428,6 +428,16 @@ public final class PipelineDocument {
         modified = true;
     }
 
+    /**
+     * The "onMissingKey" of the out step's actionConfig, "error" when absent (as the file.write step): the consequence
+     * the plan view's output pattern dialog shows (spec own-out-pattern §3).
+     */
+    public String outOnMissingKey() {
+        JsonElement value = steps(Section.OUT).stream().findFirst()
+                .map(step -> get(step, List.of("actionConfig", "onMissingKey"))).orElse(null);
+        return value != null && value.isJsonPrimitive() ? value.getAsString() : "error";
+    }
+
     /** The program of "postProcess" (spec post-process), "" when absent. */
     public String postProcessCommand() {
         JsonElement command = postProcess().map(block -> block.get("command")).orElse(null);

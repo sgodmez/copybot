@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -321,6 +322,45 @@ public class MainExecutorTest {
         assertEquals(2, secondStepCalls.get(), "both the original and the forked item must reach the next step");
         assertEquals(2, exec.getState().getWorkItems().size());
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+    }
+
+    @Test
+    public void producedItemsInheritTheOwnPatternAtExecution() {
+        FakeInAction listing = new FakeInAction(1, null);
+        final class OwnPatternIn extends FakeAction implements IInAction {
+            @Override
+            public void listFiles(Consumer<WorkItem> consumer) {
+                listing.listFiles(item -> {
+                    item.setOutPattern("D:/south/{name}");
+                    consumer.accept(item);
+                });
+            }
+        }
+        IInAction in = new OwnPatternIn();
+        FakeProcessAction splitter = new FakeProcessAction(Set.of(), item -> {
+            WorkItem own = item.copyForDryRun();
+            own.setOutPattern("D:/north/{name}");
+            WorkItem fresh = item.copyForDryRun();
+            fresh.setOutPattern(null);
+            WorkItem replacing = item.copyForDryRun();
+            replacing.setOutPattern(null);
+            return List.of(replacing, own, fresh);
+        });
+        List<Optional<String>> seen = Collections.synchronizedList(new ArrayList<>());
+        FakeProcessAction after = new FakeProcessAction(Set.of(), item -> {
+            seen.add(item.getOutPattern());
+            return List.of(item);
+        });
+
+        MainExecutor exec = executor(List.of(new PipelineStep<>(null, in, emptyConfig())),
+                List.of(new PipelineStep<>(null, splitter, emptyConfig()), new PipelineStep<>(null, after, emptyConfig())),
+                true, registry(Map.of("disk:*", 1000)));
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(3, seen.size());
+        assertEquals(2, seen.stream().filter(Optional.of("D:/south/{name}")::equals).count(), "inherited: " + seen);
+        assertTrue(seen.contains(Optional.of("D:/north/{name}")), "its own kept: " + seen);
     }
 
     @Test

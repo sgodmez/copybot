@@ -145,6 +145,12 @@ public class ManualPointTest {
             String name = item.getNameDisplay();
             return Optional.of(nas.resolve(name.substring(4, 6)).resolve(name));
         }
+
+        /** Accepts own out patterns (its targets ignore them). */
+        @Override
+        public Optional<String> defaultOutPattern() {
+            return Optional.of("nas/{name}");
+        }
     }
 
     static PipelineStepConfig emptyConfig() {
@@ -408,6 +414,20 @@ public class ManualPointTest {
         assertTrue(file.isPrepared());
         assertNotNull(file.getProjection());
         assertEquals(1, analyze.times("IMG_05.JPG"));
+    }
+
+    @Test
+    public void aStoppedPreparationTakesOwnOutPatterns() throws Exception {
+        CountingAnalyze analyze = new CountingAnalyze().block("IMG_05.JPG", 1);
+        MainExecutor exec = stoppedAfterTheListing(analyze, new RecordingOut(null, nas()));
+        WorkItemExecution file = named(exec, "IMG_05.JPG");
+        exec.requestAnalysis(List.of(file));
+        exec.analyseDeferred();
+
+        new Plan(exec).setOutPattern(List.of(file), "sud/{name}");
+
+        assertEquals(Optional.of("sud/{name}"), file.getWorkItem().getOutPattern(), "eligible like a prepared plan");
+        assertTrue(exec.isStoppedAfterTheListing());
     }
 
     // ---- a file chosen on disk (spec §2) ----

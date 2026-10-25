@@ -291,6 +291,7 @@ final class ItemRunner {
             if (produced == null || produced.isEmpty()) {
                 return StepOutcome.FILTERED;
             }
+            produced.forEach(child -> DryRunner.inheritOutPattern(item, child));
             exec.replaceWorkItem(produced.get(0));
             for (int i = 1; i < produced.size(); i++) {
                 WorkItemExecution forked = new WorkItemExecution(produced.get(i), itemSteps.get());

@@ -21,6 +21,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -484,6 +487,53 @@ public class FileWriteActionTest {
                 + "\"onConflict\":{\"ifIdentical\":\"overwrite\"}").write(item, WriteContext.newRun());
 
         assertOnlyCopyKept(source, item, result);
+    }
+
+    private FileWriteAction patternAction(Path dir) {
+        FileWriteAction action = new FileWriteAction();
+        String outPattern = dir.resolve("out").toString().replace('\\', '/') + "/{name}";
+        action.loadConfig(JsonParser.parseString("{\"outPattern\":\"" + outPattern + "\"}"));
+        return action;
+    }
+
+    private WorkItem named(Path dir, String name) throws IOException {
+        WorkItem item = new WorkItem(Files.writeString(dir.resolve(name), "x"));
+        item.getMetadatas().setSize(1L);
+        item.getMetadatas().display().put("name", name);
+        return item;
+    }
+
+    @Test
+    public void ownPatternDecidesTheTarget(@TempDir Path dir) throws Exception {
+        FileWriteAction action = patternAction(dir);
+        WorkItem own = named(dir, "a.jpg");
+        own.setOutPattern(dir.resolve("sud").toString().replace('\\', '/') + "/{name}");
+        WorkItem plain = named(dir, "b.jpg");
+
+        assertEquals(dir.resolve("sud").resolve("a.jpg"), action.resolveTarget(own).orElseThrow().toAbsolutePath().normalize());
+        action.write(own, WriteContext.newRun());
+
+        assertTrue(Files.exists(dir.resolve("sud").resolve("a.jpg")));
+        assertFalse(Files.exists(dir.resolve("out")), "nothing in the pipeline's out");
+        assertEquals(dir.resolve("out").resolve("b.jpg"), action.resolveTarget(plain).orElseThrow().toAbsolutePath().normalize());
+    }
+
+    @Test
+    public void touchedPathsUseTheOwnPattern(@TempDir Path dir, @TempDir Path dir2) throws Exception {
+        FileWriteAction action = patternAction(dir);
+        WorkItem own = named(dir, "a.jpg");
+        own.setOutPattern(dir2.resolve("albums").toString().replace('\\', '/') + "/{name}");
+
+        assertEquals(Set.of(dir2.resolve("albums")), action.touchedPaths(own).stream()
+                .map(p -> p.toAbsolutePath().normalize()).collect(Collectors.toSet()));
+        assertEquals(Set.of(dir.resolve("out")), action.touchedPaths(null).stream()
+                .map(p -> p.toAbsolutePath().normalize()).collect(Collectors.toSet()));
+    }
+
+    @Test
+    public void defaultOutPatternIsTheConfiguredOne(@TempDir Path dir) {
+        assertEquals(Optional.of(dir.resolve("out").toString().replace('\\', '/') + "/{name}"),
+                patternAction(dir).defaultOutPattern());
     }
 
     @Test

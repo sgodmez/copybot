@@ -48,4 +48,12 @@ public interface IOutAction extends IAction {
     default Optional<Boolean> targetDirectoryVaries() {
         return Optional.empty();
     }
+
+    /**
+     * The pattern applied to an item without its own; empty: this out step does not take an own pattern
+     * (spec own-out-pattern §1).
+     */
+    default Optional<String> defaultOutPattern() {
+        return Optional.empty();
+    }
 }

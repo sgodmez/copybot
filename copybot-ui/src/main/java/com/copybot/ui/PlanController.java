@@ -7,6 +7,7 @@ import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.MediaPreview;
+import com.copybot.ui.model.OutPatternModel;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineSummary;
 import com.copybot.ui.model.PlanOperations;
@@ -49,6 +50,7 @@ import javafx.scene.input.MouseButton;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.SVGPath;
 import javafx.util.StringConverter;
 
 import java.nio.file.Path;
@@ -120,6 +122,8 @@ public class PlanController implements PlanOperations.View {
     private Object loadToken;
     /** "Always ignore" reads and writes the pipeline file (background): no preparation nor edit meanwhile. */
     private boolean excluding;
+    /** The out step's "onMissingKey" of the pipeline read, for the output pattern dialog. */
+    private String outOnMissingKey = "error";
 
     @FXML
     public void initialize() {
@@ -135,6 +139,9 @@ public class PlanController implements PlanOperations.View {
         dateColumn.setComparator(PlanViewModel.DATE_ORDER);
         targetColumn.setCellValueFactory(c -> new SimpleStringProperty(targetText(c.getValue())));
         targetColumn.setCellFactory(column -> new TableCell<>() {
+            /** The mark of a file with its own out pattern (spec own-out-pattern §3). */
+            private final SVGPath ownPatternMark = ownPatternMark();
+
             @Override
             protected void updateItem(String text, boolean empty) {
                 super.updateItem(text, empty);
@@ -143,6 +150,12 @@ public class PlanController implements PlanOperations.View {
                 Plan shown = ops.targetsPlan();
                 String tooltip = item == null || shown == null || !PlanViewModel.showsTarget(item)
                         ? null : PlanViewModel.targetTooltip(shown.projectionOf(item));
+                Optional<String> own = item == null ? Optional.empty() : item.getWorkItem().getOutPattern();
+                setGraphic(own.isPresent() ? ownPatternMark : null);
+                if (own.isPresent()) {
+                    String line = ResourcesEngine.getString("plan.target.own-pattern", own.get());
+                    tooltip = tooltip == null ? line : line + "\n" + tooltip;
+                }
                 setTooltip(tooltip == null ? null : new Tooltip(tooltip));
             }
         });
@@ -244,6 +257,7 @@ public class PlanController implements PlanOperations.View {
         model.setNothingDoneRefusal(document.gaps().contains(PipelineDocument.Gap.DOES_NOTHING)
                 ? Optional.of(PipelineDocument.Gap.DOES_NOTHING.message()) : Optional.empty());
         model.setExecutionMode(document.executionMode()); // the box stays a one-shot toggle, unchecked
+        outOnMissingKey = document.outOnMissingKey();
         autoExecuteBox.setSelected(model.isAutoExecute());
         summary = loaded;
         renderSummary();
@@ -365,7 +379,8 @@ public class PlanController implements PlanOperations.View {
 
     /**
      * "Resume from here", "Preview" and "Planned processing…" for the clicked row; ignore, include again, always
-     * ignore for the selected rows. A double click previews the file of the row.
+     * ignore, output pattern and back to the pipeline's for the selected rows. A double click previews the file of
+     * the row.
      */
     private TableRow<WorkItemExecution> rowWithMenu() {
         TableRow<WorkItemExecution> row = new TableRow<>();
@@ -396,8 +411,12 @@ public class PlanController implements PlanOperations.View {
         unignore.setOnAction(e -> ignoreForThisRun(model().unignorable(selectedRows()), false));
         MenuItem exclude = new MenuItem();
         exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
+        MenuItem outPattern = new MenuItem();
+        outPattern.setOnAction(e -> chooseOutPattern(model().patternable(selectedRows())));
+        MenuItem pipelinePattern = new MenuItem();
+        pipelinePattern.setOnAction(e -> pipelinePattern(model().withOwnPattern(selectedRows())));
         ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, new SeparatorMenuItem(), ignore,
-                unignore, exclude);
+                unignore, exclude, new SeparatorMenuItem(), outPattern, pipelinePattern);
         menu.setOnShowing(e -> {
             PlanViewModel model = model();
             boolean busy = ops.busy();
@@ -410,6 +429,9 @@ public class PlanController implements PlanOperations.View {
             setCountedItem(ignore, "plan.menu.ignore", busy ? 0 : model.ignorable(selected).size());
             setCountedItem(unignore, "plan.menu.unignore", busy ? 0 : model.unignorable(selected).size());
             setCountedItem(exclude, "plan.menu.exclude", busy || excluding ? 0 : model.excludable(selected).size());
+            setCountedItem(outPattern, "plan.menu.out-pattern", busy ? 0 : model.patternable(selected).size());
+            setCountedItem(pipelinePattern, "plan.menu.pipeline-pattern",
+                    busy ? 0 : model.withOwnPattern(selected).size());
         });
         row.contextMenuProperty().bind(Bindings.when(row.emptyProperty())
                 .then((ContextMenu) null).otherwise(menu));
@@ -418,6 +440,16 @@ public class PlanController implements PlanOperations.View {
 
     /** A magnifier, drawn (an emoji depends on the fonts of the system). */
     private static final String MAGNIFIER = "M5 0a5 5 0 0 1 4.03 7.96l2.97 2.97-1.06 1.06-2.97-2.97A5 5 0 1 1 5 0zm0 1.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7z";
+
+    /** A pencil, drawn: the target of this file follows its own out pattern. */
+    private static final String PENCIL = "M9 0l3 3-7.5 7.5H1.5V7.5z";
+
+    private static SVGPath ownPatternMark() {
+        SVGPath mark = new SVGPath();
+        mark.setContent(PENCIL);
+        mark.setStyle("-fx-fill: #6b7280;");
+        return mark;
+    }
 
     /**
      * The name, then on the right a magnifier opening the planned processing: shown only for the files analysed,
@@ -528,6 +560,26 @@ public class PlanController implements PlanOperations.View {
             PopinUtil.showError(e);
         }
         refresh();
+    }
+
+    /**
+     * "Output pattern…": the dialog, then the chosen pattern given to these files in the background (spec
+     * own-out-pattern §3); the dialog is modal, the operation refuses a plan no longer prepared and idle.
+     */
+    private void chooseOutPattern(List<WorkItemExecution> items) {
+        Optional<String> pipelinePattern = model().defaultOutPattern();
+        if (items.isEmpty() || ops.busy() || pipelinePattern.isEmpty()) {
+            return;
+        }
+        OutPatternDialog.show(CopybotMainUi.STAGE, OutPatternModel.written(items), pipelinePattern.get(), outOnMissingKey)
+                .ifPresent(pattern -> ops.setOutPattern(items, pattern));
+    }
+
+    /** "Back to the pipeline pattern": these files lose their own pattern, in the background. */
+    private void pipelinePattern(List<WorkItemExecution> items) {
+        if (!items.isEmpty() && !ops.busy()) {
+            ops.setOutPattern(items, null);
+        }
     }
 
     /**
