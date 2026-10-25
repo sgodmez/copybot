@@ -6,6 +6,7 @@ import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.MediaPreview;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineSummary;
 import com.copybot.ui.model.PlanOperations;
@@ -44,6 +45,7 @@ import javafx.scene.control.TableColumn;
 import javafx.scene.control.TableRow;
 import javafx.scene.control.TableView;
 import javafx.scene.control.Tooltip;
+import javafx.scene.input.MouseButton;
 import javafx.scene.layout.FlowPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
@@ -362,11 +364,22 @@ public class PlanController implements PlanOperations.View {
     // ---- context menu of the rows ----
 
     /**
-     * "Resume from here" and "Planned processing…" for the clicked row; ignore, include again, always ignore for
-     * the selected rows.
+     * "Resume from here", "Preview" and "Planned processing…" for the clicked row; ignore, include again, always
+     * ignore for the selected rows. A double click previews the file of the row.
      */
     private TableRow<WorkItemExecution> rowWithMenu() {
         TableRow<WorkItemExecution> row = new TableRow<>();
+        row.setOnMouseClicked(e -> {
+            if (e.getButton() == MouseButton.PRIMARY && e.getClickCount() == 2 && row.getItem() != null) {
+                preview(row.getItem());
+            }
+        });
+        MenuItem preview = new MenuItem(ResourcesEngine.getString("plan.menu.preview"));
+        preview.setOnAction(e -> {
+            if (row.getItem() != null) {
+                preview(row.getItem());
+            }
+        });
         MenuItem fromHere = new MenuItem(ResourcesEngine.getString("plan.menu.resume-from-here"));
         fromHere.setOnAction(e -> {
             if (row.getItem() != null) {
@@ -383,10 +396,12 @@ public class PlanController implements PlanOperations.View {
         unignore.setOnAction(e -> ignoreForThisRun(model().unignorable(selectedRows()), false));
         MenuItem exclude = new MenuItem();
         exclude.setOnAction(e -> alwaysIgnore(selectedRows()));
-        ContextMenu menu = new ContextMenu(fromHere, detail, analyse, new SeparatorMenuItem(), ignore, unignore, exclude);
+        ContextMenu menu = new ContextMenu(fromHere, preview, detail, analyse, new SeparatorMenuItem(), ignore,
+                unignore, exclude);
         menu.setOnShowing(e -> {
             PlanViewModel model = model();
             boolean busy = ops.busy();
+            preview.setDisable(row.getItem() == null || localFile(row.getItem()).isEmpty());
             fromHere.setDisable(row.getItem() == null || busy || model.resumePointFrom(row.getItem()).isEmpty());
             List<WorkItemExecution> selected = selectedRows();
             // both apply to the selection, whatever the clicked row
@@ -448,6 +463,26 @@ public class PlanController implements PlanOperations.View {
             magnifier.setManaged(analysed);
             setGraphic(box);
         }
+    }
+
+    /**
+     * The preview of the file of this row, then of the other media of the table with the previous / next buttons
+     * (in its order, filter included). Nothing for a row without a file of its own (an entry of an archive).
+     */
+    private void preview(WorkItemExecution clicked) {
+        if (localFile(clicked).isEmpty()) {
+            return;
+        }
+        List<WorkItemExecution> shown = MediaPreview.navigable(List.copyOf(itemsTable.getItems()), clicked,
+                PlanController::localFile);
+        List<Path> files = shown.stream().map(item -> localFile(item).orElseThrow()).toList();
+        MediaPreviewDialog.show(CopybotMainUi.STAGE, ops::busy, files, shown.indexOf(clicked));
+    }
+
+    /** The file of the row on this computer, if it is one (not an entry of an archive or a remote item). */
+    private static Optional<Path> localFile(WorkItemExecution item) {
+        return item.getWorkItem().isLocal() ? Optional.ofNullable(item.getWorkItem().getLocalLocation())
+                : Optional.empty();
     }
 
     /** The planned processing of this item, read only: available as soon as it is analysed, and after the copy. */
@@ -678,6 +713,9 @@ public class PlanController implements PlanOperations.View {
         PlanViewModel model = model();
         Phase phase = model.phase();
         boolean busy = ops.busy();
+        if (busy) {
+            MediaPreviewDialog.engineBusy(); // a copy in "move" mode deletes the files: no media kept open
+        }
         backButton.setDisable(busy || !model.canGoBack());
         editButton.setDisable(busy || excluding || !model.canGoBack());
         prepareButton.setText(model.prepareLabel());
