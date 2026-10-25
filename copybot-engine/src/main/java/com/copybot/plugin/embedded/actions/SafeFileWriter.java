@@ -22,6 +22,8 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -98,13 +100,22 @@ final class SafeFileWriter {
      * @throws CopybotException           write.verify.size / write.verify.hash when the verification fails
      */
     Written write(WorkItem item, Path target, boolean replaceExisting, String runId, IntConsumer percent) throws IOException {
+        return write(item, target, replaceExisting, runId, percent, dir -> {
+        });
+    }
+
+    /**
+     * @param createdDirectories receives the directories this write creates, the topmost first (spec post-process)
+     */
+    Written write(WorkItem item, Path target, boolean replaceExisting, String runId, IntConsumer percent,
+                  Consumer<Path> createdDirectories) throws IOException {
         Path key = target.toAbsolutePath().normalize();
         if (!inFlight.add(key)) {
             throw new FileAlreadyExistsException(target.toString(), null, "already being written");
         }
         try {
             Path dir = key.getParent();
-            Files.createDirectories(dir);
+            createDirectories(dir, createdDirectories);
             cleanOrphans(dir, runId);
             if (!replaceExisting && Files.exists(target, LinkOption.NOFOLLOW_LINKS)) { // a dangling link exists too
                 throw new FileAlreadyExistsException(target.toString()); // early: no copy for nothing
@@ -116,6 +127,19 @@ final class SafeFileWriter {
         } finally {
             inFlight.remove(key);
         }
+    }
+
+    /**
+     * Creates dir and its missing parents, reporting the ones missing before. Two concurrent writes may both report
+     * a directory: the receiver keeps a set.
+     */
+    private static void createDirectories(Path dir, Consumer<Path> createdDirectories) throws IOException {
+        Deque<Path> missing = new ArrayDeque<>();
+        for (Path d = dir; d != null && !Files.isDirectory(d); d = d.getParent()) {
+            missing.push(d);
+        }
+        Files.createDirectories(dir);
+        missing.forEach(createdDirectories);
     }
 
     /**

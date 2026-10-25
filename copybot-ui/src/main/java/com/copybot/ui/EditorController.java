@@ -2,6 +2,7 @@ package com.copybot.ui;
 
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.PostProcessConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.engine.plugin.PluginEngine;
@@ -15,6 +16,7 @@ import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.StepCatalog;
 import com.copybot.ui.util.Background;
+import com.copybot.ui.util.Choosers;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.Views;
 import com.google.gson.JsonElement;
@@ -35,6 +37,7 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextInputControl;
+import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
@@ -43,6 +46,8 @@ import javafx.scene.control.TreeView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
+import javafx.scene.layout.HBox;
+import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
@@ -488,7 +493,33 @@ public class EditorController {
                 new VBox(3, new Label(ResourcesEngine.getString("editor.conflict-check")), conflictCheck),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-check")), destinationCheck),
-                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch));
+                new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch),
+                postProcessForm());
+    }
+
+    /** The program launched at the end of a copy and its arguments, one per line (spec post-process). */
+    private Node postProcessForm() {
+        TextField command = new TextField(document.postProcessCommand());
+        TextArea args = new TextArea(String.join("\n", document.postProcessArgs()));
+        args.setPrefRowCount(3);
+        Runnable apply = () -> document.setPostProcess(command.getText(), args.getText().lines().toList());
+        command.textProperty().addListener((obs, old, text) -> apply.run());
+        args.textProperty().addListener((obs, old, text) -> apply.run());
+        Button browse = new Button(ResourcesEngine.getString("editor.browse"));
+        browse.setOnAction(e -> Choosers.inFolderOf(browse, command.getText(), folder -> {
+            FileChooser chooser = new FileChooser();
+            chooser.setInitialDirectory(folder);
+            File chosen = chooser.showOpenDialog(formBox.getScene().getWindow());
+            if (chosen != null) {
+                command.setText(chosen.getPath());
+            }
+        }));
+        HBox.setHgrow(command, Priority.ALWAYS);
+        Label help = new Label(ResourcesEngine.getString("editor.post-process.help", PostProcessConfig.CREATED_DIRS));
+        help.setWrapText(true);
+        return new VBox(3, title(ResourcesEngine.getString("editor.post-process")),
+                new Label(ResourcesEngine.getString("editor.post-process.command")), new HBox(6, command, browse),
+                new Label(ResourcesEngine.getString("editor.post-process.args")), args, help);
     }
 
     /** The resume modes that look at the destination: destination, and stateThenDestination without cursor. */

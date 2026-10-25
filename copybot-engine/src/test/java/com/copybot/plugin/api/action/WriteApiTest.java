@@ -65,6 +65,18 @@ public class WriteApiTest {
     }
 
     @Test
+    public void theCreatedDirectoriesReachTheRunFromEveryItem() {
+        List<Path> created = new ArrayList<>();
+        WriteContext run = new WriteContext("run", null, created::add);
+
+        run.withProgress(ItemProgress.NONE).directoryCreated(tempDir.resolve("2026"));
+
+        assertEquals(List.of(tempDir.resolve("2026")), created);
+        new WriteContext("run").directoryCreated(tempDir); // nobody listens: never throws
+        WriteContext.newRun().directoryCreated(tempDir);
+    }
+
+    @Test
     public void factoriesBuildWrittenAndSkippedResults() {
         Path target = tempDir.resolve("a.jpg");
 

@@ -112,6 +112,23 @@ public class SafeFileWriterTest {
     }
 
     @Test
+    public void theWriteReportsTheDirectoriesItCreatesFromTheTopmost() throws IOException {
+        Path nas = nas();
+        Path target = nas.resolve("2026").resolve("2026-10 Vacances").resolve("raw").resolve("photo.jpg");
+        List<Path> created = new java.util.ArrayList<>();
+        SafeFileWriter writer = writer("");
+
+        writer.write(local("abc"), target, false, RUN, p -> {
+        }, created::add);
+        writer.write(local("abc"), target.resolveSibling("other.jpg"), false, RUN, p -> {
+        }, created::add);
+
+        Path year = nas.resolve("2026").toAbsolutePath();
+        assertEquals(List.of(year, year.resolve("2026-10 Vacances"), year.resolve("2026-10 Vacances").resolve("raw")),
+                created, "the existing nas directory is not reported, nor a directory already created");
+    }
+
+    @Test
     public void aFailingStreamLeavesNeitherTemporaryNorTarget() throws IOException {
         Path target = nas().resolve("photo.jpg");
 

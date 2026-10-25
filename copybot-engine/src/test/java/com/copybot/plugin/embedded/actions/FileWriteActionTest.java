@@ -84,9 +84,13 @@ public class FileWriteActionTest {
         Path target = tempDir.resolve("out").resolve("nested").resolve("deep.bin");
         WorkItem item = itemWithContent("src5.bin", "payload".getBytes());
 
-        action(target, false).write(item, WriteContext.newRun());
+        List<Path> created = new CopyOnWriteArrayList<>();
+
+        action(target, false).write(item, WriteContext.newRun(created::add));
 
         assertArrayEquals("payload".getBytes(), Files.readAllBytes(target));
+        Path out = tempDir.resolve("out").toAbsolutePath();
+        assertEquals(List.of(out, out.resolve("nested")), created, "the run is told the directories it created");
     }
 
     @Test

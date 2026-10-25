@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.ServiceConfigurationError;
 import java.util.function.Consumer;
@@ -101,6 +102,47 @@ public class CopybotExitCodeTest {
 
         assertEquals("0", result[0], result[2]);
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
+    }
+
+    @Test
+    public void theCopyLaunchesItsPostProcessingWithTheCreatedDirectories() throws Exception {
+        // a single-file Java program writing its next arguments, one per line, to the file named by the first one
+        Path program = Files.writeString(tempDir.resolve("Echo.java"), """
+                import java.nio.file.*;
+                import java.util.*;
+
+                public class Echo {
+                    public static void main(String[] args) throws Exception {
+                        Path part = Path.of(args[0] + ".part");
+                        Files.write(part, Arrays.asList(args).subList(1, args.length));
+                        Files.move(part, Path.of(args[0]));
+                    }
+                }
+                """);
+        Path echoed = tempDir.resolve("args.txt");
+        String java = ProcessHandle.current().info().command().orElseThrow();
+        String postProcess = ",\"postProcess\":{\"command\":\"%s\",\"args\":[\"%s\",\"%s\",\"{createdDirs}\"]}"
+                .formatted(json(Path.of(java)), json(program), json(echoed));
+
+        String[] result = cli("-p=" + pipeline("", postProcess), CONFIG);
+
+        assertEquals("0", result[0], result[2]);
+        for (int i = 0; i < 300 && !Files.exists(echoed); i++) { // launched without waiting: a JVM to start
+            Thread.sleep(100);
+        }
+        assertEquals(List.of(nas.toAbsolutePath().toString()), Files.readAllLines(echoed),
+                "nas is the only directory the copy created");
+    }
+
+    @Test
+    public void aPostProcessingThatCannotStartIsAWarningOfASuccessfulCopy() throws IOException {
+        String postProcess = ",\"postProcess\":{\"command\":\"%s\",\"args\":[\"{createdDirs}\"]}"
+                .formatted(json(tempDir.resolve("no-such-program.exe")));
+
+        String[] result = cli("-p=" + pipeline("", postProcess), CONFIG);
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(result[2].contains("no-such-program.exe"), result[2]);
     }
 
     @Test

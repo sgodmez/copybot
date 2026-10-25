@@ -25,7 +25,12 @@ public record PipelineConfig(
         /**
          * How far the plan checks the targets that already exist (spec conflict-check §1). Absent: quick.
          */
-        ConflictCheck conflictCheck
+        ConflictCheck conflictCheck,
+
+        /**
+         * The program launched at the end of a copy (spec post-process). Absent: none.
+         */
+        PostProcessConfig postProcess
 
         ) {
 
@@ -34,6 +39,13 @@ public record PipelineConfig(
                           List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
                           ResumeConfig resume) {
         this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, null);
+    }
+
+    /** Without post-processing. */
+    public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
+                          List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
+                          ResumeConfig resume, ConflictCheck conflictCheck) {
+        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, conflictCheck, null);
     }
 
     public ResumeMode resumeMode() {

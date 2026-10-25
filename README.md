@@ -84,6 +84,15 @@ libraries.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
   CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
+- **Launch a program after the copy.** A pipeline can name a program and its
+  arguments (`postProcess`, under the editor's *After the copy*). It starts
+  when a copy ends, unless the copy was cancelled, and Copybot does not wait
+  for it. An argument `{createdDirs}` becomes one argument per directory the
+  copy created. If the copy created none, the program does not start. For
+  example, this opens the photo rights of the new folders in synoRight:
+  `"postProcess": { "command": "D:\\progs\\synoRight\\synoRightGui.exe", "args": ["gui", "rights", "{createdDirs}"] }`.
+  If the program cannot start, the run gets a warning, and its status stays
+  the copy's.
 - **Desktop application.** The home screen lists recent pipelines and how
   their last run went. The plan view has filters and a context menu: resume
   from here, ignore, see the planned processing, analyse. The pipeline editor

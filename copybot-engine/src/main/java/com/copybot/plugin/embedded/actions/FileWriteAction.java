@@ -293,7 +293,8 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
 
         SafeFileWriter.Written written;
         try {
-            written = writer.write(workItem, decision.target(), decision.replaceExisting(), context.runId(), progress::percent);
+            written = writer.write(workItem, decision.target(), decision.replaceExisting(), context.runId(), progress::percent,
+                    context::directoryCreated);
         } catch (FileAlreadyExistsException e) {
             if (isFile(e, decision.target())) {
                 throw new TargetTaken(e); // resolved again; a temporary file name collision is not

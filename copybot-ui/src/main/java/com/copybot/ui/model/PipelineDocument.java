@@ -3,6 +3,7 @@ package com.copybot.ui.model;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PostProcessConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
@@ -424,6 +425,57 @@ public final class PipelineDocument {
             return;
         }
         root.addProperty("conflictCheck", check.jsonName());
+        modified = true;
+    }
+
+    /** The program of "postProcess" (spec post-process), "" when absent. */
+    public String postProcessCommand() {
+        JsonElement command = postProcess().map(block -> block.get("command")).orElse(null);
+        return command != null && command.isJsonPrimitive() ? command.getAsString() : "";
+    }
+
+    /** Its arguments, the non-text ones left out. */
+    public List<String> postProcessArgs() {
+        JsonElement args = postProcess().map(block -> block.get("args")).orElse(null);
+        if (args == null || !args.isJsonArray()) {
+            return List.of();
+        }
+        List<String> list = new ArrayList<>();
+        for (JsonElement arg : args.getAsJsonArray()) {
+            if (arg.isJsonPrimitive()) {
+                list.add(arg.getAsString());
+            }
+        }
+        return list;
+    }
+
+    private Optional<JsonObject> postProcess() {
+        JsonElement block = root.get("postProcess");
+        return block != null && block.isJsonObject() ? Optional.of(block.getAsJsonObject()) : Optional.empty();
+    }
+
+    /**
+     * A blank program removes the block; otherwise the program (without the quotes of Explorer's "copy as path") and
+     * the arguments (trimmed, blank ones dropped) are written.
+     */
+    public void setPostProcess(String command, List<String> args) {
+        String program = PostProcessConfig.unquote(command);
+        if (program.isEmpty()) {
+            if (root.remove("postProcess") != null) {
+                modified = true;
+            }
+            return;
+        }
+        List<String> kept = args.stream().map(String::strip).filter(arg -> !arg.isEmpty()).toList();
+        if (program.equals(postProcessCommand()) && kept.equals(postProcessArgs())) {
+            return;
+        }
+        JsonObject block = new JsonObject();
+        block.addProperty("command", program);
+        JsonArray array = new JsonArray();
+        kept.forEach(array::add);
+        block.add("args", array);
+        root.add("postProcess", block);
         modified = true;
     }
 

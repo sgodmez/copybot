@@ -26,6 +26,7 @@ import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.resources.ResourcesEngine;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -65,7 +66,13 @@ public class MainExecutor implements Runnable {
      * Unique per pipeline run (prepare and execute share it), handed to the out step: it names its temporary
      * files and recognises the ones a crashed run left behind (spec safe-write §3).
      */
-    private final WriteContext writeContext = WriteContext.newRun();
+    /** The directories the out step created, for the post-processing (spec post-process). */
+    private final Set<Path> createdDirectories = ConcurrentHashMap.newKeySet();
+
+    private final WriteContext writeContext = WriteContext.newRun(createdDirectories::add);
+
+    /** Launched at the end of a copy phase. */
+    private PostProcess postProcess;
 
     private List<PipelineStep<IInAction>> inSteps;
     /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
@@ -177,6 +184,7 @@ public class MainExecutor implements Runnable {
         this.notifier = new CoalescingNotifier<>(watcher, state);
         this.itemRunner = newItemRunner();
         this.itemRunner.setConflictCheck(pipelineConfig.conflictCheckMode());
+        this.postProcess = PostProcess.of(pipelineConfig.postProcess());
     }
 
     // visible for tests: runs with pre-resolved steps, bypassing PluginEngine, without barrier
@@ -200,6 +208,12 @@ public class MainExecutor implements Runnable {
         this.notifier = new CoalescingNotifier<>(watcher, state);
         this.itemRunner = newItemRunner();
         this.itemRunner.setProcessWhileListing(processWhileListing);
+        this.postProcess = PostProcess.of(null);
+    }
+
+    // visible for tests
+    void setPostProcess(PostProcess postProcess) {
+        this.postProcess = postProcess;
     }
 
     private ItemRunner newItemRunner() {
@@ -414,6 +428,7 @@ public class MainExecutor implements Runnable {
                     finalStatus = PipelineStatus.ERROR;
                 }
             }
+            runPostProcess();
             state.setStatus(finalStatus);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -866,6 +881,7 @@ public class MainExecutor implements Runnable {
             if (!saveCursor(point, source)) {
                 finalStatus = PipelineStatus.ERROR;
             }
+            runPostProcess();
             state.setStatus(finalStatus);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -956,6 +972,14 @@ public class MainExecutor implements Runnable {
             }
             LOGGER.log(System.Logger.Level.WARNING, "afterAll failed at the end of a phase", e);
         }
+    }
+
+    /**
+     * At the end of a copy phase that was not stopped, before its final status (spec post-process): a failed
+     * launch is a warning, the status stays the copy's.
+     */
+    private void runPostProcess() {
+        postProcess.run(createdDirectories).ifPresent(warning -> addWarnings(List.of(warning)));
     }
 
     /** @return false when the cursor could not be written */

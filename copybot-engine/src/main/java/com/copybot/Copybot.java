@@ -20,7 +20,7 @@ import java.util.Optional;
 import java.util.ServiceConfigurationError;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 @CommandLine.Command(name = "Copybot", version = "0.1", mixinStandardHelpOptions = true)
@@ -106,7 +106,7 @@ public class Copybot implements Callable<Integer> {
     private int doRun(CopybotEngine engine) throws InterruptedException {
         Execution execution;
         // a dry run prints the warnings with the plan (stdout), a real run on stderr as soon as they are known
-        Consumer<PipelineState> watcher = isDryRun ? null : warningsOnStderrOnce();
+        Consumer<PipelineState> watcher = isDryRun ? null : warningsOnStderr();
         if (isDryRun || resumeOverride != null) {
             // --all and --from-date are known before the listing: a chosen point, like a cursor there (spec
             // manual-point §1); --from-file names a listed file: applied once the listing found its key
@@ -161,15 +161,19 @@ public class Copybot implements Callable<Integer> {
     }
 
     /**
-     * A watcher printing the configuration warnings of the steps on stderr, once, as soon as the steps are
-     * resolved (spec safe-write §5): the first notifications come before, the terminal one never misses them.
+     * A watcher printing each warning on stderr once, as soon as it is known: the configuration warnings of the
+     * steps once they are resolved (spec safe-write §5), a failed post-processing at the end (spec post-process).
+     * The warnings only grow: the ones past the count printed are new. The terminal notification never misses them.
      */
-    private static Consumer<PipelineState> warningsOnStderrOnce() {
-        AtomicBoolean printed = new AtomicBoolean();
+    private static Consumer<PipelineState> warningsOnStderr() {
+        AtomicInteger printed = new AtomicInteger();
         return state -> {
             List<String> warnings = state.getWarnings();
-            if (!warnings.isEmpty() && printed.compareAndSet(false, true)) {
-                warnings.forEach(w -> System.err.println(ResourcesEngine.getString("cli.warning", w)));
+            synchronized (printed) {
+                for (int i = printed.get(); i < warnings.size(); i++) {
+                    System.err.println(ResourcesEngine.getString("cli.warning", warnings.get(i)));
+                }
+                printed.set(Math.max(printed.get(), warnings.size()));
             }
         };
     }

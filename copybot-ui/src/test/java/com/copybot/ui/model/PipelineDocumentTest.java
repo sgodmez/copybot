@@ -139,6 +139,34 @@ public class PipelineDocumentTest {
     }
 
     @Test
+    public void thePostProcessingIsWrittenOnlyWithAProgram() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertEquals("", document.postProcessCommand());
+        assertEquals(List.of(), document.postProcessArgs());
+
+        document.setPostProcess(" ", List.of("ignored"));
+        assertFalse(document.isModified(), "no program: nothing to write");
+
+        document.setPostProcess(" D:\\progs\\synoRight.exe ", List.of("gui", " ", "{createdDirs}"));
+        assertTrue(document.isModified());
+        assertEquals("D:\\progs\\synoRight.exe", document.postProcessCommand());
+        assertEquals(List.of("gui", "{createdDirs}"), document.postProcessArgs(), "blank lines dropped");
+        assertEquals(tree("{\"command\":\"D:\\\\progs\\\\synoRight.exe\",\"args\":[\"gui\",\"{createdDirs}\"]}"),
+                tree(document.toJson()).getAsJsonObject("postProcess"));
+
+        PipelineDocument same = PipelineDocument.parse(document.toJson());
+        same.setPostProcess("D:\\progs\\synoRight.exe", List.of("gui", "{createdDirs}"));
+        assertFalse(same.isModified(), "unchanged");
+
+        document.setPostProcess("\"D:\\progs\\synoRight.exe\"", List.of(" gui ", "{createdDirs} "));
+        assertEquals("D:\\progs\\synoRight.exe", document.postProcessCommand(), "Explorer's quotes dropped");
+        assertEquals(List.of("gui", "{createdDirs}"), document.postProcessArgs(), "arguments trimmed");
+
+        document.setPostProcess("", List.of("gui"));
+        assertFalse(tree(document.toJson()).has("postProcess"), "no program removes the block");
+    }
+
+    @Test
     public void theConflictCheckIsWrittenOnlyWhenNotQuick() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
         assertEquals(ConflictCheck.QUICK, document.conflictCheck());
