@@ -169,6 +169,41 @@ public class ConflictCheckTest {
     }
 
     @Test
+    public void aFileShowsItsCheckUnderWayUntilItIsDone() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        CheckingOut out = new CheckingOut(Map.of()) {
+            @Override
+            public TargetCheck checkTarget(WorkItem item, boolean compareContent) {
+                entered.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return super.checkTarget(item, compareContent);
+            }
+        };
+        MainExecutor exec = executor(1, out);
+        Thread preparing = Thread.ofPlatform().start(exec::prepare);
+        try {
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS), "the check started");
+            WorkItemExecution file = named(exec, "IMG_01.JPG");
+            assertTrue(file.isPrepared(), "analysed");
+            assertTrue(file.isTargetCheckPending(), "analysed, its target being checked");
+            assertNull(file.getTargetCheck());
+        } finally {
+            release.countDown();
+            preparing.join(10_000);
+        }
+
+        WorkItemExecution file = named(exec, "IMG_01.JPG");
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertFalse(file.isTargetCheckPending(), "checked");
+        assertEquals(Kind.FREE, file.getTargetCheck().kind());
+    }
+
+    @Test
     public void noneChecksNothing() {
         CheckingOut out = new CheckingOut(Map.of());
         MainExecutor exec = executor(2, out);

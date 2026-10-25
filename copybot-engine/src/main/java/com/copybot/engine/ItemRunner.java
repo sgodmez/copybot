@@ -201,20 +201,27 @@ final class ItemRunner {
                 || !(exec.getProjection() instanceof Projection.Projected projected)) {
             return;
         }
-        // the destination only: the check reads nothing on the source, it must not hold the card the analyses read
-        Set<String> footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
-        registry.acquireAll(footprint, ticket);
+        exec.setTargetCheckPending(true); // the view tells the checks still queued once every file is analysed
+        notifier.changed();
         try {
-            if (cancelRequested.getAsBoolean()) {
-                throw new InterruptedException("cancelled");
+            // the destination only: the check reads nothing on the source, it must not hold the card the analyses read
+            Set<String> footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
+            registry.acquireAll(footprint, ticket);
+            try {
+                if (cancelRequested.getAsBoolean()) {
+                    throw new InterruptedException("cancelled");
+                }
+                TargetCheck result = null;
+                for (WorkItem produced : projected.items()) {
+                    result = TargetCheck.mostSevere(result, check(out, produced, level == ConflictCheck.FULL));
+                }
+                exec.setTargetCheck(result == null ? TargetCheck.UNKNOWN : result);
+            } finally {
+                registry.releaseAll(footprint);
             }
-            TargetCheck result = null;
-            for (WorkItem produced : projected.items()) {
-                result = TargetCheck.mostSevere(result, check(out, produced, level == ConflictCheck.FULL));
-            }
-            exec.setTargetCheck(result == null ? TargetCheck.UNKNOWN : result);
         } finally {
-            registry.releaseAll(footprint);
+            exec.setTargetCheckPending(false);
+            notifier.changed();
         }
     }
 

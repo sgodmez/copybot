@@ -29,6 +29,7 @@ public class WorkItemExecution {
     private volatile Projection projection;
     /** What the out step would find at the target, checked by the plan (spec conflict-check §4); null when not checked. */
     private volatile TargetCheck targetCheck;
+    private volatile boolean targetCheckPending;
 
     /**
      * Resume ordering key, frozen at the preparation barrier: a later step may replace the work item
@@ -208,6 +209,15 @@ public class WorkItemExecution {
 
     public void setTargetCheck(TargetCheck targetCheck) {
         this.targetCheck = targetCheck;
+    }
+
+    /** True while the plan checks the target of this file: waiting for the destination disk, then checking. */
+    public boolean isTargetCheckPending() {
+        return targetCheckPending;
+    }
+
+    public void setTargetCheckPending(boolean targetCheckPending) {
+        this.targetCheckPending = targetCheckPending;
     }
 
     /**

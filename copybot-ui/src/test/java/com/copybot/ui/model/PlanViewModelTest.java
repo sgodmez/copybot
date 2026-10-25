@@ -178,6 +178,51 @@ public class PlanViewModelTest {
     }
 
     @Test
+    public void everyFileAnalysedThePreparationTellsTheTargetChecksStillQueued() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        WorkItemExecution c = item("c.jpg", 1);
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.RUNNING, a, b, c);
+        a.markPrepared();
+        a.setTargetCheck(TargetCheck.free());
+        b.markPrepared();
+        b.setTargetCheckPending(true); // waiting for the destination disk
+        c.markPrepared(); // before the resume point: never checked
+        model.update(state, List.of());
+
+        assertEquals(PrepareStage.CHECKING, model.prepareStage(), "the analyses are over, not the checks");
+        assertEquals(0.5, model.prepareFraction());
+        assertEquals(ResourcesEngine.getString("plan.checking", 1, 2), model.progressText());
+        assertTranslated(model.progressText());
+
+        b.setTargetCheck(TargetCheck.free());
+        b.setTargetCheckPending(false);
+        model.update(state, List.of());
+        assertEquals(PrepareStage.RESOLVING, model.prepareStage());
+    }
+
+    @Test
+    public void theFilesSelectedAgainAnalysedTheViewTellsTheirChecksStillQueued() throws IOException {
+        WorkItemExecution old1 = deferredSelected("old1.jpg");
+        WorkItemExecution old2 = deferredSelected("old2.jpg");
+        PlanViewModel model = prepared(true, old1, old2);
+        model.setOverride(ResumePoint.all());
+        model.startAnalysing(List.of(old1, old2));
+
+        old1.markPrepared();
+        old1.setTargetCheck(TargetCheck.free());
+        old2.markPrepared();
+        old2.setTargetCheckPending(true);
+        model.update(state(PipelineStatus.RUNNING, old1, old2), List.of(old1, old2));
+
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.checking", 1, 2), model.progressText());
+        assertEquals(0.5, model.prepareFraction());
+    }
+
+    @Test
     public void aPreparedPlanCanBeCopiedOrPreparedAgain() throws IOException {
         PlanViewModel model = prepared(false, item("a.jpg", 1));
 

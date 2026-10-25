@@ -74,8 +74,35 @@ public final class PlanViewModel {
     /** CONFLICTS: the files to copy whose target already exists (spec conflict-check §5). */
     public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS, CONFLICTS }
 
-    /** The steps of a preparation: listing the source (total unknown), analysing the files, computing the resume point. */
-    public enum PrepareStage { LISTING, ANALYSING, RESOLVING }
+    /**
+     * The steps of a preparation: listing the source (total unknown), analysing the files, checking the targets still
+     * queued once every file is analysed (the destination slower than the source), computing the resume point.
+     */
+    public enum PrepareStage { LISTING, ANALYSING, CHECKING, RESOLVING }
+
+    /** The target checks of some files: done, and under way (waiting for the destination disk, or checking). */
+    private record Checks(int done, int pending) {
+        static Checks of(Collection<WorkItemExecution> rows) {
+            int done = 0;
+            int pending = 0;
+            for (WorkItemExecution item : rows) {
+                if (item.isTargetCheckPending()) {
+                    pending++;
+                } else if (item.getTargetCheck() != null) {
+                    done++;
+                }
+            }
+            return new Checks(done, pending);
+        }
+
+        int total() {
+            return done + pending;
+        }
+
+        double fraction() {
+            return (double) done / total();
+        }
+    }
 
     /** A progress without known end (the value of JavaFX's {@code ProgressBar.INDETERMINATE_PROGRESS}). */
     public static final double INDETERMINATE = -1;
@@ -351,7 +378,7 @@ public final class PlanViewModel {
     /** What the rows give, in one pass over them (see {@link #derived}). */
     private record Derived(Plan.Counts counts, int copied, int prepared, int analysedOfListed, int skippedByResumePoint,
                            int conflictsSame, int conflictsDifferent, boolean conflictsFull,
-                           int written, long writtenBytes, Progress progress) {
+                           int written, long writtenBytes, Progress progress, Checks checks) {
     }
 
     private Derived derived() {
@@ -401,7 +428,7 @@ public final class PlanViewModel {
             }
         }
         return new Derived(Plan.Counts.of(items), copied, prepared, analysedOfListed, skippedByResumePoint,
-                same, different, full, written, writtenBytes, computeProgress());
+                same, different, full, written, writtenBytes, computeProgress(), Checks.of(items));
     }
 
     /** A manual resume point, already applied with {@code Plan.preview}: shown on the resume line and executed. */
@@ -928,18 +955,35 @@ public final class PlanViewModel {
         if (listing) {
             return PrepareStage.LISTING;
         }
-        return preparedCount() < items.size() ? PrepareStage.ANALYSING : PrepareStage.RESOLVING;
+        if (preparedCount() < items.size()) {
+            return PrepareStage.ANALYSING;
+        }
+        return derived().checks().pending() > 0 ? PrepareStage.CHECKING : PrepareStage.RESOLVING;
     }
 
     /**
-     * The bar of the preparation: the analysed share of the listed files, {@link #INDETERMINATE} otherwise; in
-     * {@link Phase#ANALYSING}, the analysed share of the files selected again.
+     * The bar of the preparation: the analysed share of the listed files, then the checked share of the targets to
+     * check, {@link #INDETERMINATE} otherwise; in {@link Phase#ANALYSING}, the same for the files selected again.
      */
     public double prepareFraction() {
         if (phase == Phase.ANALYSING) {
-            return (double) analysedCount() / analysing.size();
+            Checks checks = checksAfterAnalysingAgain();
+            return checks != null ? checks.fraction() : (double) analysedCount() / analysing.size();
         }
-        return prepareStage() == PrepareStage.ANALYSING ? (double) preparedCount() / items.size() : INDETERMINATE;
+        return switch (prepareStage()) {
+            case ANALYSING -> (double) preparedCount() / items.size();
+            case CHECKING -> derived().checks().fraction();
+            case LISTING, RESOLVING -> INDETERMINATE;
+        };
+    }
+
+    /** Every file selected again analysed but some of their targets still being checked: those checks; else null. */
+    private Checks checksAfterAnalysingAgain() {
+        if (analysedCount() < analysing.size()) {
+            return null;
+        }
+        Checks checks = Checks.of(analysing);
+        return checks.pending() > 0 ? checks : null;
     }
 
     /** Among the files being analysed, those no longer deferred (analysed, or failed). */
@@ -1053,18 +1097,22 @@ public final class PlanViewModel {
 
     /**
      * "12 / 40 files, 1.2 GB / 3.5 GB"; while preparing, its step: "Listing the source… 120 files",
-     * "Analysing the files… 40 / 120", "Computing the resume point…".
+     * "Analysing the files… 40 / 120", "Checking the targets… 90 / 120", "Computing the resume point…".
      */
     public String progressText() {
         if (phase == Phase.PREPARING) {
             return switch (prepareStage()) {
                 case LISTING -> ResourcesEngine.getString("plan.preparing", items.size());
                 case ANALYSING -> ResourcesEngine.getString("plan.analysing", preparedCount(), items.size());
+                case CHECKING -> ResourcesEngine.getString("plan.checking", derived().checks().done(),
+                        derived().checks().total());
                 case RESOLVING -> ResourcesEngine.getString("plan.resolving");
             };
         }
         if (phase == Phase.ANALYSING) {
-            return ResourcesEngine.getString("plan.analysing-again", analysedCount(), analysing.size());
+            Checks checks = checksAfterAnalysingAgain();
+            return checks != null ? ResourcesEngine.getString("plan.checking", checks.done(), checks.total())
+                    : ResourcesEngine.getString("plan.analysing-again", analysedCount(), analysing.size());
         }
         Progress p = progress();
         return ResourcesEngine.getString("plan.progress", p.doneFiles(), p.totalFiles(),
