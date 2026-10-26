@@ -29,7 +29,8 @@ final class FileComparison {
     /** sizeAndDate: FAT (memory cards) stores modification times with a 2 s resolution. */
     static final Duration DATE_TOLERANCE = Duration.ofSeconds(2);
 
-    private static final int BUFFER_SIZE = 8192;
+    /** Large reads, as for the copy (see SafeFileWriter): the read-back or the hash of a target may cross a network. */
+    private static final int BUFFER_SIZE = 1 << 20;
 
     private FileComparison() {
     }

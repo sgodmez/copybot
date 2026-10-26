@@ -60,7 +60,11 @@ final class SafeFileWriter {
     /** A file name limit: 255 bytes (ext4...) or 255 UTF-16 units (NTFS); the UTF-8 length bounds both. */
     static final int MAX_NAME_BYTES = 255;
 
-    private static final int BUFFER_SIZE = 8192;
+    /**
+     * Each write reaches the channel unbuffered: on a network share, 8 KB writes capped a gigabit link at
+     * 7 MB/s per copy, 1 MB ones reach 100 MB/s (measured towards a NAS over SMB).
+     */
+    private static final int BUFFER_SIZE = 1 << 20;
 
     /** What was copied: the number of bytes and their SHA-256, hex-encoded. */
     record Written(long size, String sha256) {

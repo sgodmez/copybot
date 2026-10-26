@@ -98,8 +98,8 @@ public class FileWriteActionTest {
 
     @Test
     public void progressPercentsAreProportionalNotZero() throws IOException {
-        // 2 buffers of 8192: first update must report 50, not 0 (integer-division regression)
-        byte[] content = new byte[16384];
+        // 2 buffers of 1 MB: first update must report 50, not 0 (integer-division regression)
+        byte[] content = new byte[2 << 20];
         WorkItem item = itemWithContent("src4.bin", content);
         Path target = tempDir.resolve("progress.bin");
 
