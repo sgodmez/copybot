@@ -47,8 +47,9 @@ class UpdateApplyTest {
                         Path.of("Copybot.exe"), Path.of("logs"), Path.of("my config.json")).subList(18, 20));
     }
 
-    /** The PowerShell of the system, never one found first in the PATH. */
+    /** The PowerShell of the system, never one found first in the PATH (a Windows path: the update is Windows only). */
     @Test
+    @EnabledOnOs(OS.WINDOWS)
     void scriptCommandStartsWithTheFullPathOfPowerShell() {
         Path powershell = UpdateApply.powershell();
         assertTrue(powershell.isAbsolute(), powershell.toString());
