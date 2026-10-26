@@ -32,10 +32,13 @@ s'il n'utilise rien de nouveau. Steven veut une version d'API des plugins distin
   changement. (Le constructeur vérifie comment la poser avec maven-compiler-plugin 3.16 : paramètre dédié ou argument
   `--module-version` ; elle doit apparaître dans `jar --describe-module` du moteur et dans le `requires` compilé d'un
   plugin.)
-- Sémantique : **mineur** quand l'API exportée gagne quelque chose (les plugins existants restent compatibles),
-  **majeur** quand quelque chose est retiré ou modifié, ou quand un type existant gagne un membre **abstrait**
-  (méthode d'interface sans `default`, méthode abstraite, élément d'annotation sans valeur par défaut : un ancien
-  plugin qui l'implémente ne l'a pas). Passer une méthode de `default` à abstraite est cassant ; l'inverse non.
+- Sémantique (la question : un plugin existant marche-t-il sans être touché ?) : **mineur** quand l'API gagne
+  quelque chose de **facultatif**, que les plugins existants peuvent ignorer ; **majeur** quand quelque chose est
+  retiré ou modifié, ou quand l'API ajoute une **obligation** pour les plugins : un type existant gagne un membre
+  **abstrait** (méthode d'interface sans `default`, méthode abstraite, élément d'annotation sans valeur par défaut :
+  un ancien plugin qui l'implémente ne l'a pas), une méthode `default` devient abstraite (l'inverse n'est pas
+  cassant), ou une obligation invisible dans les signatures (clé à déclarer, appel à faire, contrat décrit seulement
+  dans la javadoc), que le test ne voit pas et qui se relève à la main.
 - Le plugin intégré (`file.read`, `file.write`) porte la version d'API : un `version` épinglé sur une étape
   intégrée d'un pipeline est une version d'API.
 - Surface d'API = les packages exportés **sans restriction** par `copybot-engine` (`com.copybot.plugin.api.*`,

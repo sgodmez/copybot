@@ -233,14 +233,19 @@ the plugin API version. The built-in actions (`file.read`, `file.write`) are
 reported with the API version too: a `version` pinned on an embedded step of
 a pipeline is an API version.
 
-**When to raise the API version:** the minor (`1.0` → `1.1`) when the API
-gains something that existing plugins need not know (a type, a field, a
-constructor, a concrete or `default` method…: they still run), the major
-(`1.4` → `2.0`) when something is removed or changed, or when a type that
-plugins implement or extend gains an **abstract** member (an interface method
-without `default`, an abstract method, an annotation element without default
-value): an old plugin implementing it lacks the member. Turning a `default`
-method abstract is breaking too; turning an abstract method `default` is not.
+**When to raise the API version:** the question is whether an existing plugin
+still works untouched.
+
+- **Minor** (`1.0` → `1.1`): the API gains something **optional**, which
+  existing plugins may ignore. Examples: a new type, a field, a constructor, a
+  concrete or `default` method, an annotation element with a default value.
+  Only a plugin that uses the novelty needs the new API, and it records it.
+- **Major** (`1.4` → `2.0`): the API **removes or changes** something, or adds
+  something **mandatory** for plugins. Mandatory means something an existing
+  plugin does not provide: a type that plugins implement or extend gains an
+  abstract member (an interface method without `default`, an abstract method),
+  an annotation gains an element without a default value, a `default` method
+  becomes abstract. Turning an abstract method `default` is not breaking.
 
 You cannot forget: the `PluginApiFingerprintTest` of `copybot-engine`
 compares the API with its committed fingerprint,
@@ -266,12 +271,20 @@ diff it prints, when the change is not one plugins can see, such as a JDK
 that prints signatures differently, interfaces listed in another order, or an
 abstract method made `default`.
 
-The fingerprint only sees signatures. Raise the version **by hand** (minor or
-major as above) for what it does not see: the value of a `static final`
-constant (javac copies it into the plugins), the `@Retention` or `@Target` of
-an annotation (its elements and their default values are in the fingerprint), a `sealed` type's `permits`, a change of
-behaviour behind an unchanged signature, and an upgrade of Gson (the engine
-`requires transitive com.google.gson`, and `JsonElement` is in signatures).
+The fingerprint only sees signatures. Raise the version **by hand**, with the
+same rule, for what it does not see:
+
+- **Any new obligation for plugins that signatures do not show: major.** For
+  example, the engine now requires a plugin to declare a key, to call a
+  method, or to follow a contract written only in the javadoc.
+- A change of behaviour behind an unchanged signature: major if existing
+  plugins can break, minor otherwise.
+- The value of a `static final` constant (javac copies it into the plugins).
+- The `@Retention` or `@Target` of an annotation (its elements and their
+  default values are in the fingerprint).
+- A `sealed` type's `permits`.
+- An upgrade of Gson (the engine `requires transitive com.google.gson`, and
+  `JsonElement` is in signatures).
 
 The [`copybot-plugin-demo`](copybot-plugin-demo) modules are worked examples:
 a standard module plugin, the same plugin built on an older library, a
