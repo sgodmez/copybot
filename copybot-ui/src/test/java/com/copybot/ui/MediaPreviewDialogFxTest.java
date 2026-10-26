@@ -86,6 +86,10 @@ public class MediaPreviewDialogFxTest {
         Path missing = dir.resolve("c.jpg");
         Path corrupt = Files.write(dir.resolve("d.jpg"), new byte[]{(byte) 0xFF, (byte) 0xD8, 1, 2, 3});
         Path video = Files.write(dir.resolve("e.mp4"), new byte[]{0, 1, 2, 3, 4, 5, 6, 7});
+        // without a codec (GStreamer missing on a Linux runner) the damaged video neither plays nor fails: the load
+        // timeout gives up, well before settled() stops waiting
+        javafx.util.Duration timeout = MediaPreviewDialog.loadTimeout;
+        MediaPreviewDialog.loadTimeout = javafx.util.Duration.seconds(3);
         MediaPreviewDialog dialog = onFx(() -> MediaPreviewDialog.show(null, IDLE, List.of(png, raw, missing, corrupt, video), 0));
         try {
             assertEquals("preview-image", settled(dialog));
@@ -109,6 +113,7 @@ public class MediaPreviewDialogFxTest {
             });
             assertEquals(4, onFx(dialog::index));
         } finally {
+            MediaPreviewDialog.loadTimeout = timeout;
             onFx(() -> {
                 dialog.close();
                 return null;

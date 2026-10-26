@@ -24,6 +24,7 @@ import javafx.scene.layout.Priority;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.animation.PauseTransition;
 import javafx.scene.media.Media;
 import javafx.scene.media.MediaPlayer;
 import javafx.scene.media.MediaView;
@@ -59,6 +60,12 @@ final class MediaPreviewDialog {
     private static final String BUSY = "preview-busy";
     private static final String MESSAGE_STYLE = "-fx-text-fill: #e5e7eb; -fx-font-size: 14px;";
 
+    /**
+     * How long a video or a sound may take to be ready: without a codec (GStreamer missing on Linux) the player
+     * neither gets ready nor fails, and the preview would load forever. Visible for tests.
+     */
+    static Duration loadTimeout = Duration.seconds(10);
+
     /** The preview window open, if any: a new preview shows its files there instead of opening another one. */
     private static MediaPreviewDialog open;
     /** A collection is requested and not run yet: the media dropped meanwhile are closed by it too. */
@@ -89,6 +96,8 @@ final class MediaPreviewDialog {
     private MediaPlayer player;
     /** The view of the video playing: while it shows the player, a disposed player still keeps the file open. */
     private MediaView video;
+    /** Gives up on the video or sound being loaded when it is still not ready after {@link #loadTimeout}. */
+    private PauseTransition loading;
     /**
      * Each file shown has a new one, closing drops it: what is read in the background for an earlier file, or
      * after the window is closed, is released instead of shown.
@@ -334,6 +343,15 @@ final class MediaPreviewDialog {
                 failed(played.getError());
             }
         });
+        Duration timeout = loadTimeout;
+        loading = new PauseTransition(timeout);
+        loading.setOnFinished(e -> {
+            if (player == played) {
+                release();
+                message(FAILED, ResourcesEngine.getString("preview.load-timeout", Math.round(timeout.toSeconds())));
+            }
+        });
+        loading.play();
         Button toggle = new Button(ResourcesEngine.getString("preview.pause"));
         toggle.setOnAction(e -> togglePlay());
         played.statusProperty().addListener((obs, old, status) -> toggle.setText(ResourcesEngine.getString(
@@ -363,6 +381,7 @@ final class MediaPreviewDialog {
         // shown once readable: a file it cannot decode fails before, and says so instead
         played.setOnReady(() -> {
             if (player == played) {
+                stopLoading();
                 playback.getChildren().setAll(toggle, seek, time);
                 center.getChildren().setAll(shown);
             }
@@ -412,8 +431,16 @@ final class MediaPreviewDialog {
         }
     }
 
+    private void stopLoading() {
+        if (loading != null) {
+            loading.stop();
+            loading = null;
+        }
+    }
+
     /** Stops the video or sound shown, if any, and releases its file. */
     private void release() {
+        stopLoading();
         playback.getChildren().clear();
         if (image != null) {
             image.cancel(); // when still decoding (going quickly through large photos)
