@@ -42,6 +42,16 @@ public final class UpdateService {
         void checked(Instant when);
     }
 
+    /**
+     * The plugins updated with the application (spec update-with-plugins §1): called in the temporary folder of the
+     * update once the application is downloaded (and unpacked), it puts the plugins there.
+     */
+    @FunctionalInterface
+    public interface PluginStep {
+        /** @return the manifest of the plugin mode written in {@code tempDir}, null when no plugin is to update */
+        Path prepare(Path tempDir) throws UpdateException, InterruptedException;
+    }
+
     /** Starts the process applying the update, without waiting for it. */
     public interface Launcher {
         void start(List<String> command) throws IOException;
@@ -123,7 +133,7 @@ public final class UpdateService {
                 System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows"),
                 UpdateService::systemProcesses, AppFolders::isWritable);
         return new UpdateService(UpdateCheck.httpClient(), UpdateCheck.LATEST, currentVersion, host, logDir, null,
-                Clock.systemUTC(), new PreferencesSettings(), busy, UpdateService::startDetached);
+                Clock.systemUTC(), new PreferencesSettings(currentVersion), busy, UpdateService::startDetached);
     }
 
     public String currentVersion() {
@@ -316,6 +326,16 @@ public final class UpdateService {
      */
     public Prepared prepare(Release release, LongConsumer progress, BooleanSupplier cancelled)
             throws UpdateException, InterruptedException {
+        return prepare(release, progress, cancelled, temp -> null);
+    }
+
+    /**
+     * Like {@link #prepare(Release, LongConsumer, BooleanSupplier)}, with the plugins of {@code plugins} in the same
+     * temporary folder: when it writes a manifest, the script applies the application then the plugins (the installer
+     * included, run by the script); otherwise the command is the one without plugins.
+     */
+    public Prepared prepare(Release release, LongConsumer progress, BooleanSupplier cancelled, PluginStep plugins)
+            throws UpdateException, InterruptedException {
         Optional<String> blocked = installBlocked().or(this::otherInstance);
         if (blocked.isPresent()) {
             throw new UpdateException(blocked.get());
@@ -329,9 +349,12 @@ public final class UpdateService {
             Path file = Download.fetch(client, asset, temp, progress, cancelled);
             Prepared prepared;
             if (installMode() == InstallMode.INSTALLED) {
-                prepared = new Prepared(temp, UpdateApply.setupCommand(file));
+                Path manifest = plugins.prepare(temp);
+                prepared = new Prepared(temp, manifest == null ? UpdateApply.setupCommand(file)
+                        : installerWithPlugins(file, manifest, temp));
             } else {
-                prepared = new Prepared(temp, portable(file, temp));
+                Path unzipped = unzip(file, temp);
+                prepared = new Prepared(temp, portable(unzipped, plugins.prepare(temp), temp));
             }
             done = true;
             return prepared;
@@ -342,17 +365,34 @@ public final class UpdateService {
         }
     }
 
-    private List<String> portable(Path zip, Path temp) throws UpdateException {
-        Path unzipped;
+    private static Path unzip(Path zip, Path temp) throws UpdateException {
         try {
-            unzipped = UpdateApply.extractPortable(zip, temp);
+            return UpdateApply.extractPortable(zip, temp);
         } catch (IOException e) {
             throw new UpdateException("update.error.zip", UpdateCheck.message(e));
         }
+    }
+
+    /** The command of the portable copy, with the plugins of {@code manifest} when it is not null. */
+    private List<String> portable(Path unzipped, Path manifest, Path temp) throws UpdateException {
         try {
             requireDirectlyIn(unzipped, temp); // the script deletes the parent of the copy: its own folder only
             Path script = UpdateApply.writeScript(temp);
-            return UpdateApply.scriptCommand(script, host.pid(), exe.getParent(), unzipped, exe, logDir,
+            return manifest == null
+                    ? UpdateApply.scriptCommand(script, host.pid(), exe.getParent(), unzipped, exe, logDir,
+                    host.configFile())
+                    : UpdateApply.scriptCommand(script, host.pid(), exe.getParent(), unzipped, manifest, exe, logDir,
+                    host.configFile());
+        } catch (IOException e) {
+            throw new UpdateException("update.error.io", UpdateCheck.message(e));
+        }
+    }
+
+    /** The command of the installed copy with plugins: the script runs the installer, then copies the plugins. */
+    private List<String> installerWithPlugins(Path setup, Path manifest, Path temp) throws UpdateException {
+        try {
+            Path script = UpdateApply.writeScript(temp);
+            return UpdateApply.installerScriptCommand(script, host.pid(), exe.getParent(), setup, manifest, exe, logDir,
                     host.configFile());
         } catch (IOException e) {
             throw new UpdateException("update.error.io", UpdateCheck.message(e));
@@ -409,7 +449,8 @@ public final class UpdateService {
                 .start();
     }
 
-    private static final class PreferencesSettings implements Settings {
+    /** The date of the last check is this version's own: a new version checks at its first start. */
+    private record PreferencesSettings(String version) implements Settings {
         @Override
         public boolean autoCheck() {
             return UiPreferences.updateCheck();
@@ -417,12 +458,12 @@ public final class UpdateService {
 
         @Override
         public Optional<Instant> lastCheck() {
-            return UiPreferences.updateLastCheck();
+            return UiPreferences.updateLastCheck(version);
         }
 
         @Override
         public void checked(Instant when) {
-            UiPreferences.saveUpdateLastCheck(when);
+            UiPreferences.saveUpdateLastCheck(when, version);
         }
     }
 }

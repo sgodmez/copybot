@@ -128,7 +128,7 @@ public class MainController {
 
     /**
      * Shows the banner of a newer release (spec app-update §3) and of the plugin updates (spec plugin-install §5),
-     * unless closed this session. With a release its button updates Copybot (the application first), disabled with
+     * unless closed this session. With a release its button updates Copybot and its plugins at once, disabled with
      * the reason while an operation runs, and outside Windows; with plugin updates only, it opens the Plugins window
      * with these updates chosen.
      */
@@ -158,6 +158,11 @@ public class MainController {
 
     @FXML
     protected void onUpdateInstallClick() {
+        installOffered();
+    }
+
+    /** What the button of the banner does, also offered by the preferences: update, or show the plugin updates. */
+    void installOffered() {
         var release = UpdateUi.offered();
         if (release.isPresent()) {
             UpdateUi.install(release.get());

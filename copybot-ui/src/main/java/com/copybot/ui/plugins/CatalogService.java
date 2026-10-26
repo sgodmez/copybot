@@ -39,7 +39,11 @@ public final class CatalogService implements PluginService.Catalogs {
      * and deletes the file.
      */
     public PluginCatalog fetch(Path dir) throws UpdateException, InterruptedException {
-        Release release = new UpdateCheck(client, latest, currentVersion).fetchLatest();
+        return fetch(new UpdateCheck(client, latest, currentVersion).fetchLatest(), dir);
+    }
+
+    /** The catalogue of this release: the one an application update installs (spec update-with-plugins §1). */
+    public PluginCatalog fetch(Release release, Path dir) throws UpdateException, InterruptedException {
         Release.Asset asset = release.asset(CATALOGUE).orElseThrow(() -> new UpdateException("plugins.error.no-catalogue"));
         Path file = Download.fetch(client, asset, dir, n -> { }, () -> false);
         try {

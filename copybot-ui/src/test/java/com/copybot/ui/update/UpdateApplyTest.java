@@ -396,6 +396,155 @@ class UpdateApplyTest {
         awaitFile(witness);
     }
 
+    @Test
+    void combinedCommandsAddTheManifestToTheApplicationMode() {
+        String powershell = UpdateApply.powershell().toString();
+        List<String> head = List.of(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                "-File", "s.ps1", "-ProcessId", "42", "-AppDir", "app");
+        List<String> tail = List.of("-Exe", "Copybot.exe", "-LogDir", "logs");
+        assertEquals(concat(head, List.of("-NewDir", "new", "-PluginManifest", "m.json"), tail),
+                UpdateApply.scriptCommand(Path.of("s.ps1"), 42L, Path.of("app"), Path.of("new"), Path.of("m.json"),
+                        Path.of("Copybot.exe"), Path.of("logs"), null));
+        assertEquals(concat(head, List.of("-Installer", "setup.exe", "-PluginManifest", "m.json"), tail),
+                UpdateApply.installerScriptCommand(Path.of("s.ps1"), 42L, Path.of("app"), Path.of("setup.exe"),
+                        Path.of("m.json"), Path.of("Copybot.exe"), Path.of("logs"), null));
+    }
+
+    /** Portable copy and its plugins in one run: the application image, then the plugins, then one relaunch. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void thePortableUpdateAlsoUpdatesThePlugins() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/gps-zone/g.jar"), "old");
+        Path upd = dir.resolve("upd");
+        Path nd = upd.resolve("Copybot");
+        write(nd.resolve("app/a.jar"), "v2-new");
+        write(nd.resolve("Copybot.exe"), "exe2-new");
+        write(upd.resolve("gps-zone/g.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("gps-zone"))
+                + ",\"target\":\"gps-zone\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+
+        runScript(UpdateApply.scriptCommand(UpdateApply.writeScript(upd), endedPid(), app, nd, manifest,
+                fakeExe(witness), dir.resolve("log"), null));
+
+        assertEquals("v2-new", Files.readString(app.resolve("app/a.jar")));
+        assertEquals("new-jar", Files.readString(app.resolve("plugins/gps-zone/g.jar")));
+        assertEquals("c", Files.readString(app.resolve("config.json")));
+        awaitFile(witness);
+        awaitRemoved(upd);
+    }
+
+    /** A failed copy of the application leaves the plugins as they were: they may need the new application. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aFailedApplicationCopyLeavesThePlugins() throws Exception {
+        Path app = dir.resolve("inst");
+        write(app.resolve("app"), "a file where the folder should be: robocopy fails");
+        write(app.resolve("Copybot.exe"), "exe1");
+        write(app.resolve("plugins/gps-zone/g.jar"), "old");
+        Path upd = dir.resolve("upd");
+        Path nd = upd.resolve("Copybot");
+        write(nd.resolve("app/a.jar"), "v2-new");
+        write(nd.resolve("Copybot.exe"), "exe2-new");
+        write(upd.resolve("gps-zone/g.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("gps-zone"))
+                + ",\"target\":\"gps-zone\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path logDir = dir.resolve("log");
+
+        runScript(UpdateApply.scriptCommand(UpdateApply.writeScript(upd), endedPid(), app, nd, manifest,
+                fakeExe(witness), logDir, null));
+
+        assertEquals("old", Files.readString(app.resolve("plugins/gps-zone/g.jar")));
+        awaitFile(witness);
+        assertTrue(Files.readString(logDir.resolve("update.log")).contains("not applied"));
+    }
+
+    /** Installed copy and its plugins: the script runs the installer silently, then copies the plugins, then relaunches. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void theInstallerRunsThenThePluginsAreUpdated() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/gps-zone/g.jar"), "old");
+        Path upd = dir.resolve("upd");
+        Path ran = dir.resolve("installer-ran.txt");
+        Path setup = fakeInstaller(upd, ran, 0);
+        write(upd.resolve("gps-zone/g.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("gps-zone"))
+                + ",\"target\":\"gps-zone\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path config = dir.resolve("my data/config.json");
+
+        runScript(UpdateApply.installerScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, setup, manifest,
+                fakeExe(witness), dir.resolve("log"), config));
+
+        String args = Files.readString(ran);
+        assertTrue(args.contains("/SILENT /SUPPRESSMSGBOXES /NORESTART"), args);
+        assertFalse(args.contains("/RELAUNCH"), "the script relaunches, not the installer: " + args);
+        assertEquals("new-jar", Files.readString(app.resolve("plugins/gps-zone/g.jar")));
+        awaitFile(witness);
+        assertTrue(Files.readString(witness).contains("--config-file=" + config), Files.readString(witness));
+        awaitRemoved(upd);
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aFailedInstallerLeavesThePlugins() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/gps-zone/g.jar"), "old");
+        Path upd = dir.resolve("upd");
+        Path setup = fakeInstaller(upd, dir.resolve("installer-ran.txt"), 5);
+        write(upd.resolve("gps-zone/g.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("gps-zone"))
+                + ",\"target\":\"gps-zone\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path logDir = dir.resolve("log");
+
+        runScript(UpdateApply.installerScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, setup, manifest,
+                fakeExe(witness), logDir, null));
+
+        assertEquals("old", Files.readString(app.resolve("plugins/gps-zone/g.jar")));
+        awaitFile(witness);
+        assertTrue(Files.readString(logDir.resolve("update.log")).contains("Installer ended (code 5)"));
+    }
+
+    /** Only an installer of the folder of the script (the temporary folder of the update) is ever run. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void anInstallerOutsideTheScriptFolderIsRefused() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/gps-zone/g.jar"), "old");
+        Path upd = dir.resolve("upd");
+        Path ran = dir.resolve("installer-ran.txt");
+        Path elsewhere = fakeInstaller(dir.resolve("elsewhere"), ran, 0);
+        write(upd.resolve("gps-zone/g.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("gps-zone"))
+                + ",\"target\":\"gps-zone\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path logDir = dir.resolve("log");
+
+        runScript(UpdateApply.installerScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, elsewhere,
+                manifest, fakeExe(witness), logDir, null));
+
+        assertFalse(Files.exists(ran), "never run");
+        assertEquals("old", Files.readString(app.resolve("plugins/gps-zone/g.jar")));
+        awaitFile(witness);
+        assertTrue(Files.readString(logDir.resolve("update.log")).contains("refused"));
+    }
+
+    /** A batch file standing for the installer: writes its arguments to {@code ran}, ends with {@code code}. */
+    private static Path fakeInstaller(Path folder, Path ran, int code) throws IOException {
+        Path setup = folder.resolve("copybot-9.9.9-setup.cmd");
+        write(setup, "@echo off\r\necho %*> \"" + ran + "\"\r\nexit /b " + code + "\r\n");
+        return setup;
+    }
+
+    @SafeVarargs
+    private static List<String> concat(List<String>... parts) {
+        return Stream.of(parts).flatMap(List::stream).toList();
+    }
+
     private Path fakeApp() throws IOException {
         Path app = dir.resolve("inst");
         write(app.resolve("app/a.jar"), "v1");

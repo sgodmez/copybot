@@ -104,11 +104,23 @@ public class UiPreferencesTest {
     @Test
     public void theLastUpdateCheckIsKeptToTheSecond() {
         Path file = tempDir.resolve("prefs.json");
-        assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file));
+        assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file, "0.6.0"));
 
-        UiPreferences.saveUpdateLastCheck(file, T0.plusMillis(900));
+        UiPreferences.saveUpdateLastCheck(file, T0.plusMillis(900), "0.6.0");
 
-        assertEquals(Optional.of(T0), UiPreferences.updateLastCheck(file));
+        assertEquals(Optional.of(T0), UiPreferences.updateLastCheck(file, "0.6.0"));
+    }
+
+    @Test
+    public void theLastUpdateCheckOfAnotherVersionIsIgnored() throws IOException {
+        Path file = tempDir.resolve("prefs.json");
+        UiPreferences.saveUpdateLastCheck(file, T0, "0.5.0");
+
+        assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file, "0.6.0"),
+                "the first start of a new version checks at once (the plugins it can now update)");
+
+        Files.writeString(file, "{\"updateLastCheck\": " + T0.getEpochSecond() + "}");
+        assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file, "0.6.0"), "a date without version, as before");
     }
 
     @Test

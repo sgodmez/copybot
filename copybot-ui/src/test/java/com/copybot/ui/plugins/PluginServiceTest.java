@@ -23,11 +23,13 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -75,16 +77,36 @@ public class PluginServiceTest {
     private final Settings settings = new Settings();
     private final FakeCatalogs catalogs = new FakeCatalogs();
     private PluginReport report;
+    /** The portable archive of the release 1.2.0, null when the release has no asset. */
+    private byte[] portableZip;
+
+    private static byte[] sha256(byte[] bytes) {
+        try {
+            return MessageDigest.getInstance("SHA-256").digest(bytes);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
+    }
 
     @BeforeEach
     public void start() throws IOException {
         server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
         server.createContext("/latest", exchange -> {
-            byte[] body = "{\"tag_name\": \"v1.2.0\", \"html_url\": \"https://example.com/notes\", \"assets\": []}"
-                    .getBytes(StandardCharsets.UTF_8);
+            String assets = portableZip == null ? "" : "{\"name\": \"copybot-1.2.0-windows-x64.zip\", "
+                    + "\"browser_download_url\": \"http://127.0.0.1:" + server.getAddress().getPort()
+                    + "/files/portable.zip\", \"size\": " + portableZip.length + ", \"digest\": \"sha256:"
+                    + HexFormat.of().formatHex(sha256(portableZip)) + "\"}";
+            byte[] body = ("{\"tag_name\": \"v1.2.0\", \"html_url\": \"https://example.com/notes\", \"assets\": ["
+                    + assets + "]}").getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, body.length);
             try (OutputStream out = exchange.getResponseBody()) {
                 out.write(body);
+            }
+        });
+        server.createContext("/files/", exchange -> {
+            exchange.sendResponseHeaders(200, portableZip.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(portableZip);
             }
         });
         server.start();
@@ -172,6 +194,14 @@ public class PluginServiceTest {
                 throw fetchFailure;
             }
             return PluginCatalog.parse(CATALOGUE);
+        }
+
+        final List<String> releaseFetches = new ArrayList<>();
+
+        @Override
+        public PluginCatalog fetch(com.copybot.ui.update.Release release, Path dir) throws UpdateException {
+            releaseFetches.add(release.version());
+            return fetch(dir);
         }
 
         @Override
@@ -334,6 +364,94 @@ public class PluginServiceTest {
         assertEquals("1.2.0", check.release().orElseThrow().version());
         assertEquals(1, check.pluginUpdates()); // A only: D is for another plugin API, B is up to date
         assertEquals(Optional.of(NOW), settings.last);
+    }
+
+    /**
+     * With a release, the plugins counted are those updated with it: every installed plugin with a newer version in
+     * the catalogue of that release, even one for a plugin API this version does not have (spec update-with-plugins).
+     */
+    @Test
+    public void withAReleaseTheCheckCountsThePluginsUpdatedWithIt() throws Exception {
+        report = report(installed(A, "1.0.0", pluginsDir.resolve("old-a")), installed(B, "1.0.0", pluginsDir.resolve("b")),
+                installed(D, "0.9.0", pluginsDir.resolve("d")));
+
+        PluginService.Check check = service().automaticCheck();
+
+        assertEquals("1.2.0", check.release().orElseThrow().version());
+        assertEquals(2, check.pluginUpdates()); // A, and D for the plugin API of the release
+    }
+
+    /**
+     * One temporary folder, one script: the application, then the plugins of the catalogue of the release installed
+     * (not of whatever release is the latest by then) with a newer version (spec update-with-plugins).
+     */
+    @Test
+    public void anApplicationUpdateTakesThePluginsWithIt() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+        List<String> seen = new ArrayList<>();
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { },
+                (i, n, code, bytes) -> seen.add(i + "/" + n + " " + code), () -> false);
+
+        assertEquals(List.of("1.2.0"), catalogs.releaseFetches);
+        Path temp = prepared.tempDir();
+        List<String> command = prepared.command();
+        assertEquals(temp.resolve("Copybot").toString(), command.get(command.indexOf("-NewDir") + 1));
+        JsonObject json = manifestOf(command);
+        assertEquals("a", json.getAsJsonArray("install").get(0).getAsJsonObject().get("target").getAsString());
+        assertEquals(List.of(pluginsDir.resolve("old-a").toString()),
+                json.getAsJsonArray("remove").asList().stream().map(e -> e.getAsString()).toList());
+        assertTrue(Files.isRegularFile(temp.resolve("a/a.jar")));
+        assertTrue(seen.contains("0/1 a"), seen.toString());
+    }
+
+    @Test
+    public void onlyThePluginsOfThePluginsFolderGoWithTheApplication() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        // B up to date, C not installed, D elsewhere, A without a folder of its own (never touched either)
+        report = report(installed(A, "1.0.0", null), installed(B, "1.0.0", pluginsDir.resolve("b")),
+                installed(D, "0.9.0", dir.resolve("elsewhere/d")));
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { }, (i, n, code, bytes) -> { },
+                () -> false);
+
+        assertFalse(prepared.command().contains("-PluginManifest"));
+        assertTrue(catalogs.downloads.isEmpty());
+    }
+
+    @Test
+    public void anUnreadableCatalogueUpdatesTheApplicationAlone() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+        catalogs.fetchFailure = new UpdateException("plugins.error.no-catalogue");
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { }, (i, n, code, bytes) -> { },
+                () -> false);
+
+        assertFalse(prepared.command().contains("-PluginManifest"));
+        assertTrue(prepared.command().contains("-NewDir"));
+    }
+
+    private static JsonObject manifestOf(List<String> command) throws IOException {
+        Path manifest = Path.of(command.get(command.indexOf("-PluginManifest") + 1));
+        return JsonParser.parseString(Files.readString(manifest)).getAsJsonObject();
+    }
+
+    private static byte[] zipOf(String... names) throws IOException {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (ZipOutputStream out = new ZipOutputStream(bytes)) {
+            for (String name : names) {
+                out.putNextEntry(new ZipEntry(name));
+                out.write(1);
+                out.closeEntry();
+            }
+        }
+        return bytes.toByteArray();
     }
 
     @Test

@@ -79,7 +79,29 @@ public final class UpdateApply {
      */
     public static List<String> scriptCommand(Path script, long pid, Path appDir, Path newDir, Path exe,
             Path logDir, Path configFile) {
-        return command(script, pid, appDir, "-NewDir", newDir, exe, logDir, configFile);
+        return command(script, pid, appDir, List.of("-NewDir", newDir.toString()), exe, logDir, configFile);
+    }
+
+    /**
+     * The portable update with its plugins (spec update-with-plugins §1): the application image, then, if it was
+     * copied, the plugins of the manifest, then one relaunch.
+     */
+    public static List<String> scriptCommand(Path script, long pid, Path appDir, Path newDir, Path manifest, Path exe,
+            Path logDir, Path configFile) {
+        return command(script, pid, appDir,
+                List.of("-NewDir", newDir.toString(), "-PluginManifest", manifest.toString()), exe, logDir, configFile);
+    }
+
+    /**
+     * The installed update with its plugins (spec update-with-plugins §1): the script waits for Copybot, runs the
+     * installer silently (without its relaunch), then, if it succeeded, copies the plugins of the manifest, then
+     * relaunches Copybot. Without plugins the installer runs alone ({@link #setupCommand}).
+     */
+    public static List<String> installerScriptCommand(Path script, long pid, Path appDir, Path setupExe, Path manifest,
+            Path exe, Path logDir, Path configFile) {
+        return command(script, pid, appDir,
+                List.of("-Installer", setupExe.toString(), "-PluginManifest", manifest.toString()), exe, logDir,
+                configFile);
     }
 
     /**
@@ -91,16 +113,17 @@ public final class UpdateApply {
      */
     public static List<String> pluginScriptCommand(Path script, long pid, Path appDir, Path manifest, Path exe,
             Path logDir, Path configFile) {
-        return command(script, pid, appDir, "-PluginManifest", manifest, exe, logDir, configFile);
+        return command(script, pid, appDir, List.of("-PluginManifest", manifest.toString()), exe, logDir, configFile);
     }
 
-    /** The command common to both modes: {@code modeFlag modePath} sits between the application folder and the exe. */
-    private static List<String> command(Path script, long pid, Path appDir, String modeFlag, Path modePath, Path exe,
+    /** The command common to every mode: {@code mode} (its flags and paths) sits between the application folder and the exe. */
+    private static List<String> command(Path script, long pid, Path appDir, List<String> mode, Path exe,
             Path logDir, Path configFile) {
         List<String> command = new ArrayList<>(List.of(powershell().toString(), "-NoProfile", "-ExecutionPolicy",
                 "Bypass", "-WindowStyle", "Hidden", "-File", script.toString(),
-                "-ProcessId", Long.toString(pid), "-AppDir", appDir.toString(), modeFlag, modePath.toString(),
-                "-Exe", exe.toString(), "-LogDir", logDir.toString()));
+                "-ProcessId", Long.toString(pid), "-AppDir", appDir.toString()));
+        command.addAll(mode);
+        command.addAll(List.of("-Exe", exe.toString(), "-LogDir", logDir.toString()));
         if (configFile != null) {
             command.addAll(List.of("-ConfigFile", configFile.toString()));
         }

@@ -35,8 +35,11 @@
          <children>
             <Button fx:id="updateCheckButton" mnemonicParsing="false" onAction="#onUpdateCheckClick" text="%update.check-now" />
             <Label fx:id="updateResultLabel" maxWidth="1.7976931348623157E308" wrapText="true" HBox.hgrow="ALWAYS" />
+            <!-- shown when an update is offered: the button of the banner (spec update-with-plugins §3) -->
+            <Button fx:id="updateInstallButton" managed="false" mnemonicParsing="false" onAction="#onUpdateInstallClick" visible="false" />
          </children>
       </HBox>
+      <Label fx:id="updateReasonLabel" managed="false" visible="false" wrapText="true" style="-fx-text-fill: #616161;" />
       <Separator />
       <HBox alignment="CENTER_RIGHT" spacing="10.0">
          <children>

@@ -31,6 +31,7 @@ public final class UiPreferences {
     static final String RECENTS_KEY = "recentPipelines";
     private static final String UPDATE_CHECK_KEY = "updateCheck";
     private static final String UPDATE_LAST_CHECK_KEY = "updateLastCheck";
+    private static final String UPDATE_LAST_CHECK_VERSION_KEY = "updateLastCheckVersion";
 
     /** The prefs.json in use; null until {@link #use(Path)}. */
     private static volatile Path file;
@@ -136,13 +137,17 @@ public final class UiPreferences {
         saveUpdateCheck(file, enabled);
     }
 
-    /** When the last check for a new version ended, successful or not; empty when never. */
-    public static Optional<Instant> updateLastCheck() {
-        return updateLastCheck(file);
+    /**
+     * When this version last checked for a new version, successful or not; empty when never, or when the date was
+     * recorded by another version (spec update-with-plugins §2: a new version checks at its first start, its plugins
+     * may have updates the previous one could not take).
+     */
+    public static Optional<Instant> updateLastCheck(String version) {
+        return updateLastCheck(file, version);
     }
 
-    public static void saveUpdateLastCheck(Instant when) {
-        saveUpdateLastCheck(file, when);
+    public static void saveUpdateLastCheck(Instant when, String version) {
+        saveUpdateLastCheck(file, when, version);
     }
 
     static boolean updateCheck(Path prefsFile) {
@@ -155,8 +160,12 @@ public final class UiPreferences {
         write(prefsFile, UPDATE_CHECK_KEY, new JsonPrimitive(enabled));
     }
 
-    static Optional<Instant> updateLastCheck(Path prefsFile) {
-        JsonElement value = read(prefsFile).get(UPDATE_LAST_CHECK_KEY);
+    static Optional<Instant> updateLastCheck(Path prefsFile, String version) {
+        JsonObject preferences = read(prefsFile);
+        if (!string(preferences, UPDATE_LAST_CHECK_VERSION_KEY).equals(Optional.of(version))) {
+            return Optional.empty();
+        }
+        JsonElement value = preferences.get(UPDATE_LAST_CHECK_KEY);
         if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
             return Optional.empty();
         }
@@ -167,8 +176,9 @@ public final class UiPreferences {
         }
     }
 
-    static void saveUpdateLastCheck(Path prefsFile, Instant when) {
+    static void saveUpdateLastCheck(Path prefsFile, Instant when, String version) {
         write(prefsFile, UPDATE_LAST_CHECK_KEY, new JsonPrimitive(when.getEpochSecond()));
+        write(prefsFile, UPDATE_LAST_CHECK_VERSION_KEY, new JsonPrimitive(version));
     }
 
     private static Optional<String> string(JsonObject preferences, String key) {

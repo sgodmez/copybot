@@ -34,6 +34,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.LongConsumer;
 import java.util.stream.Collectors;
 
 /**
@@ -150,12 +151,19 @@ final class UpdateUi {
     /**
      * The "Update" button: refused while an operation runs, and with a message while another Copybot runs from the
      * same folder; a warning when Windows will ask for an administrator's approval; then the usual exit questions
-     * (unsaved pipelines, a refusal cancels everything), the download with its window, the launch of the installer
-     * or of the script, and the usual exit, which only then closes the editors. A failure or a cancel deletes the
-     * download and Copybot goes on with its editors untouched.
+     * (unsaved pipelines, a refusal cancels everything), the download with its window (the application, then the
+     * installed plugins with a newer version: spec update-with-plugins), the launch of the installer or of the script,
+     * and the usual exit, which only then closes the editors. A failure or a cancel deletes the download and Copybot
+     * goes on with its editors untouched.
      */
     static void install(Release release) {
-        if (service == null || service.installBlocked().isPresent()) {
+        if (service == null) {
+            return;
+        }
+        Optional<String> blocked = service.installBlocked();
+        if (blocked.isPresent()) {
+            // e.g. a run started while the preferences offering the update were open
+            inform(CopybotMainUi.STAGE, "update.title", ResourcesEngine.getString(blocked.get()));
             return;
         }
         Optional<String> otherInstance = service.otherInstance();
@@ -178,7 +186,7 @@ final class UpdateUi {
         AtomicBoolean pending = new AtomicBoolean();
         Background.run(() -> {
                     long size = release.asset(service.assetName(release)).map(Release.Asset::size).orElse(0L);
-                    UpdateService.Prepared prepared = service.prepare(release, bytes -> {
+                    LongConsumer appProgress = bytes -> {
                         received.set(bytes);
                         if (pending.compareAndSet(false, true)) {
                             Platform.runLater(() -> {
@@ -186,7 +194,19 @@ final class UpdateUi {
                                 progress.bar.setProgress(size > 0 ? (double) received.get() / size : -1);
                             });
                         }
-                    }, progress.cancelled::get);
+                    };
+                    // the installed plugins with a newer version go with it: one stop, one relaunch
+                    UpdateService.Prepared prepared = plugins == null
+                            ? service.prepare(release, appProgress, progress.cancelled::get)
+                            : plugins.prepareUpdate(release, appProgress, (index, total, code, bytes) -> {
+                                if (bytes == 0) {
+                                    Platform.runLater(() -> {
+                                        progress.label.setText(ResourcesEngine.getString("plugins.downloading", code,
+                                                Integer.toString(index + 1), Integer.toString(total)));
+                                        progress.bar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+                                    });
+                                }
+                            }, progress.cancelled::get);
                     service.launch(prepared, progress.cancelled::get); // a cancel during the extraction stops it too
                     return prepared;
                 },

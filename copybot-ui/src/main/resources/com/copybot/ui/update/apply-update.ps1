@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory = $true)][string]$LogDir,
     [string]$ConfigFile,
     [string]$PluginManifest,
+    [string]$Installer,
     [switch]$CopyOnly
 )
 
@@ -18,8 +19,12 @@ param(
 # { "install": [ { "source", "target" } ], "remove": [ path ] } written in the folder of this script. Only direct
 # subfolders of AppDir\plugins are installed (mirrored from source) or removed; a manifest going beyond is refused,
 # nothing is changed and Copybot is relaunched.
+# -NewDir or -Installer with -PluginManifest: the application and its plugins in one run (spec update-with-plugins):
+# the application first (the portable image, or the installer run silently by this script, without its own relaunch),
+# then, only if it succeeded, the plugins of the manifest, then one relaunch. The installer is a file of the folder of
+# this script; NewDir, the installer and the manifest must all be in that same folder.
 # -CopyOnly: the copy alone, run elevated when the application folder is not writable; the relaunch and the cleanup
-# stay with the script that is not elevated.
+# stay with the script that is not elevated. It never runs the installer, which asks for its own elevation.
 
 $ErrorActionPreference = 'Continue'
 
@@ -29,17 +34,34 @@ function Get-FullPath([string]$path) {
 }
 
 $AppDir = Get-FullPath $AppDir
-$pluginMode = [bool]$PluginManifest
-if ($pluginMode) {
-    $PluginManifest = Get-FullPath $PluginManifest
-    # the temporary folder of the update holds the manifest and the sources
-    $TempDir = Get-FullPath (Split-Path -Parent $PluginManifest)
-} elseif ($NewDir) {
-    $NewDir = Get-FullPath $NewDir
-    $TempDir = Get-FullPath (Split-Path -Parent $NewDir)
-} else {
+$withPlugins = [bool]$PluginManifest
+# the plugins alone, without an application update
+$pluginMode = $withPlugins -and -not $NewDir -and -not $Installer
+if ($NewDir -and $Installer) {
     exit 2
 }
+# the temporary folder of the update: the folder of every path given (the copy, the installer, the manifest and the
+# sources of the plugins)
+$given = @()
+if ($NewDir) {
+    $NewDir = Get-FullPath $NewDir
+    $given += $NewDir
+}
+if ($Installer) {
+    $Installer = Get-FullPath $Installer
+    $given += $Installer
+}
+if ($withPlugins) {
+    $PluginManifest = Get-FullPath $PluginManifest
+    $given += $PluginManifest
+}
+if ($given.Count -eq 0) {
+    exit 2
+}
+$TempDir = Get-FullPath (Split-Path -Parent $given[0])
+$sameFolder = @($given | Where-Object {
+    -not $TempDir.Equals((Get-FullPath (Split-Path -Parent $_)), [System.StringComparison]::OrdinalIgnoreCase)
+}).Count -eq 0
 $PluginsDir = Join-Path $AppDir 'plugins'
 $LogDir = Get-FullPath $LogDir
 
@@ -293,13 +315,85 @@ function Remove-TempDir {
     }
 }
 
+# the installer, checked before anything is touched: a plain file of the folder of this script
+function Test-Installer {
+    $scriptDir = Get-FullPath (Split-Path -Parent $PSCommandPath)
+    $parent = Get-FullPath (Split-Path -Parent $Installer)
+    if (-not $scriptDir.Equals($parent, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $Installer -PathType Leaf) -or (Test-ReparsePoint $Installer)) {
+        Write-Log "Installer refused: $Installer is not a file of the folder of this script"
+        return $false
+    }
+    return $true
+}
+
+# runs the installer silently and waits for it (it asks for its own elevation when the installation is for all
+# users); its own relaunch is left out, this script relaunches. True when it ended with code 0.
+function Invoke-Installer {
+    try {
+        $setup = Start-Process -FilePath $Installer -ArgumentList '/SILENT', '/SUPPRESSMSGBOXES', '/NORESTART' `
+            -Wait -PassThru -ErrorAction Stop
+        Write-Log "Installer ended (code $($setup.ExitCode))"
+        return $setup.ExitCode -eq 0
+    } catch {
+        Write-Log "Installer failed to start: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+# the folder the plugin copy writes: plugins, or the application folder while plugins does not exist yet
+function Get-PluginWriteDir {
+    if (Test-Path -LiteralPath $PluginsDir) {
+        return $PluginsDir
+    }
+    return $AppDir
+}
+
+# the application image then, if it was copied, the plugins of the manifest
+function Copy-AppAndPlugins {
+    $copied = Copy-AppImage
+    if ($copied -and $withPlugins) {
+        $copied = Copy-Plugins
+    }
+    return $copied
+}
+
+# runs a copy, elevated unless every folder of $writeDirs is writable (this script again with -CopyOnly and
+# $modeArgs). True when everything was copied; false on a failure or when the elevation is declined (nothing was
+# copied then).
+function Invoke-Copy([string[]]$writeDirs, [string]$modeArgs, [scriptblock]$copy) {
+    $locked = @($writeDirs | Where-Object { -not (Test-Writable $_) })
+    if ($locked.Count -eq 0) {
+        $done = & $copy
+        if (-not $done) {
+            Write-Log 'The copy failed'
+        }
+        return $done
+    }
+    Write-Log "$($locked -join ', ') not writable, the copy is run elevated"
+    $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" -ProcessId {1} -AppDir "{2}" {3} -Exe "{4}" -LogDir "{5}" -CopyOnly' -f `
+        $PSCommandPath, $ProcessId, $AppDir, $modeArgs, $Exe, $LogDir
+    try {
+        $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argList -Verb RunAs `
+            -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
+        Write-Log "Elevated copy ended (code $($elevated.ExitCode))"
+        return $elevated.ExitCode -eq 0
+    } catch {
+        # UAC declined or failed: nothing was copied
+        Write-Log "Elevation declined or failed: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 if ($CopyOnly) {
-    # the elevated run: the copy only, never the relaunch (it would run as administrator)
+    # the elevated run: the copy only, never the installer nor the relaunch (they would run as administrator)
     Write-Log 'Elevated copy started'
-    if ($pluginMode) {
+    if ($NewDir) {
+        $copied = Copy-AppAndPlugins
+    } elseif ($pluginMode) {
         $copied = Copy-Plugins
     } else {
-        $copied = Copy-AppImage
+        $copied = $false
     }
     Write-Log 'Elevated copy finished'
     if ($copied) {
@@ -308,17 +402,30 @@ if ($CopyOnly) {
     exit 1
 }
 
-if ($pluginMode) {
-    Write-Log "Plugin update started (process $ProcessId, app $AppDir, manifest $PluginManifest)"
-    if (-not (Read-Manifest)) {
-        # refused before anything is touched
-        Start-App
-        Remove-TempDir
-        Write-Log 'Plugin update finished (refused)'
-        exit 1
-    }
+if ($Installer) {
+    Write-Log "Update started (process $ProcessId, app $AppDir, installer $Installer, manifest $PluginManifest)"
+} elseif ($NewDir) {
+    Write-Log "Update started (process $ProcessId, app $AppDir, new $NewDir, manifest $PluginManifest)"
 } else {
-    Write-Log "Update started (process $ProcessId, app $AppDir, new $NewDir)"
+    Write-Log "Plugin update started (process $ProcessId, app $AppDir, manifest $PluginManifest)"
+}
+# refused before anything is touched: paths outside one folder, the manifest, the installer
+$refused = $false
+if (-not $sameFolder) {
+    Write-Log 'Update refused: the copy, the installer and the manifest are not in one folder'
+    $refused = $true
+} elseif ($withPlugins -and -not (Read-Manifest)) {
+    $refused = $true
+} elseif ($Installer -and -not (Test-Installer)) {
+    $refused = $true
+}
+if ($refused) {
+    Start-App
+    if ($sameFolder) {
+        Remove-TempDir
+    }
+    Write-Log 'Update finished (refused)'
+    exit 1
 }
 
 # 1. wait for Copybot and every process started from its folder (60 s in all); a process named like Copybot whose
@@ -347,47 +454,32 @@ if ($running.Count -gt 0) {
 }
 Write-Log 'Copybot has exited'
 
-# 2. the copy, elevated when the application folder is not writable
-# the folder to write: plugins, or the application folder while plugins does not exist yet
-$writeDir = $AppDir
-if ($pluginMode -and (Test-Path -LiteralPath $PluginsDir)) {
-    $writeDir = $PluginsDir
-}
-if (Test-Writable $writeDir) {
-    if ($pluginMode) {
-        $done = Copy-Plugins
-    } else {
-        $done = Copy-AppImage
+# 2. the changes: the application first, the plugins only once it is updated
+$pluginArgs = '-PluginManifest "{0}"' -f $PluginManifest
+if ($Installer) {
+    $applied = Invoke-Installer
+    if ($applied -and $withPlugins) {
+        $applied = Invoke-Copy (Get-PluginWriteDir) $pluginArgs { Copy-Plugins }
     }
-    if (-not $done) {
-        Write-Log 'The copy failed: Copybot is relaunched as it is'
+} elseif ($NewDir) {
+    $modeArgs = '-NewDir "{0}"' -f $NewDir
+    $writeDirs = @($AppDir)
+    if ($withPlugins) {
+        $modeArgs += ' ' + $pluginArgs
+        # the plugins folder may be locked although the application folder is not: then both are copied elevated
+        $writeDirs += Get-PluginWriteDir
     }
+    $applied = Invoke-Copy $writeDirs $modeArgs { Copy-AppAndPlugins }
 } else {
-    Write-Log "$writeDir is not writable, the copy is run elevated"
-    $quoted = { param($value) '"{0}"' -f $value }
-    if ($pluginMode) {
-        $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -ProcessId {1} -AppDir {2} -PluginManifest {3} -Exe {4} -LogDir {5} -CopyOnly' -f `
-            (& $quoted $PSCommandPath), $ProcessId, (& $quoted $AppDir), (& $quoted $PluginManifest), (& $quoted $Exe), (& $quoted $LogDir)
-    } else {
-        $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -ProcessId {1} -AppDir {2} -NewDir {3} -Exe {4} -LogDir {5} -CopyOnly' -f `
-            (& $quoted $PSCommandPath), $ProcessId, (& $quoted $AppDir), (& $quoted $NewDir), (& $quoted $Exe), (& $quoted $LogDir)
-    }
-    try {
-        $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argList -Verb RunAs `
-            -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop
-        Write-Log "Elevated copy ended (code $($elevated.ExitCode))"
-    } catch {
-        # UAC declined or failed: nothing was copied, the old version is relaunched as it is
-        Write-Log "Elevation declined or failed: $($_.Exception.Message)"
-        Start-App
-        Remove-TempDir
-        Write-Log 'Update finished (not applied)'
-        exit 1
-    }
+    $applied = Invoke-Copy (Get-PluginWriteDir) $pluginArgs { Copy-Plugins }
 }
 
 # 3. the relaunch (never elevated), then the cleanup
 Start-App
 Remove-TempDir
-Write-Log 'Update finished'
-exit 0
+if ($applied) {
+    Write-Log 'Update finished'
+    exit 0
+}
+Write-Log 'Update finished (not applied)'
+exit 1

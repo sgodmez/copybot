@@ -165,6 +165,15 @@ public class UpdateServiceTest {
         return bytes.toByteArray();
     }
 
+    /** The manifest a plugin step writes in the temporary folder. */
+    private static Path manifestIn(Path temp) {
+        try {
+            return Files.writeString(temp.resolve("plugin-manifest.json"), "{}");
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
     private List<Path> tempContent() throws IOException {
         try (Stream<Path> content = Files.list(tmp())) {
             return content.toList();
@@ -278,6 +287,73 @@ public class UpdateServiceTest {
         assertTrue(prepared.tempDir().getFileName().toString().startsWith("copybot-update-"));
         assertEquals(List.of(UpdateApply.setupCommand(setup)), launched);
         assertEquals("setup", Files.readString(setup));
+    }
+
+    /** With plugins to update, the script runs the installer then copies the plugins (spec update-with-plugins §1). */
+    @Test
+    public void anInstalledCopyWithPluginsRunsTheScriptWithTheInstaller() throws Exception {
+        Files.writeString(appDir.resolve("unins000.exe"), "uninstaller");
+        files.put("copybot-1.2.0-setup.exe", "setup".getBytes(StandardCharsets.UTF_8));
+        UpdateService service = service();
+        Release release = service.checkNow().orElseThrow();
+        List<Path> asked = new ArrayList<>();
+
+        UpdateService.Prepared prepared = service.prepare(release, bytes -> { }, () -> false, temp -> {
+            asked.add(temp);
+            assertTrue(Files.isRegularFile(temp.resolve("copybot-1.2.0-setup.exe")), "the application comes first");
+            return manifestIn(temp);
+        });
+
+        Path temp = prepared.tempDir();
+        assertEquals(List.of(temp), asked);
+        assertEquals(UpdateApply.installerScriptCommand(temp.resolve("apply-update.ps1"), 4242L, appDir,
+                temp.resolve("copybot-1.2.0-setup.exe"), temp.resolve("plugin-manifest.json"), Path.of(appPath),
+                dir.resolve("logs"), null), prepared.command());
+        assertTrue(Files.isRegularFile(temp.resolve("apply-update.ps1")));
+    }
+
+    @Test
+    public void aPortableCopyWithPluginsGivesTheManifestToTheScript() throws Exception {
+        files.put("copybot-1.2.0-windows-x64.zip", zip("Copybot/Copybot.exe"));
+        UpdateService service = service();
+        Release release = service.checkNow().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepare(release, bytes -> { }, () -> false, temp -> manifestIn(temp));
+
+        Path temp = prepared.tempDir();
+        assertEquals(UpdateApply.scriptCommand(temp.resolve("apply-update.ps1"), 4242L, appDir,
+                temp.resolve("Copybot"), temp.resolve("plugin-manifest.json"), Path.of(appPath), dir.resolve("logs"),
+                null), prepared.command());
+    }
+
+    /** No plugin to update (the step returns no manifest): exactly the update without plugins. */
+    @Test
+    public void anUpdateWithoutPluginsKeepsItsUsualCommand() throws Exception {
+        Files.writeString(appDir.resolve("unins000.exe"), "uninstaller");
+        files.put("copybot-1.2.0-setup.exe", "setup".getBytes(StandardCharsets.UTF_8));
+        UpdateService service = service();
+        Release release = service.checkNow().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepare(release, bytes -> { }, () -> false, temp -> null);
+
+        assertEquals(UpdateApply.setupCommand(prepared.tempDir().resolve("copybot-1.2.0-setup.exe")),
+                prepared.command());
+    }
+
+    @Test
+    public void aFailedPluginStepLeavesNothing() throws Exception {
+        files.put("copybot-1.2.0-windows-x64.zip", zip("Copybot/Copybot.exe"));
+        UpdateService service = service();
+        Release release = service.checkNow().orElseThrow();
+
+        UpdateException e = assertThrows(UpdateException.class, () -> service.prepare(release, bytes -> { },
+                () -> false, temp -> {
+                    throw new UpdateException("update.error.digest");
+                }));
+
+        assertEquals("update.error.digest", e.key());
+        assertTrue(tempContent().isEmpty());
+        assertTrue(launched.isEmpty());
     }
 
     @Test

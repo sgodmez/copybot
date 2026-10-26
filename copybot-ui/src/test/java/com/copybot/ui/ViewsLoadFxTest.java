@@ -56,4 +56,10 @@ public class ViewsLoadFxTest {
     public void theEditorViewLoads() throws Exception {
         assertLoads("editor-view.fxml");
     }
+
+    /** Its Updates section, the button of the banner included, outside the packaged application. */
+    @Test
+    public void thePreferencesViewLoads() throws Exception {
+        assertLoads("preferences-view.fxml");
+    }
 }

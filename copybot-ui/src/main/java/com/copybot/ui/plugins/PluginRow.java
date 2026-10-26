@@ -77,6 +77,14 @@ public record PluginRow(PluginCatalog.Entry entry, String installedVersion, List
     }
 
     /**
+     * Installed, and the catalogue has a newer version, whatever plugin API it is built for: updated with the
+     * application whose catalogue this is, every entry of which fits its plugin API (spec update-with-plugins §1).
+     */
+    public boolean updatedWithTheApplication() {
+        return installedVersion != null && VersionUtil.VERSION_ORDER.compare(installedVersion, entry.version()) < 0;
+    }
+
+    /**
      * True when "Install" leads somewhere for a plugin a pipeline needs: it is not installed, or installed with a
      * compatible update (what fixes a plugin that failed to load); never for one installed without such an update.
      */

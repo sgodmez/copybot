@@ -7,6 +7,7 @@ import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.UiPreferences;
 import javafx.fxml.FXML;
+import javafx.scene.Node;
 import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
@@ -33,6 +34,10 @@ public class PreferencesController {
     private Button updateCheckButton;
     @FXML
     private Label updateResultLabel;
+    @FXML
+    private Button updateInstallButton;
+    @FXML
+    private Label updateReasonLabel;
 
     @FXML
     public void initialize() {
@@ -85,6 +90,37 @@ public class PreferencesController {
         updateCheckButton.setDisable(unavailable.isPresent());
         updateResultLabel.setText(unavailable.map(key -> ResourcesEngine.getString(key))
                 .or(UpdateUi::lastResult).orElse(""));
+        refreshInstallButton();
+    }
+
+    /**
+     * The button of the banner, when an update is offered (spec update-with-plugins §3): same text, disabled for the
+     * same reason, told below it.
+     */
+    private void refreshInstallButton() {
+        var release = UpdateUi.offered();
+        boolean shown = release.isPresent() || UpdateUi.offeredPluginUpdates() > 0;
+        updateInstallButton.setText(ResourcesEngine.getString(release.isPresent() ? "update.install"
+                : "plugins.show-updates"));
+        Optional<String> blocked = release.isEmpty() ? Optional.empty()
+                : UpdateUi.service().flatMap(UpdateService::installBlocked);
+        updateInstallButton.setDisable(blocked.isPresent());
+        updateReasonLabel.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
+        show(updateInstallButton, shown);
+        show(updateReasonLabel, shown && blocked.isPresent());
+    }
+
+    private static void show(Node node, boolean shown) {
+        node.setVisible(shown);
+        node.setManaged(shown);
+    }
+
+    /** Saves the preferences as OK does, closes them, then does what the button of the banner does. */
+    @FXML
+    protected void onUpdateInstallClick() {
+        save();
+        close();
+        CopybotMainUi.mainController().ifPresent(MainController::installOffered);
     }
 
     /**
@@ -108,10 +144,16 @@ public class PreferencesController {
         UpdateUi.setLastResult(text);
         updateResultLabel.setText(text);
         updateCheckButton.setDisable(false);
+        refreshInstallButton();
     }
 
     @FXML
     protected void onOkClick() {
+        save();
+        close();
+    }
+
+    private void save() {
         if (!updateAutoCheck.isDisabled() && updateAutoCheck.isSelected() != UiPreferences.updateCheck()) {
             UiPreferences.saveUpdateCheck(updateAutoCheck.isSelected());
         }
@@ -125,7 +167,6 @@ public class PreferencesController {
             UiPreferences.saveLanguage(chosen);
             CopybotMainUi.reloadMainView();
         }
-        close();
     }
 
     @FXML

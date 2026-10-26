@@ -38,6 +38,9 @@ public final class PluginService {
     public interface Catalogs {
         PluginCatalog fetch(Path dir) throws UpdateException, InterruptedException;
 
+        /** The catalogue published with this release. */
+        PluginCatalog fetch(Release release, Path dir) throws UpdateException, InterruptedException;
+
         Path download(PluginCatalog.Entry entry, Path dir, LongConsumer progress, BooleanSupplier cancelled)
                 throws UpdateException, InterruptedException;
     }
@@ -149,18 +152,23 @@ public final class PluginService {
             return new Check(Optional.empty(), 0);
         }
         Optional<Release> release = updates.automaticCheck();
-        return new Check(release, quietUpdateCount());
+        return new Check(release, quietUpdateCount(release.isPresent()));
     }
 
     /** The check of the preferences: a failure of the application check is thrown, one of the catalogue is logged. */
     public Check checkNow() throws UpdateException, InterruptedException {
         Optional<Release> release = updates.checkNow();
-        return new Check(release, quietUpdateCount());
+        return new Check(release, quietUpdateCount(release.isPresent()));
     }
 
-    private long quietUpdateCount() throws InterruptedException {
+    /**
+     * The plugin updates: with a newer release, those updated with it ({@link #updatedWithTheApplication(List)});
+     * otherwise those this version can take.
+     */
+    private long quietUpdateCount(boolean withRelease) throws InterruptedException {
         try {
-            return PluginRow.updatesAvailable(rows(fetchCatalog()));
+            List<PluginRow> rows = rows(fetchCatalog());
+            return withRelease ? updatedWithTheApplication(rows).size() : PluginRow.updatesAvailable(rows);
         } catch (UpdateException e) {
             LOG.log(System.Logger.Level.INFO, "plugin catalogue not read: {0} {1}", e.key(), List.of(e.args()));
         } catch (RuntimeException e) {
@@ -169,7 +177,55 @@ public final class PluginService {
         return 0;
     }
 
+    /**
+     * The plugins updated with {@code release}, from the catalogue published with it (every entry of it fits the
+     * plugin API of that release): never blocks the update, an unreadable catalogue updates the application alone.
+     */
+    private List<PluginRow> updatedWith(Release release, Path temp) throws InterruptedException {
+        try {
+            return updatedWithTheApplication(rows(catalogs.fetch(release, temp)));
+        } catch (UpdateException e) {
+            LOG.log(System.Logger.Level.INFO, "plugin catalogue not read, the application is updated alone: {0} {1}",
+                    e.key(), List.of(e.args()));
+        } catch (RuntimeException e) {
+            LOG.log(System.Logger.Level.WARNING, "plugins not updated with the application", e);
+        }
+        return List.of();
+    }
+
+    /**
+     * Among these rows, the installed ones with a newer version whose folders are all in the plugins folder of the
+     * application (a plugin found elsewhere, or without a folder of its own, is never touched).
+     */
+    private List<PluginRow> updatedWithTheApplication(List<PluginRow> rows) {
+        Optional<Path> plugins = updates.appDir().map(app -> app.resolve("plugins").toAbsolutePath().normalize());
+        return rows.stream().filter(PluginRow::updatedWithTheApplication)
+                .filter(row -> plugins.isPresent() && !row.installedFolders().isEmpty()
+                        && row.installedFolders().stream()
+                        .allMatch(folder -> plugins.get().equals(folder.toAbsolutePath().normalize().getParent())))
+                .toList();
+    }
+
     // ---- applying ----
+
+    /**
+     * The update of the application with its plugins (spec update-with-plugins §1): one temporary folder, the
+     * application, then the catalogue of {@code release} read and each installed plugin with a newer version in it
+     * unpacked, one script applying both. Without such a plugin, the usual update.
+     *
+     * @param appProgress    the bytes of the application received so far
+     * @param pluginProgress the archives, once the application is downloaded
+     */
+    public UpdateService.Prepared prepareUpdate(Release release, LongConsumer appProgress, Progress pluginProgress,
+            BooleanSupplier cancelled) throws UpdateException, InterruptedException {
+        return updates.prepare(release, appProgress, cancelled, temp -> {
+            List<PluginRow> plugins = updatedWith(release, temp);
+            if (cancelled.getAsBoolean()) {
+                throw new UpdateException("update.error.cancelled");
+            }
+            return plugins.isEmpty() ? null : writePlugins(temp, plugins, List.of(), pluginProgress, cancelled);
+        });
+    }
 
     /** The message key telling why the changes cannot be applied now (not here, not now); empty when they can. */
     public Optional<String> applyBlocked() {
@@ -223,31 +279,9 @@ public final class PluginService {
         Path temp = updates.createTempDir();
         boolean done = false;
         try {
-            Map<PluginRow, Path> extracted = new LinkedHashMap<>();
-            int count = toInstallOrUpdate.size();
-            for (int i = 0; i < count; i++) {
-                if (cancelled.getAsBoolean()) {
-                    throw new UpdateException("update.error.cancelled");
-                }
-                PluginRow row = toInstallOrUpdate.get(i);
-                String code = row.entry().code();
-                int index = i;
-                progress.update(index, count, code, 0);
-                Path zip = catalogs.download(row.entry(), temp, bytes -> progress.update(index, count, code, bytes),
-                        cancelled);
-                try {
-                    // directly in the temporary folder: the script installs nothing else
-                    extracted.put(row, PluginArchive.extract(zip, temp, code));
-                    Files.deleteIfExists(zip);
-                } catch (IOException e) {
-                    throw new UpdateException("update.error.zip", UpdateCheck.message(e));
-                }
-            }
-            PluginChanges changes = PluginChanges.plan(toInstallOrUpdate, extracted, toRemove);
+            Path manifest = writePlugins(temp, toInstallOrUpdate, toRemove, progress, cancelled);
             UpdateService.Prepared prepared;
             try {
-                Path manifest = temp.resolve(MANIFEST);
-                changes.writeManifest(manifest);
                 Path script = UpdateApply.writeScript(temp);
                 prepared = new UpdateService.Prepared(temp, updates.pluginCommand(script, manifest));
             } catch (IOException e) {
@@ -259,6 +293,42 @@ public final class PluginService {
             if (!done) {
                 UpdateService.deleteQuietly(temp);
             }
+        }
+    }
+
+    /**
+     * Downloads and unpacks every archive to install directly in {@code temp} (the script installs nothing else), then
+     * writes the manifest of the changes there.
+     *
+     * @return the manifest
+     */
+    private Path writePlugins(Path temp, List<PluginRow> toInstallOrUpdate, List<PluginRow> toRemove,
+            Progress progress, BooleanSupplier cancelled) throws UpdateException, InterruptedException {
+        Map<PluginRow, Path> extracted = new LinkedHashMap<>();
+        int count = toInstallOrUpdate.size();
+        for (int i = 0; i < count; i++) {
+            if (cancelled.getAsBoolean()) {
+                throw new UpdateException("update.error.cancelled");
+            }
+            PluginRow row = toInstallOrUpdate.get(i);
+            String code = row.entry().code();
+            int index = i;
+            progress.update(index, count, code, 0);
+            Path zip = catalogs.download(row.entry(), temp, bytes -> progress.update(index, count, code, bytes),
+                    cancelled);
+            try {
+                extracted.put(row, PluginArchive.extract(zip, temp, code));
+                Files.deleteIfExists(zip);
+            } catch (IOException e) {
+                throw new UpdateException("update.error.zip", UpdateCheck.message(e));
+            }
+        }
+        try {
+            Path manifest = temp.resolve(MANIFEST);
+            PluginChanges.plan(toInstallOrUpdate, extracted, toRemove).writeManifest(manifest);
+            return manifest;
+        } catch (IOException e) {
+            throw new UpdateException("update.error.io", UpdateCheck.message(e));
         }
     }
 
