@@ -59,6 +59,7 @@ public class PluginCatalogTest {
 
         assertEquals(StepType.IN, read.stepType());
         assertEquals(StepType.OUT, write.stepType());
+        assertEquals(StepType.PROCESS, embedded("file.buffer").stepType());
         assertEquals("embedded", read.pluginName());
         assertEquals("embedded", read.pluginCode());
         assertEquals(com.copybot.utils.VersionUtil.engineVersion().orElse(null), read.pluginVersion(),
@@ -67,10 +68,19 @@ public class PluginCatalogTest {
 
     @Test
     public void namesAndDescriptionsAreLocalized() {
-        for (CatalogAction action : List.of(embedded("file.read"), embedded("file.write"))) {
+        for (CatalogAction action : List.of(embedded("file.read"), embedded("file.write"), embedded("file.buffer"))) {
             assertNotEquals(action.actionCode(), action.name(), "a translated name");
             assertFalse(action.name().startsWith("%"), action.name());
             assertFalse(action.description().isEmpty(), action.actionCode());
+        }
+    }
+
+    @Test
+    public void theBufferFieldsAreLabelled() {
+        CatalogAction buffer = embedded("file.buffer");
+        for (ConfigField field : buffer.configSchema().orElseThrow().allFields()) {
+            assertTrue(buffer.texts().containsKey(field.labelKey()), field.labelKey());
+            assertFalse(buffer.description(field).isEmpty(), field.labelKey());
         }
     }
 

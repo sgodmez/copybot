@@ -23,7 +23,7 @@
         <junit.version>6.1.3</junit.version>
         <!-- the version of the plugin API, X.Y: the module version of com.copybot.engine, which javac records in the
              requires of every plugin; raise it when the exported API changes (PluginApiFingerprintTest, README) -->
-        <copybot.plugin.api.version>1.0</copybot.plugin.api.version>
+        <copybot.plugin.api.version>1.1</copybot.plugin.api.version>
     </properties>
 
     <build>

@@ -1,5 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
+import com.copybot.engine.resources.DiskResolver;
+import com.copybot.engine.resources.DiskTraffic;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.Compare;
@@ -65,6 +67,18 @@ public class FileComparisonTest {
         for (Compare compare : Compare.values()) {
             assertFalse(FileComparison.identical(neverRead, target, compare), compare.name());
         }
+    }
+
+    @Test
+    public void aHashComparisonIsCountedOnTheDiskItReads() throws IOException {
+        WorkItem item = source("s.bin", bytes(100, 1));
+        Path target = target("t.bin", bytes(100, 1), SHOT);
+        String disk = DiskResolver.diskResource(tempDir);
+        long before = DiskTraffic.global().snapshot().getOrDefault(disk, new DiskTraffic.Bytes(0, 0)).read();
+
+        assertTrue(FileComparison.identical(item, target, Compare.FULL_HASH));
+
+        assertTrue(DiskTraffic.global().snapshot().get(disk).read() - before >= 200, "the source and the target");
     }
 
     @Test

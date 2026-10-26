@@ -118,6 +118,17 @@ public class ResourceRegistryTest {
     }
 
     @Test
+    public void theTrafficOfAGroupIsCountedUnderItsName() {
+        ResourceRegistry reg = new ResourceRegistry(ResourceSettings.from(new CopybotConfig(
+                Map.of("disk:D", 1), java.util.List.of(java.util.List.of("disk:D", "disk:E")))));
+        DiskTraffic traffic = new DiskTraffic(path -> "disk:" + path);
+        traffic.on(java.nio.file.Path.of("D")).read(3);
+        traffic.on(java.nio.file.Path.of("E")).written(4);
+
+        assertEquals(Map.of("disk:D", new DiskTraffic.Bytes(3, 4)), reg.diskTraffic(traffic));
+    }
+
+    @Test
     public void firstFit_smallTaskBypassesBlockedBigTask() throws Exception {
         ResourceRegistry reg = registry(Map.of("a", 1, "b", 1));
         Acquirer holderOfA = new Acquirer(reg, Set.of("a"));

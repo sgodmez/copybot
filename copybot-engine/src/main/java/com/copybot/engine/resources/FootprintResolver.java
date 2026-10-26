@@ -11,7 +11,7 @@ import java.util.Set;
 /**
  * Computes the resource footprint of one (action, item) execution by merging:
  * 1. what the action declares (requiredResources, touchedPaths),
- * 2. what the engine detects (disk of the item's current location),
+ * 2. what the engine detects (disk the item's content is read from),
  * 3. what the user configured (extra resources, maxConcurrency as an implicit step resource).
  */
 public final class FootprintResolver {
@@ -46,8 +46,9 @@ public final class FootprintResolver {
         for (Path path : action.touchedPaths(item)) {
             footprint.add(DiskResolver.diskResource(path));
         }
-        if (item != null && item.isLocal()) {
-            footprint.add(DiskResolver.diskResource(item.getLocalLocation()));
+        if (item != null && item.getContentLocation() != null) {
+            // where the content is read from: a buffered item no longer holds its source's disk
+            footprint.add(DiskResolver.diskResource(item.getContentLocation()));
         }
         if (config != null) {
             if (config.resources() != null) {

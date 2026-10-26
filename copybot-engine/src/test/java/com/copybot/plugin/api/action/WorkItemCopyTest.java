@@ -1,5 +1,7 @@
 package com.copybot.plugin.api.action;
 
+import com.copybot.engine.resources.DiskResolver;
+import com.copybot.engine.resources.DiskTraffic;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -71,6 +73,67 @@ public class WorkItemCopyTest {
         assertEquals(3L, item.getMetadatas().getSize());
         try (var in = item.openInputStream()) {
             assertEquals("old", new String(in.readAllBytes()));
+        }
+    }
+
+    @Test
+    public void readingALocalItemIsCountedOnItsDisk() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("b.jpg"), "12345");
+        String disk = DiskResolver.diskResource(file);
+        long before = DiskTraffic.global().snapshot().getOrDefault(disk, new DiskTraffic.Bytes(0, 0)).read();
+
+        try (var in = new WorkItem(file).openInputStream()) {
+            assertEquals(5, in.readAllBytes().length);
+        }
+
+        assertTrue(DiskTraffic.global().snapshot().get(disk).read() - before >= 5);
+    }
+
+    @Test
+    public void withContentFileReadsTheFileAndKeepsTheSource() throws IOException {
+        Path source = Files.writeString(tempDir.resolve("a.jpg"), "card");
+        Path buffer = Files.writeString(tempDir.resolve("buffer.bin"), "buffered");
+        WorkItem item = new WorkItem(source);
+        item.setOutPattern("own/{name}");
+
+        WorkItem buffered = item.withContentFile(buffer);
+
+        try (var in = buffered.openInputStream()) {
+            assertEquals("buffered", new String(in.readAllBytes()));
+        }
+        assertEquals(source, buffered.getLocalLocation(), "the source stays the original: deleteSource deletes it");
+        assertEquals("a.jpg", buffered.getNameDisplay());
+        assertEquals(Optional.of("own/{name}"), buffered.getOutPattern());
+        assertEquals(buffer, buffered.getContentLocation());
+        assertEquals(source, item.getContentLocation(), "a plain local item is read from its source");
+    }
+
+    @Test
+    public void aCopyOfABufferedItemKeepsItsContentFile() throws IOException {
+        Path buffer = Files.writeString(tempDir.resolve("buffer.bin"), "buffered");
+        WorkItem buffered = new WorkItem(Files.writeString(tempDir.resolve("a.jpg"), "card")).withContentFile(buffer);
+
+        WorkItem rewritten = buffered.withContent(() -> new java.io.ByteArrayInputStream("new".getBytes()), 3);
+
+        assertEquals(buffer, buffered.copyForDryRun().getContentLocation());
+        assertEquals(buffer, rewritten.getContentLocation(), "content made from the buffer: its disk is still read");
+        try (var in = rewritten.openInputStream()) {
+            assertEquals("new", new String(in.readAllBytes()));
+        }
+    }
+
+    @Test
+    public void anItemFromAUrlHasNoContentLocationUntilBuffered() throws IOException {
+        WorkItem remote = new WorkItem(new java.net.URL("http://example.invalid/a.jpg"),
+                () -> new java.io.ByteArrayInputStream("remote".getBytes()));
+        Path buffer = Files.writeString(tempDir.resolve("buffer.bin"), "remote");
+
+        assertNull(remote.getContentLocation());
+        WorkItem buffered = remote.withContentFile(buffer);
+        assertEquals(buffer, buffered.getContentLocation());
+        assertFalse(buffered.isLocal(), "not an original local file Copybot could delete");
+        try (var in = buffered.openInputStream()) {
+            assertEquals("remote", new String(in.readAllBytes()));
         }
     }
 }

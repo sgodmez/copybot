@@ -7,9 +7,14 @@ import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class WorkItemExecution {
 
@@ -51,6 +56,11 @@ public class WorkItemExecution {
     private volatile boolean ignored;
     /** The local file this item was created from, null for a remote one. */
     private final Path listedPath;
+    /** The item each step that began for this item was handed, by step index: what its afterItem gets. */
+    private final Map<Integer, WorkItem> handed = new ConcurrentSkipListMap<>();
+    /** This item, plus the items forked from it not finished yet. */
+    private final AtomicInteger unfinished = new AtomicInteger(1);
+    private final AtomicBoolean finished = new AtomicBoolean();
 
     public WorkItemExecution(WorkItem wi, List<PipelineStep<?>> pipelineSteps) {
         this.wi = wi;
@@ -88,6 +98,36 @@ public class WorkItemExecution {
 
     public WorkItem getWorkItem() {
         return wi;
+    }
+
+    /** The step {@code stepIndex} begins for this item, handed {@code item}. */
+    public void stepBegan(int stepIndex, WorkItem item) {
+        handed.put(stepIndex, item);
+    }
+
+    /** The items the steps that began for this item were handed, by step index (ascending). */
+    public Map<Integer, WorkItem> handedItems() {
+        return handed;
+    }
+
+    /** An item forked from this one is about to run: this one is not finished until it is. */
+    public void forkStarted() {
+        unfinished.incrementAndGet();
+    }
+
+    /**
+     * This item is finished in this run (calls after the first are ignored). Returns the executions now finished
+     * with every item forked from them: this one, then the ancestors it was the last unfinished fork of.
+     */
+    public List<WorkItemExecution> finish() {
+        if (!finished.compareAndSet(false, true)) {
+            return List.of();
+        }
+        List<WorkItemExecution> done = new ArrayList<>();
+        for (WorkItemExecution e = this; e != null && e.unfinished.decrementAndGet() == 0; e = e.parent) {
+            done.add(e);
+        }
+        return done;
     }
 
     /** A process step may transform the item (e.g. transcoding produces a new file). */

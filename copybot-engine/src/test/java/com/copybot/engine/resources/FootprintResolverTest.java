@@ -5,6 +5,7 @@ import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkStatus;
 import com.copybot.plugin.api.definition.IPlugin;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -89,5 +90,30 @@ public class FootprintResolverTest {
         Set<String> footprint = FootprintResolver.resolve(action, item, config(null, null), 0);
 
         assertEquals(Set.of(DiskResolver.diskResource(tempDir)), footprint);
+    }
+
+    @Test
+    public void aBufferedItemHoldsTheDiskOfItsBufferNotOfItsSource() throws IOException {
+        Path source = Path.of(tempDir.getRoot().toString().startsWith("/") ? "/copybot-no-card/a.jpg" : "Q:\\DCIM\\a.jpg");
+        Path buffer = Files.createFile(tempDir.resolve("a.jpg.buffer"));
+        String sourceDisk = DiskResolver.diskResource(source);
+        String bufferDisk = DiskResolver.diskResource(buffer);
+        Assumptions.assumeFalse(sourceDisk.equals(bufferDisk), "the source and the buffer must be on two disks");
+        WorkItem item = new WorkItem(source).withContentFile(buffer);
+
+        Set<String> footprint = FootprintResolver.resolve(new FakeAction(Set.of(), Set.of()), item, config(null, null), 0);
+
+        assertEquals(Set.of(bufferDisk), footprint);
+    }
+
+    @Test
+    public void anItemFromAUrlBufferedLocallyHoldsTheDiskOfItsBuffer() throws IOException {
+        Path buffer = Files.createFile(tempDir.resolve("b.jpg.buffer"));
+        WorkItem item = new WorkItem(new java.net.URL("http://example.invalid/b.jpg"), java.io.InputStream::nullInputStream)
+                .withContentFile(buffer);
+
+        Set<String> footprint = FootprintResolver.resolve(new FakeAction(Set.of(), Set.of()), item, config(null, null), 0);
+
+        assertEquals(Set.of(DiskResolver.diskResource(buffer)), footprint);
     }
 }

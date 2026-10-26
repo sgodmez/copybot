@@ -273,6 +273,16 @@ public final class ResourceRegistry {
         }
     }
 
+    /** The bytes Copybot has read and written per disk, under the names of {@link #snapshot()} (a group summed). */
+    public Map<String, DiskTraffic.Bytes> diskTraffic() {
+        return diskTraffic(DiskTraffic.global());
+    }
+
+    // visible for tests: a traffic of its own
+    Map<String, DiskTraffic.Bytes> diskTraffic(DiskTraffic traffic) {
+        return traffic.snapshot(settings::canonical); // the aliases never change: no lock
+    }
+
     // ---- all methods below are always called while holding `lock` ----
 
     /**

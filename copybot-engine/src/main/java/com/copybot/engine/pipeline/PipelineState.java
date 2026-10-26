@@ -1,10 +1,12 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.engine.resources.DiskTraffic;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resources.ResourceSnapshot;
 import com.copybot.engine.resume.ResumeProposal;
 
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -79,6 +81,11 @@ public class PipelineState {
 
     public List<ResourceSnapshot> getResourceSnapshot() {
         return registry == null ? List.of() : registry.snapshot();
+    }
+
+    /** The bytes read and written per disk so far, under the names of {@link #getResourceSnapshot()}. */
+    public Map<String, DiskTraffic.Bytes> getDiskTraffic() {
+        return registry == null ? Map.of() : registry.diskTraffic();
     }
 
     public ResumeProposal getResumeProposal() {

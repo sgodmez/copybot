@@ -3,6 +3,7 @@ package com.copybot.ui;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.resources.DiskInventory;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.DiskRates;
 import com.copybot.ui.model.ResourceGauges;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.SystemLoad;
@@ -68,6 +69,8 @@ final class PlanGauges {
     private final Tooltip moreGaugesTip = new Tooltip();
     private Label panelTitle;
     private Label panelIdle;
+    /** The throughput of the disks, from the bytes counted once a second. */
+    private final DiskRates diskRates = new DiskRates();
 
     PlanGauges(HBox inlineGauges, VBox resourcesPanel, Node viewNode, Supplier<PipelineState> liveState) {
         this.inlineGauges = inlineGauges;
@@ -128,8 +131,11 @@ final class PlanGauges {
             return;
         }
         PipelineState state = liveState.get();
+        if (state != null) {
+            diskRates.sample(System.nanoTime(), state.getDiskTraffic());
+        }
         List<ResourceGauges.Gauge> gauges = ResourceGauges.of(state == null ? List.of() : state.getResourceSnapshot(),
-                SystemLoad.machine(), SystemLoad.process(), volumes);
+                SystemLoad.machine(), SystemLoad.process(), volumes, diskRates.rates());
         if (panel) {
             List<Node> nodes = new ArrayList<>(List.of(panelTitle));
             nodes.addAll(views(panelViews, gauges, false));
@@ -172,7 +178,7 @@ final class PlanGauges {
     /**
      * One gauge: its name, a bar (orange when the resource is full and actions wait for it; for the CPU the load of
      * the machine in light blue and, inside it, the part of Copybot in dark blue) and its value; all of it in the
-     * tooltip. Compact on the line of the progress bar, one under the other in the panel.
+     * tooltip, with what the gauge counts. Compact on the line of the progress bar, one under the other in the panel.
      */
     private static final class GaugeView {
         private final boolean inline;
@@ -206,6 +212,8 @@ final class PlanGauges {
                 root = new VBox(2, name, bar, value);
             }
             tip.setShowDelay(Duration.millis(300));
+            tip.setWrapText(true); // the explanation of what the gauge counts is a few sentences
+            tip.setMaxWidth(420);
             Tooltip.install(root, tip);
         }
 
@@ -218,8 +226,7 @@ final class PlanGauges {
             size(fill, Math.max(gauge.fraction(), 0));
             part.setVisible(split);
             size(part, Math.max(gauge.part(), 0));
-            tip.setText(gauge.label() + "\n" + gauge.text()
-                    + (split ? "\n" + ResourcesEngine.getString("plan.resources.cpu.legend") : ""));
+            tip.setText(gauge.label() + "\n" + gauge.text() + (gauge.tip().isEmpty() ? "" : "\n\n" + gauge.tip()));
         }
 
         private void size(Region layer, double fraction) {

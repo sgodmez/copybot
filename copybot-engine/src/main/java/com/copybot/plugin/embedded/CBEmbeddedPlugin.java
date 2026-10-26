@@ -3,7 +3,9 @@ package com.copybot.plugin.embedded;
 import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.definition.AbstractPlugin;
+import com.copybot.plugin.embedded.actions.FileBufferAction;
 import com.copybot.plugin.embedded.actions.FileReadAction;
 import com.copybot.plugin.embedded.actions.FileWriteAction;
 
@@ -28,6 +30,13 @@ public class CBEmbeddedPlugin extends AbstractPlugin {
     public List<ActionDefinition<? extends IInAction>> getInActions() {
         return List.of(
                 new ActionDefinition<>("file.read", FileReadAction.class)
+        );
+    }
+
+    @Override
+    public List<ActionDefinition<? extends IProcessAction>> getProcessActions() {
+        return List.of(
+                new ActionDefinition<>("file.buffer", FileBufferAction.class)
         );
     }
 

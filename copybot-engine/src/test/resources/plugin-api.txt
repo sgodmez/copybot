@@ -1,4 +1,4 @@
-api 1.0
+api 1.1
 com.copybot.exception.ActionNotFoundException constructor public <init>(java.lang.String)
 com.copybot.exception.ActionNotFoundException type public class com.copybot.exception.ActionNotFoundException extends com.copybot.exception.CopybotException
 com.copybot.exception.CopybotException constructor protected <init>(java.lang.String)
@@ -39,6 +39,7 @@ com.copybot.plugin.api.action.IAction method public default java.util.Set<java.l
 com.copybot.plugin.api.action.IAction method public default java.util.Set<java.nio.file.Path> touchedPaths(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.IAction method public default void afterAll()
 com.copybot.plugin.api.action.IAction method public default void afterEach(com.copybot.plugin.api.action.WorkItem)
+com.copybot.plugin.api.action.IAction method public default void afterItem(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.IAction method public default void beforeAll()
 com.copybot.plugin.api.action.IAction method public default void beforeEach(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.IAction method public default void loadConfig(com.google.gson.JsonElement)
@@ -93,10 +94,12 @@ com.copybot.plugin.api.action.WorkItem method public boolean isDeleted()
 com.copybot.plugin.api.action.WorkItem method public boolean isLocal()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem copyForDryRun()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withContent(java.util.function.Supplier<java.io.InputStream>,long)
+com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withContentFile(java.nio.file.Path)
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItemMetadata getMetadatas()
 com.copybot.plugin.api.action.WorkItem method public java.io.InputStream openInputStream() throws java.io.IOException
 com.copybot.plugin.api.action.WorkItem method public java.lang.String getNameDisplay()
 com.copybot.plugin.api.action.WorkItem method public java.lang.String getSourceLocationDisplay()
+com.copybot.plugin.api.action.WorkItem method public java.nio.file.Path getContentLocation()
 com.copybot.plugin.api.action.WorkItem method public java.nio.file.Path getLocalLocation()
 com.copybot.plugin.api.action.WorkItem method public java.util.Optional<java.lang.String> getOutPattern()
 com.copybot.plugin.api.action.WorkItem method public void setDeleted(boolean)

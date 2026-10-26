@@ -11,6 +11,7 @@ import com.copybot.plugin.api.action.AbstractAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -82,8 +83,36 @@ public class MainExecutorLifecycleTest {
         }
 
         @Override
+        public void afterItem(WorkItem item) {
+            record("afterItem", item);
+        }
+
+        @Override
         public void afterAll() {
             record("afterAll", null);
+        }
+    }
+
+    /** Forks every item into itself and a copy named "copy-" + its name, or filters the item named in drop. */
+    final class Fork extends Recording implements IProcessAction {
+        volatile String drop;
+
+        Fork() {
+            super("fork");
+        }
+
+        @Override
+        public List<WorkItem> doProcess(WorkItem item) {
+            calls.add("fork.run:" + item.getNameDisplay());
+            if (item.getNameDisplay().equals(drop)) {
+                return List.of();
+            }
+            try {
+                WorkItem copy = new WorkItem(Files.writeString(tempDir.resolve("copy-" + item.getNameDisplay()), "c"));
+                return List.of(item, copy);
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
         }
     }
 
@@ -196,8 +225,83 @@ public class MainExecutorLifecycleTest {
         exec.execute(null);
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
         assertEquals(List.of("out.beforeAll", "out.beforeEach:a.jpg", "out.run:a.jpg", "out.afterEach:a.jpg",
-                "out.afterAll"), callsOf("out."));
-        assertEquals(5, callsOf("analyse.").size(), "the analysis is not run again");
+                "out.afterItem:a.jpg", "out.afterAll"), callsOf("out."));
+        assertEquals(List.of("analyse.beforeAll", "analyse.beforeEach:a.jpg", "analyse.run:a.jpg",
+                        "analyse.afterEach:a.jpg", "analyse.afterAll", "analyse.afterItem:a.jpg"), callsOf("analyse."),
+                "the analysis is not run again; once the item is copied, the analysis may clean up after it");
+    }
+
+    // ---- afterItem ----
+
+    @Test
+    public void afterItemComesOnceTheItemIsFinishedForEveryStepThatBeganForItLastStepFirst() {
+        MainExecutor exec = singlePhase(new In("a.jpg"), new Analyse(), new Out());
+
+        exec.run();
+
+        List<String> items = callsOf("").stream().filter(c -> c.contains(".afterItem:")).toList();
+        assertEquals(List.of("out.afterItem:a.jpg", "analyse.afterItem:a.jpg"), items);
+        assertTrue(calls.indexOf("out.afterEach:a.jpg") < calls.indexOf("out.afterItem:a.jpg"));
+        assertTrue(calls.indexOf("analyse.afterItem:a.jpg") < calls.indexOf("out.afterAll"), calls.toString());
+    }
+
+    @Test
+    public void aFailedItemGetsItsAfterItemAndNoStepItDidNotBegin() {
+        Analyse analyse = new Analyse() {
+            @Override
+            public void doAnalyze(WorkItem item) {
+                throw new IllegalStateException("analysis failed");
+            }
+        };
+        MainExecutor exec = singlePhase(new In("a.jpg"), analyse, new Out());
+
+        exec.run();
+
+        assertEquals(ItemStatus.ERROR, item(exec, "a.jpg").getStatus());
+        assertTrue(calls.contains("analyse.afterItem:a.jpg"), calls.toString());
+        assertFalse(calls.contains("out.afterItem:a.jpg"), "the out step never began for it");
+    }
+
+    @Test
+    public void aStepThatForkedAnItemGetsItsAfterItemOnceEveryItemMadeFromItIsFinished() {
+        Fork fork = new Fork();
+        MainExecutor exec = new MainExecutor(List.of(step(new In("a.jpg"))), List.of(step(fork), step(new Out())), true,
+                null, registry(Map.of("disk:*", 1000)));
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        int forkDone = calls.indexOf("fork.afterItem:a.jpg");
+        assertTrue(forkDone > calls.indexOf("out.afterItem:a.jpg"), calls.toString());
+        assertTrue(forkDone > calls.indexOf("out.afterItem:copy-a.jpg"), calls.toString());
+        assertEquals(1, Collections.frequency(calls, "fork.afterItem:a.jpg"));
+        assertFalse(calls.contains("fork.afterItem:copy-a.jpg"), "the fork step never began for the copy");
+    }
+
+    @Test
+    public void anItemFilteredOutGetsItsAfterItem() {
+        Fork fork = new Fork();
+        fork.drop = "a.jpg";
+        MainExecutor exec = new MainExecutor(List.of(step(new In("a.jpg"))), List.of(step(fork), step(new Out())), true,
+                null, registry(Map.of("disk:*", 1000)));
+
+        exec.run();
+
+        assertTrue(calls.contains("fork.afterItem:a.jpg"), calls.toString());
+        assertFalse(calls.contains("out.beforeEach:a.jpg"));
+    }
+
+    @Test
+    public void aFailingAfterItemIsLoggedTheItemStaysDone() {
+        Out out = new Out();
+        out.failOn = "out.afterItem:a.jpg";
+        MainExecutor exec = singlePhase(new In("a.jpg"), new Analyse(), out);
+
+        exec.run();
+
+        assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(ItemStatus.DONE, item(exec, "a.jpg").getStatus());
+        assertTrue(calls.contains("analyse.afterItem:a.jpg"), "the other steps still clean up: " + calls);
     }
 
     @Test

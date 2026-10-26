@@ -1,5 +1,6 @@
 package com.copybot.plugin.embedded.actions;
 
+import com.copybot.engine.resources.DiskTraffic;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.Compare;
@@ -49,16 +50,21 @@ final class FileComparison {
                         .compareTo(DATE_TOLERANCE) <= 0;
             }
             case PARTIAL_HASH -> {
-                try (InputStream source = item.openInputStream(); InputStream written = Files.newInputStream(target)) {
+                try (InputStream source = item.openInputStream(); InputStream written = readCounted(target)) {
                     yield Arrays.equals(partialSha256(source, size), partialSha256(written, size));
                 }
             }
             case FULL_HASH -> {
-                try (InputStream source = item.openInputStream(); InputStream written = Files.newInputStream(target)) {
+                try (InputStream source = item.openInputStream(); InputStream written = readCounted(target)) {
                     yield Arrays.equals(sha256(source), sha256(written));
                 }
             }
         };
+    }
+
+    /** A target read again, counted on its disk. */
+    private static InputStream readCounted(Path target) throws IOException {
+        return DiskTraffic.global().countReads(Files.newInputStream(target), target);
     }
 
     /** The local file of the item, null when it is not a local file (e.g. a URL). */

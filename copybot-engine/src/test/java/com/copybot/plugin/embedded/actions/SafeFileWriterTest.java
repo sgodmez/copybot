@@ -1,5 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
+import com.copybot.engine.resources.DiskResolver;
+import com.copybot.engine.resources.DiskTraffic;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
@@ -302,6 +304,19 @@ public class SafeFileWriterTest {
 
             assertEquals(List.of(), names(nas()), mode);
         }
+    }
+
+    @Test
+    public void theCopyIsCountedOnTheDisksItReadsAndWrites() throws IOException {
+        String disk = DiskResolver.diskResource(tempDir);
+        DiskTraffic.Bytes before = DiskTraffic.global().snapshot().getOrDefault(disk, new DiskTraffic.Bytes(0, 0));
+
+        writer(",\"verify\":\"readBack\"").write(local("abcd"), nas().resolve("photo.jpg"), false, RUN, p -> {
+        });
+
+        DiskTraffic.Bytes after = DiskTraffic.global().snapshot().get(disk);
+        assertTrue(after.written() - before.written() >= 4, "the copy written");
+        assertTrue(after.read() - before.read() >= 8, "the source read, then the copy read back");
     }
 
     @Test

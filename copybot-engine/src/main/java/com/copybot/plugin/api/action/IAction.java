@@ -24,6 +24,7 @@ import java.util.Set;
  *     action the phase may run (an IN action before it lists);</li>
  *     <li>{@link #beforeEach} and {@link #afterEach} are called around each step of each item, on the item's
  *     thread ({@link IInAction}: around nothing, it has no item);</li>
+ *     <li>{@link #afterItem} is called once an item is finished, for every step that began for it;</li>
  *     <li>{@link #afterAll} is called once, after the last item of the phase, whatever its outcome (cancelled or
  *     failed included), when {@link #beforeAll} returned.</li>
  * </ul>
@@ -56,6 +57,19 @@ public interface IAction {
      * item is the one handed to {@link #beforeEach} (a process step may replace it).
      */
     default void afterEach(WorkItem item) {
+        // nothing by default
+    }
+
+    /**
+     * Once the item is finished in this run (written, skipped, filtered out, failed, or stopped by a cancel), for
+     * every step that began for it ({@link #beforeEach} called), the last step first: the time to delete the
+     * working files the step made for it (e.g. a buffer copy, see {@link WorkItem#withContentFile}). The item is
+     * the one handed to {@link #beforeEach}; when the step forked it, the call waits for every item made from it.
+     * Called on the thread of the item finishing last, possibly in a later phase than the step (the analysis of
+     * a plan); an item the run leaves out (not selected, run stopped before it) gets none: {@link #afterAll}
+     * cleans up what is left. A failure is logged, it changes nothing to the item.
+     */
+    default void afterItem(WorkItem item) {
         // nothing by default
     }
 

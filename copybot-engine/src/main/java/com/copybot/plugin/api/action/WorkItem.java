@@ -1,5 +1,7 @@
 package com.copybot.plugin.api.action;
 
+import com.copybot.engine.resources.DiskTraffic;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
@@ -19,6 +21,8 @@ public class WorkItem {
     private boolean isLocal;
     private boolean isDeleted = false;
     private String outPattern; // the item's own out pattern (spec own-out-pattern §1), null: the pipeline's
+    /** The local copy the content is read from (or made from), null: the source itself. */
+    private Path contentPath;
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
@@ -39,6 +43,7 @@ public class WorkItem {
         copy.isLocal = isLocal;
         copy.isDeleted = isDeleted;
         copy.outPattern = outPattern;
+        copy.contentPath = contentPath;
         copy.metadatas.raw().putAll(metadatas.raw());
         copy.metadatas.display().putAll(metadatas.display());
         return copy;
@@ -59,6 +64,27 @@ public class WorkItem {
         copy.inputStreamSupplier = content;
         copy.metadatas.setSize(size);
         return copy;
+    }
+
+    /**
+     * A copy of this item (as {@link #copyForDryRun()}) whose content is read from {@code file}, a local copy of the
+     * same content: for a step that buffers the file on a faster disk. The source is kept (its name, its location,
+     * the out step deleting it); the steps after it hold the disk of {@code file}, no longer the source's. The file
+     * is the step's own: it deletes it in {@link IAction#afterItem}, once the item is finished.
+     */
+    public WorkItem withContentFile(Path file) {
+        WorkItem copy = copyForDryRun();
+        copy.inputStreamSupplier = null;
+        copy.contentPath = file;
+        return copy;
+    }
+
+    /**
+     * The local file the content is read from, whose disk the steps hold: the content file
+     * ({@link #withContentFile}), else the local source; null for an item read from a URL.
+     */
+    public Path getContentLocation() {
+        return contentPath != null ? contentPath : sourceLocationPath;
     }
 
     public WorkItem(URL sourceLocationUrl, Supplier<InputStream> inputStreamSupplier) {
@@ -87,7 +113,9 @@ public class WorkItem {
         if (inputStreamSupplier != null) {
             return inputStreamSupplier.get();
         }
-        return Files.newInputStream(sourceLocationPath);
+        // counted on its disk: the gauges of a plan show the real throughput of each disk
+        Path content = getContentLocation();
+        return DiskTraffic.global().countReads(Files.newInputStream(content), content);
     }
 
 

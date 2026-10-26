@@ -1,5 +1,6 @@
 package com.copybot.plugin.embedded.actions;
 
+import com.copybot.engine.resources.DiskTraffic;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.embedded.actions.FileWriteSettings.WriteMode;
@@ -155,7 +156,7 @@ final class SafeFileWriter {
                                      IntConsumer percent) throws IOException {
         FileChannel channel = FileChannel.open(temp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         try {
-            Written written = copyAndClose(item, channel, percent);
+            Written written = copyAndClose(item, channel, temp, percent);
             preserveDate(item, temp);
             verify(item, temp, target, written);
             moveIntoPlace(temp, target, replaceExisting);
@@ -181,7 +182,7 @@ final class SafeFileWriter {
         }
         boolean complete = false;
         try {
-            Written written = copyAndClose(item, channel, percent);
+            Written written = copyAndClose(item, channel, target, percent);
             complete = true;
             preserveDate(item, target);
             verify(item, target, target, written);
@@ -197,10 +198,12 @@ final class SafeFileWriter {
     /**
      * Copies the item into the channel, then closes it. When the source is deleted after the copy, the
      * written bytes are forced to the storage first: the source must never go while the copy is only in cache.
+     *
+     * @param file the file of the channel, whose disk counts the bytes written
      */
-    private Written copyAndClose(WorkItem item, FileChannel channel, IntConsumer percent) throws IOException {
+    private Written copyAndClose(WorkItem item, FileChannel channel, Path file, IntConsumer percent) throws IOException {
         try (channel) {
-            Written written = copy(item, Channels.newOutputStream(channel), percent);
+            Written written = copy(item, Channels.newOutputStream(channel), DiskTraffic.global().on(file), percent);
             if (settings.deleteSource()) {
                 channel.force(true);
             }
@@ -208,7 +211,8 @@ final class SafeFileWriter {
         }
     }
 
-    private static Written copy(WorkItem item, OutputStream out, IntConsumer percent) throws IOException {
+    private static Written copy(WorkItem item, OutputStream out, DiskTraffic.Counter disk, IntConsumer percent)
+            throws IOException {
         MessageDigest digest = FileComparison.newSha256();
         Long size = item.getMetadatas().getSize();
         long transferred = 0;
@@ -217,6 +221,7 @@ final class SafeFileWriter {
             int read;
             while ((read = in.read(buffer, 0, BUFFER_SIZE)) >= 0) {
                 out.write(buffer, 0, read);
+                disk.written(read);
                 digest.update(buffer, 0, read);
                 transferred += read;
                 if (size != null && size > 0) {
@@ -244,7 +249,7 @@ final class SafeFileWriter {
             case READ_BACK -> {
                 checkSize(target, expectedSize, Files.size(file));
                 String readBack;
-                try (InputStream in = Files.newInputStream(file)) {
+                try (InputStream in = DiskTraffic.global().countReads(Files.newInputStream(file), file)) {
                     readBack = FileComparison.hex(FileComparison.sha256(in));
                 }
                 if (!readBack.equals(written.sha256())) {

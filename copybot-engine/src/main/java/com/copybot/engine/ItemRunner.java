@@ -19,6 +19,7 @@ import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
@@ -172,7 +173,30 @@ final class ItemRunner {
                 }
             }
         } finally {
+            ItemStatus status = exec.getStatus();
+            if (finalPhase || status == ItemStatus.DONE || status == ItemStatus.SKIPPED || status == ItemStatus.ERROR) {
+                afterItem(exec.finish());
+            }
             notifier.changed();
+        }
+    }
+
+    /**
+     * {@link IAction#afterItem} for every step that began for these finished items, the last step first. A failure
+     * is logged: the item is already finished, and the other steps still clean up.
+     */
+    private static void afterItem(List<WorkItemExecution> finished) {
+        for (WorkItemExecution exec : finished) {
+            List<PipelineStep<?>> steps = exec.getPipelineSteps();
+            List<Map.Entry<Integer, WorkItem>> handed = List.copyOf(exec.handedItems().entrySet());
+            for (Map.Entry<Integer, WorkItem> began : handed.reversed()) {
+                IAction action = steps.get(began.getKey()).getAction();
+                try {
+                    action.afterItem(began.getValue());
+                } catch (Throwable t) {
+                    LOG.warn(t, "item.after-item.failed", began.getValue().getNameDisplay(), String.valueOf(t));
+                }
+            }
         }
     }
 
@@ -265,6 +289,7 @@ final class ItemRunner {
         };
         return ItemProgress.callWith(progress, () -> {
             WorkItem item = exec.getWorkItem();
+            exec.stepBegan(stepIndex, item);
             action.beforeEach(item);
             StepOutcome outcome;
             try {
@@ -305,9 +330,11 @@ final class ItemRunner {
                 forked.setParent(exec);
                 state.getWorkItems().add(forked);
                 notifier.changed();
+                exec.forkStarted();
                 try {
                     submit(forked, stepIndex + 1, toStep);
                 } catch (RejectedExecutionException e) {
+                    afterItem(forked.finish()); // never runs: not waited for
                     if (tasks.isShutdown()) {
                         throw new PhaseStopped(); // the phase shut its executor down (cancel, interrupt)
                     }
