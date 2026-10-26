@@ -6,7 +6,7 @@
 
     <groupId>com.copybot</groupId>
     <artifactId>copybot-parent</artifactId>
-    <version>0.6.2-SNAPSHOT</version>
+    <version>0.7.0</version>
     <packaging>pom</packaging>
 
     <modules>
