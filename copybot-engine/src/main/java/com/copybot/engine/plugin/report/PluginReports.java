@@ -69,7 +69,8 @@ public final class PluginReports {
         }
         return new PluginEntry(definition.getName(), definition.getVersion(), definition.getSource(), definition.getPath(),
                 status, message, definition.getModules(), definition.getPluginDependencies(),
-                definition.getMissingRequires(), actions);
+                definition.getMissingRequires(), actions,
+                status == PluginStatus.ERROR ? definition.getErrorKey() : null);
     }
 
     private static List<ActionEntry> actions(IPlugin plugin) {

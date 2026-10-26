@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
@@ -154,6 +155,278 @@ class UpdateApplyTest {
         awaitFile(witness);
         assertTrue(Files.exists(nd.resolve("Copybot.exe")), "the folder of another script is kept");
         assertTrue(Files.readString(logDir.resolve("update.log")).contains("Refusing to delete"));
+    }
+
+    @Test
+    void pluginScriptCommandPassesTheManifestInsteadOfTheNewFolder() {
+        String powershell = UpdateApply.powershell().toString();
+        assertEquals(List.of(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File",
+                "s.ps1", "-ProcessId", "42", "-AppDir", "app", "-PluginManifest", "m.json", "-Exe", "Copybot.exe",
+                "-LogDir", "logs"),
+                UpdateApply.pluginScriptCommand(Path.of("s.ps1"), 42L, Path.of("app"), Path.of("m.json"),
+                        Path.of("Copybot.exe"), Path.of("logs"), null));
+        assertEquals(List.of("-ConfigFile", Path.of("my config.json").toString()),
+                UpdateApply.pluginScriptCommand(Path.of("s.ps1"), 42L, Path.of("app"), Path.of("m.json"),
+                        Path.of("Copybot.exe"), Path.of("logs"), Path.of("my config.json")).subList(18, 20));
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void thePluginModeReplacesOnlyItsFolders() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/old-name/a.jar"), "old");
+        write(app.resolve("plugins/other/b.jar"), "keep");
+        Path upd = dir.resolve("upd");
+        write(upd.resolve("metadata-extractor/m.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("metadata-extractor"))
+                + ",\"target\":\"metadata-extractor\"}],\"remove\":[" + json(app.resolve("plugins/old-name")) + "]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path logDir = dir.resolve("log");
+        Path script = UpdateApply.writeScript(upd);
+
+        runScript(UpdateApply.pluginScriptCommand(script, endedPid(), app, manifest, fakeExe(witness), logDir, null));
+
+        assertEquals("new-jar", Files.readString(app.resolve("plugins/metadata-extractor/m.jar")));
+        assertFalse(Files.exists(app.resolve("plugins/old-name")));
+        assertEquals("keep", Files.readString(app.resolve("plugins/other/b.jar")));
+        assertAppIntact(app);
+        awaitFile(witness);
+        awaitRemoved(upd);
+    }
+
+    /** A manifest which only removes: an uninstall. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aManifestOnlyRemovingUninstalls() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/gone/a.jar"), "old");
+        write(app.resolve("plugins/other/b.jar"), "keep");
+        Path upd = dir.resolve("upd");
+        Path manifest = manifest(upd, "{\"install\":[],\"remove\":[" + json(app.resolve("plugins/gone")) + "]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path script = UpdateApply.writeScript(upd);
+
+        runScript(UpdateApply.pluginScriptCommand(script, endedPid(), app, manifest, fakeExe(witness),
+                dir.resolve("log"), null));
+
+        assertFalse(Files.exists(app.resolve("plugins/gone")));
+        assertTrue(Files.exists(app.resolve("plugins/other/b.jar")));
+        assertAppIntact(app);
+        awaitFile(witness);
+        awaitRemoved(upd);
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aManifestOutsideThePluginsFolderIsRefused() throws Exception {
+        for (String bad : List.of(
+                "{\"install\":[],\"remove\":[APP]}",
+                "{\"install\":[],\"remove\":[SIBLING]}",
+                "{\"install\":[{\"source\":SRC,\"target\":\"..\\\\x\"}],\"remove\":[]}",
+                "{\"install\":[{\"source\":SRC,\"target\":\"a\\\\b\"}],\"remove\":[]}")) {
+            Path root = Files.createTempDirectory(dir, "case");
+            Path app = root.resolve("inst");
+            write(app.resolve("app/a.jar"), "v1");
+            write(app.resolve("Copybot.exe"), "exe");
+            write(app.resolve("plugins/p/p.jar"), "p");
+            Path upd = root.resolve("upd");
+            write(upd.resolve("src/s.jar"), "s");
+            Path manifest = manifest(upd, bad.replace("SIBLING", json(app.resolve("plugins").resolve("..\\app")))
+                    .replace("APP", json(app)).replace("SRC", json(upd.resolve("src"))));
+            Path witness = root.resolve("relaunched.txt");
+            Path logDir = root.resolve("log");
+
+            runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                    fakeExe(witness), logDir, null));
+
+            assertEquals("v1", Files.readString(app.resolve("app/a.jar")), bad);
+            assertEquals("p", Files.readString(app.resolve("plugins/p/p.jar")), bad);
+            assertFalse(Files.exists(root.resolve("x")), bad);
+            assertFalse(Files.exists(app.resolve("plugins/a")), bad);
+            awaitFile(witness);
+            assertTrue(Files.readString(logDir.resolve("update.log")).contains("Manifest refused"), bad);
+            awaitRemoved(upd);
+        }
+    }
+
+    /**
+     * A target follows the rule of the catalogue codes (a letter or digit, then letters, digits, '.', '_', '-', never a
+     * final '.'): "..." would otherwise mirror onto the plugins folder itself, Windows trims "x." to "x".
+     */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aTargetThatIsNotASafeNameIsRefused() throws Exception {
+        for (String target : List.of("...", "x.", "a b")) {
+            Path root = Files.createTempDirectory(dir, "case");
+            Path app = root.resolve("inst");
+            write(app.resolve("app/a.jar"), "v1");
+            write(app.resolve("Copybot.exe"), "exe");
+            write(app.resolve("plugins/p/p.jar"), "p");
+            Path upd = root.resolve("upd");
+            write(upd.resolve("src/s.jar"), "s");
+            Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("src")) + ",\"target\":\""
+                    + target + "\"}],\"remove\":[]}");
+            Path witness = root.resolve("relaunched.txt");
+            Path logDir = root.resolve("log");
+
+            runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                    fakeExe(witness), logDir, null));
+
+            assertEquals("p", Files.readString(app.resolve("plugins/p/p.jar")), target);
+            try (Stream<Path> content = Files.list(app.resolve("plugins"))) {
+                assertEquals(List.of(app.resolve("plugins/p")), content.toList(), target);
+            }
+            awaitFile(witness);
+            assertTrue(Files.readString(logDir.resolve("update.log")).contains("Manifest refused"), target);
+            awaitRemoved(upd);
+        }
+    }
+
+    /** The folder of the update is mirrored onto: never removed afterwards as the old folder of the plugin. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aRemovalOfTheInstalledFolderItselfKeepsTheNewVersion() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/metadata-extractor/m.jar"), "old");
+        Path upd = dir.resolve("upd");
+        write(upd.resolve("metadata-extractor/m.jar"), "new-jar"); // another size: robocopy copies it
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("metadata-extractor"))
+                + ",\"target\":\"metadata-extractor\"}],\"remove\":[" + json(app.resolve("plugins/metadata-extractor"))
+                + "]}");
+        Path witness = dir.resolve("relaunched.txt");
+
+        runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                fakeExe(witness), dir.resolve("log"), null));
+
+        assertEquals("new-jar", Files.readString(app.resolve("plugins/metadata-extractor/m.jar")));
+        awaitFile(witness);
+    }
+
+    /** The copies come first: a copy that fails leaves the old folder in place, an update never uninstalls. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aFailedCopyRemovesNothing() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/old-name/a.jar"), "old");
+        write(app.resolve("plugins/blocked"), "a file where the folder should go: robocopy fails");
+        Path upd = dir.resolve("upd");
+        write(upd.resolve("blocked/m.jar"), "new-jar");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("blocked"))
+                + ",\"target\":\"blocked\"}],\"remove\":[" + json(app.resolve("plugins/old-name")) + "]}");
+        Path witness = dir.resolve("relaunched.txt");
+        Path logDir = dir.resolve("log");
+
+        runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                fakeExe(witness), logDir, null));
+
+        assertEquals("old", Files.readString(app.resolve("plugins/old-name/a.jar")));
+        assertAppIntact(app);
+        awaitFile(witness);
+        assertTrue(Files.readString(logDir.resolve("update.log")).contains("failed with code"));
+    }
+
+    /** A source outside the folder of the script (even a readable folder) is never mirrored into plugins. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void aSourceOutsideTheScriptFolderIsRefused() throws Exception {
+        Path app = fakeApp();
+        write(app.resolve("plugins/p/p.jar"), "p");
+        Path elsewhere = dir.resolve("elsewhere");
+        write(elsewhere.resolve("secret.txt"), "s");
+        Path upd = dir.resolve("upd");
+        write(upd.resolve("nested/deeper/x.jar"), "x");
+        for (Path source : List.of(elsewhere, upd.resolve("nested/deeper"))) {
+            Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(source) + ",\"target\":\"t\"}],\"remove\":[]}");
+            Path witness = dir.resolve("relaunched-" + source.getFileName() + ".txt");
+            Path logDir = dir.resolve("log");
+
+            runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                    fakeExe(witness), logDir, null));
+
+            assertFalse(Files.exists(app.resolve("plugins/t")), source.toString());
+            assertEquals("p", Files.readString(app.resolve("plugins/p/p.jar")));
+            awaitFile(witness);
+            assertTrue(Files.readString(logDir.resolve("update.log")).contains("Manifest refused"));
+            awaitRemoved(upd);
+            write(upd.resolve("nested/deeper/x.jar"), "x");
+        }
+    }
+
+    /** Removing a plugin folder holding a junction deletes the link, never the files it points to. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void removingAFolderWithAJunctionKeepsTheLinkTarget() throws Exception {
+        Path app = fakeApp();
+        Path outside = dir.resolve("outside");
+        write(outside.resolve("precious.txt"), "keep me");
+        write(app.resolve("plugins/gone/a.jar"), "old");
+        Process mk = new ProcessBuilder("cmd", "/c", "mklink", "/J",
+                app.resolve("plugins/gone/link").toString(), outside.toString()).redirectErrorStream(true)
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD).start();
+        org.junit.jupiter.api.Assumptions.assumeTrue(mk.waitFor() == 0 && Files.exists(app.resolve("plugins/gone/link")),
+                "mklink /J unavailable");
+        Path upd = dir.resolve("upd");
+        Path manifest = manifest(upd, "{\"install\":[],\"remove\":[" + json(app.resolve("plugins/gone")) + "]}");
+        Path witness = dir.resolve("relaunched.txt");
+
+        runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                fakeExe(witness), dir.resolve("log"), null));
+
+        assertFalse(Files.exists(app.resolve("plugins/gone")));
+        assertEquals("keep me", Files.readString(outside.resolve("precious.txt")));
+        awaitFile(witness);
+    }
+
+    /** Installing when plugins does not exist yet creates it. */
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void installingCreatesAMissingPluginsFolder() throws Exception {
+        Path app = fakeApp();
+        Path upd = dir.resolve("upd");
+        write(upd.resolve("fresh/f.jar"), "f");
+        Path manifest = manifest(upd, "{\"install\":[{\"source\":" + json(upd.resolve("fresh"))
+                + ",\"target\":\"fresh\"}],\"remove\":[]}");
+        Path witness = dir.resolve("relaunched.txt");
+
+        runScript(UpdateApply.pluginScriptCommand(UpdateApply.writeScript(upd), endedPid(), app, manifest,
+                fakeExe(witness), dir.resolve("log"), null));
+
+        assertEquals("f", Files.readString(app.resolve("plugins/fresh/f.jar")));
+        awaitFile(witness);
+    }
+
+    private Path fakeApp() throws IOException {
+        Path app = dir.resolve("inst");
+        write(app.resolve("app/a.jar"), "v1");
+        write(app.resolve("runtime/r.dll"), "r");
+        write(app.resolve("Copybot.exe"), "exe1");
+        write(app.resolve("config.json"), "c");
+        return app;
+    }
+
+    private static void assertAppIntact(Path app) throws IOException {
+        assertEquals("v1", Files.readString(app.resolve("app/a.jar")));
+        assertEquals("r", Files.readString(app.resolve("runtime/r.dll")));
+        assertEquals("exe1", Files.readString(app.resolve("Copybot.exe")));
+        assertEquals("c", Files.readString(app.resolve("config.json")));
+    }
+
+    private static Path manifest(Path folder, String json) throws IOException {
+        Path file = folder.resolve("plugin-manifest.json");
+        write(file, json);
+        return file;
+    }
+
+    /** A JSON string literal of the path. */
+    private static String json(Path path) {
+        return "\"" + path.toString().replace("\\", "\\\\") + "\"";
+    }
+
+    private static void awaitRemoved(Path folder) throws InterruptedException {
+        for (int i = 0; i < 50 && Files.exists(folder); i++) {
+            Thread.sleep(100); // the script may leave the rest of its own folder to a delayed removal
+        }
+        assertFalse(Files.exists(folder), "temporary update folder removed");
     }
 
     /** A batch file standing for Copybot.exe: its relaunch writes its arguments to the witness. */

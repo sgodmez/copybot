@@ -91,7 +91,7 @@ public final class UpdateService {
     private final BooleanSupplier busy;
     private final Launcher launcher;
 
-    UpdateService(HttpClient client, URI latest, String currentVersion, Host host, Path logDir, Path tempRoot,
+    public UpdateService(HttpClient client, URI latest, String currentVersion, Host host, Path logDir, Path tempRoot,
             Clock clock, Settings settings, BooleanSupplier busy, Launcher launcher) {
         this.client = client;
         this.latest = latest;
@@ -143,8 +143,7 @@ public final class UpdateService {
      * @return the newer release, if any
      */
     public Optional<Release> automaticCheck() throws InterruptedException {
-        if (!settings.autoCheck() || unavailableReason().isPresent()
-                || !UpdateCheck.due(clock.instant(), settings.lastCheck())) {
+        if (!checkDue()) {
             return Optional.empty();
         }
         try {
@@ -154,6 +153,15 @@ public final class UpdateService {
                     List.of(e.args()));
             return Optional.empty();
         }
+    }
+
+    /**
+     * True when the check at startup is to run: turned on, possible here and not done for a day. Asked before
+     * {@link #automaticCheck()}, which records the date, by what is checked along (the plugins).
+     */
+    public boolean checkDue() {
+        return settings.autoCheck() && unavailableReason().isEmpty()
+                && UpdateCheck.due(clock.instant(), settings.lastCheck());
     }
 
     /**
@@ -211,6 +219,35 @@ public final class UpdateService {
      */
     public boolean adminApprovalNeeded() {
         return exe != null && exe.getParent() != null && !host.writable().test(exe.getParent());
+    }
+
+    /** The folder of the packaged application, empty outside it. */
+    public Optional<Path> appDir() {
+        return exe == null ? Optional.empty() : Optional.ofNullable(exe.getParent());
+    }
+
+    /** True when a file can be created in this folder (else Windows will ask for an administrator). */
+    public boolean writable(Path folder) {
+        return host.writable().test(folder);
+    }
+
+    /**
+     * The command running the replacement script of {@code script} in plugin mode for this Copybot (its process, its
+     * folder, its executable, its log folder and its {@code --config-file}). Only in the packaged application.
+     */
+    public List<String> pluginCommand(Path script, Path manifest) {
+        return UpdateApply.pluginScriptCommand(script, host.pid(), exe.getParent(), manifest, exe, logDir,
+                host.configFile());
+    }
+
+    /** A new temporary folder of an update ({@code copybot-update-*}), deleted after a day if it is left there. */
+    public Path createTempDir() throws UpdateException {
+        try {
+            return tempRoot == null ? Files.createTempDirectory(TEMP_PREFIX)
+                    : Files.createTempDirectory(tempRoot, TEMP_PREFIX);
+        } catch (IOException e) {
+            throw new UpdateException("update.error.io", UpdateCheck.message(e));
+        }
     }
 
     /**
@@ -286,13 +323,7 @@ public final class UpdateService {
         String name = assetName(release);
         Asset asset = release.asset(name)
                 .orElseThrow(() -> new UpdateException("update.error.no-asset", release.version(), name));
-        Path temp;
-        try {
-            temp = tempRoot == null ? Files.createTempDirectory(TEMP_PREFIX)
-                    : Files.createTempDirectory(tempRoot, TEMP_PREFIX);
-        } catch (IOException e) {
-            throw new UpdateException("update.error.io", UpdateCheck.message(e));
-        }
+        Path temp = createTempDir();
         boolean done = false;
         try {
             Path file = Download.fetch(client, asset, temp, progress, cancelled);

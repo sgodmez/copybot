@@ -10,6 +10,13 @@
     </parent>
 
     <artifactId>copybot-plugin-gps-zone</artifactId>
+    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
+    <version>1.0.0</version>
+
+    <properties>
+        <!-- IPlugin.getPluginCode(): the folder of the release archive -->
+        <plugin.code>gps-zone</plugin.code>
+    </properties>
 
     <dependencies>
         <dependency>
@@ -84,6 +91,13 @@
                         </goals>
                     </execution>
                 </executions>
+            </plugin>
+            <plugin>
+                <!--
+                    target/copybot-plugin-gps-zone-<version>.zip, configured in copybot-plugin/pom.xml. Last: at the
+                    package phase it must run after the copy of the libraries (plugins run in the order declared).
+                -->
+                <artifactId>maven-assembly-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

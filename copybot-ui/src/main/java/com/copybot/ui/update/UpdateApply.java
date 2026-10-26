@@ -79,9 +79,27 @@ public final class UpdateApply {
      */
     public static List<String> scriptCommand(Path script, long pid, Path appDir, Path newDir, Path exe,
             Path logDir, Path configFile) {
+        return command(script, pid, appDir, "-NewDir", newDir, exe, logDir, configFile);
+    }
+
+    /**
+     * The command running the replacement script in plugin mode: it installs, replaces and removes plugin folders as
+     * the JSON manifest says, with the same waiting, elevation and relaunch as an application update.
+     *
+     * @param manifest   the manifest, written in the folder of the script
+     * @param configFile the {@code --config-file} Copybot was started with, passed on to its relaunch; null for none
+     */
+    public static List<String> pluginScriptCommand(Path script, long pid, Path appDir, Path manifest, Path exe,
+            Path logDir, Path configFile) {
+        return command(script, pid, appDir, "-PluginManifest", manifest, exe, logDir, configFile);
+    }
+
+    /** The command common to both modes: {@code modeFlag modePath} sits between the application folder and the exe. */
+    private static List<String> command(Path script, long pid, Path appDir, String modeFlag, Path modePath, Path exe,
+            Path logDir, Path configFile) {
         List<String> command = new ArrayList<>(List.of(powershell().toString(), "-NoProfile", "-ExecutionPolicy",
                 "Bypass", "-WindowStyle", "Hidden", "-File", script.toString(),
-                "-ProcessId", Long.toString(pid), "-AppDir", appDir.toString(), "-NewDir", newDir.toString(),
+                "-ProcessId", Long.toString(pid), "-AppDir", appDir.toString(), modeFlag, modePath.toString(),
                 "-Exe", exe.toString(), "-LogDir", logDir.toString()));
         if (configFile != null) {
             command.addAll(List.of("-ConfigFile", configFile.toString()));

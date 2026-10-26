@@ -17,6 +17,8 @@ import com.copybot.ui.model.PlanViewModel.Filter;
 import com.copybot.ui.model.PlanViewModel.Phase;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.StepCatalog;
+import com.copybot.ui.plugins.PluginCatalog;
+import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.UiPreferences;
@@ -71,6 +73,8 @@ import java.util.stream.Collectors;
  */
 public class PlanController implements PlanOperations.View {
 
+    private static final System.Logger LOG = System.getLogger(PlanController.class.getName());
+
     @FXML private Button backButton;
     @FXML private Label pipelineName;
     @FXML private Button editButton;
@@ -82,6 +86,10 @@ public class PlanController implements PlanOperations.View {
     @FXML private FlowPane stepsFlow;
     @FXML private Label resumeModeLabel;
     @FXML private Label warningBanner;
+    /** The plugins the pipeline names that are not loaded (spec plugin-install §6). */
+    @FXML private HBox needsBox;
+    @FXML private Label needsLabel;
+    @FXML private Button needsInstallButton;
     @FXML private VBox resumeBox;
     @FXML private Label resumeLabel;
     @FXML private Label resumeCountLabel;
@@ -127,6 +135,8 @@ public class PlanController implements PlanOperations.View {
     private boolean excluding;
     /** The out step's "onMissingKey" of the pipeline read, for the output pattern dialog. */
     private String outOnMissingKey = "error";
+    /** The missing plugins the catalogue can install, chosen by "Install" of the banner. */
+    private List<String> installable = List.of();
 
     @FXML
     public void initialize() {
@@ -258,16 +268,24 @@ public class PlanController implements PlanOperations.View {
         loadToken = token;
         renderSummary();
         refresh();
+        showNeeds(List.of());
         Background.run(() -> {
                     PipelineDocument document = PipelineDocument.load(pipelinePath);
                     // the catalog (plugin instances, bundles) is built here too, off the JavaFX thread
                     try {
-                        return new Loaded(document, PipelineSummary.of(document, new StepCatalog(PluginEngine.catalog())), null);
+                        StepCatalog catalog = new StepCatalog(PluginEngine.catalog());
+                        return new Loaded(document, PipelineSummary.of(document, catalog), null,
+                                catalog.missingPlugins(document));
                     } catch (Throwable t) {
-                        return new Loaded(document, null, t);
+                        return new Loaded(document, null, t, List.of());
                     }
                 },
-                loaded -> onLoaded(token, loaded.document(), loaded.summary(), loaded.summaryFailure()),
+                loaded -> {
+                    onLoaded(token, loaded.document(), loaded.summary(), loaded.summaryFailure());
+                    if (token == loadToken) {
+                        showNeeds(loaded.missing());
+                    }
+                },
                 failure -> { // an Error too: the view must not stay "loading"
                     if (token == loadToken) {
                         loading = false;
@@ -277,8 +295,51 @@ public class PlanController implements PlanOperations.View {
                 });
     }
 
-    /** The pipeline read in the background, and its summary (null with the failure that prevented it). */
-    private record Loaded(PipelineDocument document, PipelineSummary summary, Throwable summaryFailure) {
+    /**
+     * The pipeline read in the background, and its summary (null with the failure that prevented it).
+     *
+     * @param missing the plugins its steps name that are not loaded at all
+     */
+    private record Loaded(PipelineDocument document, PipelineSummary summary, Throwable summaryFailure,
+                          List<String> missing) {
+    }
+
+    /**
+     * The banner "This pipeline needs: X, Y" (spec plugin-install §6), with "Install" once the catalogue (in memory,
+     * else read in the background) offers to install or update one of them (an installed plugin that failed to load,
+     * without an update that fixes it, gets no button: the Plugins window would offer nothing); offline the banner
+     * only names them.
+     */
+    private void showNeeds(List<String> missing) {
+        installable = List.of();
+        show(needsBox, !missing.isEmpty());
+        show(needsInstallButton, false);
+        if (missing.isEmpty()) {
+            return;
+        }
+        needsLabel.setText(ResourcesEngine.getString("plan.needs-plugins", String.join(", ", missing)));
+        Optional<PluginService> service = UpdateUi.plugins();
+        if (service.isEmpty()) {
+            return;
+        }
+        Object token = loadToken;
+        Background.run(() -> service.get().installable(missing, service.get().catalog()),
+                entries -> {
+                    if (token != loadToken) {
+                        return;
+                    }
+                    installable = entries.stream().map(PluginCatalog.Entry::module).toList();
+                    show(needsInstallButton, !installable.isEmpty());
+                },
+                failure -> LOG.log(System.Logger.Level.INFO, "plugin catalogue not read: {0}",
+                        UpdateUi.message(failure)));
+    }
+
+    @FXML
+    protected void onNeedsInstallClick() {
+        if (!installable.isEmpty()) {
+            main.openPlugins(installable, false, null);
+        }
     }
 
     private void onLoaded(Object token, PipelineDocument document, PipelineSummary loaded, Throwable failure) {

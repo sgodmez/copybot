@@ -3,6 +3,7 @@ package com.copybot.ui;
 import com.copybot.config.AppFolders;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.update.UpdateService;
 import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.AppLogging;
@@ -63,8 +64,9 @@ public class CopybotMainUi extends Application {
             ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
             UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
             ENGINE = CopybotEngine.create(folders);
-            UpdateUi.init(UpdateService.forThisApp(AppInfo.version(), folders.logsDir(),
-                    folders.configChosen() ? folders.configFile() : null, CopybotMainUi::isBusy));
+            UpdateService updates = UpdateService.forThisApp(AppInfo.version(), folders.logsDir(),
+                    folders.configChosen() ? folders.configFile() : null, CopybotMainUi::isBusy);
+            UpdateUi.init(updates, PluginService.forThisApp(updates, () -> ENGINE.pluginReport()));
         } catch (Exception e) {
             PopinUtil.showError(e);
             System.exit(1);

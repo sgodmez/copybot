@@ -81,7 +81,20 @@ public class UiBundleTest {
             "update.error.http", "update.error.network", "update.error.unreadable", "update.error.no-digest",
             "update.error.digest", "update.error.size", "update.error.stalled", "update.error.cancelled",
             "update.error.no-asset", "update.error.zip", "update.error.io", "update.error.launch",
-            "update.other-instance", "update.admin", "update.no-release");
+            "update.other-instance", "update.admin", "update.no-release",
+            "plugins.official.title", "plugins.official.loading", "plugins.official.unreadable",
+            "plugins.official.empty", "plugins.official.installed", "plugins.official.available",
+            "plugins.state.NOT_INSTALLED", "plugins.state.UP_TO_DATE", "plugins.state.UPDATE_AVAILABLE",
+            "plugins.state.INSTALLED_INCOMPATIBLE", "plugins.state.INCOMPATIBLE", "plugins.state.update-fixes",
+            "plugins.state.needs-newer-engine", "plugins.error.no-release", "editor.plugin-not-loaded",
+            "plugins.action.INSTALL", "plugins.action.UPDATE", "plugins.action.REMOVE", "plugins.chosen.INSTALL",
+            "plugins.chosen.UPDATE", "plugins.chosen.REMOVE", "plugins.action.undo", "plugins.update-all",
+            "plugins.apply", "plugins.pending", "plugins.license", "plugins.confirm.title", "plugins.confirm.intro",
+            "plugins.confirm.install", "plugins.confirm.update", "plugins.confirm.remove", "plugins.confirm.licenses",
+            "plugins.admin", "plugins.downloading", "plugins.unavailable-dev", "plugins.windows-only",
+            "plugins.other-instance", "plugins.error.no-catalogue", "plugins.error.no-asset", "plugins.error.outside",
+            "plugins.updates-available", "plugins.show-updates", "editor.plugin-not-installed",
+            "editor.plugin-install", "plan.needs-plugins", "plan.install-plugins");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
 
@@ -150,7 +163,8 @@ public class UiBundleTest {
     @Test
     public void everyKeyIsResolvedByTheEngine() {
         for (String key : KEYS) {
-            Object[] args = key.startsWith("plan.resume.count.") ? new Object[]{2} : new Object[]{"a", "b", "c", "d", "e"};
+            Object[] args = key.startsWith("plan.resume.count.") || key.equals("plugins.pending")
+                    || key.equals("plugins.updates-available") ? new Object[]{2} : new Object[]{"a", "b", "c", "d", "e"};
             assertFalse(ResourcesEngine.getString(key, args).startsWith("%"), key);
         }
     }

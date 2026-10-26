@@ -10,6 +10,13 @@
     </parent>
 
     <artifactId>copybot-plugin-metadata-extractor</artifactId>
+    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
+    <version>1.0.0</version>
+
+    <properties>
+        <!-- IPlugin.getPluginCode(): the folder of the release archive -->
+        <plugin.code>metadata-extractor</plugin.code>
+    </properties>
 
     <dependencies>
         <dependency>
@@ -65,6 +72,13 @@
                 <configuration>
                     <argLine>--add-exports com.copybot.engine/com.copybot.plugin.embedded.actions=com.copybot.plugin.metadataextractor --add-exports com.copybot.engine/com.copybot.engine=com.copybot.plugin.metadataextractor --add-exports com.copybot.engine/com.copybot.engine.pipeline=com.copybot.plugin.metadataextractor --enable-native-access=com.copybot.engine</argLine>
                 </configuration>
+            </plugin>
+            <plugin>
+                <!--
+                    target/copybot-plugin-metadata-extractor-<version>.zip, configured in copybot-plugin/pom.xml. Last:
+                    at the package phase it must run after the copy of the libraries (plugins run in the order declared).
+                -->
+                <artifactId>maven-assembly-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

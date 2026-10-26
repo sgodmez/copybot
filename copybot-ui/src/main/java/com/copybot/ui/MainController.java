@@ -2,6 +2,8 @@ package com.copybot.ui;
 
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginChoices;
+import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
@@ -18,13 +20,18 @@ import javafx.scene.control.MenuItem;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Collection;
 import java.util.Locale;
+import java.util.Set;
 
 /** The main window: the menu, and the home screen or the plan view of one pipeline in the center. */
 public class MainController {
@@ -37,6 +44,8 @@ public class MainController {
     private static PluginsController pluginsController;
     /** The language the plugins window was built in: built again after a change. */
     private static Locale pluginsLocale;
+    /** The choices of a Plugins window closed to be opened again (over an editor, in a new language). */
+    private static PluginChoices carriedChoices;
 
     /** A preparation or a copy runs in the plan view (see {@link #setBusy}). */
     private volatile boolean busy;
@@ -55,6 +64,8 @@ public class MainController {
     private Button updateInstallButton;
     @FXML
     private Label updateReason;
+    @FXML
+    private Hyperlink updateNotesLink;
 
     @FXML
     public void initialize() {
@@ -65,6 +76,7 @@ public class MainController {
             showHome();
         }
         if (pluginsWindow != null && pluginsWindow.isShowing() && !Locale.getDefault().equals(pluginsLocale)) {
+            carriedChoices = pluginsController.choices();
             pluginsWindow.close(); // a language change: the window is built again in the new language
             pluginsWindow = null;
             pluginsController = null;
@@ -99,6 +111,9 @@ public class MainController {
         this.busy = busy;
         preferencesItem.setDisable(busy);
         refreshUpdateBanner(); // no update while an operation runs
+        if (pluginsController != null) {
+            pluginsController.refreshActions(); // nor plugin changes
+        }
     }
 
     /** Exiting then asks first: the operation would be stopped. */
@@ -112,17 +127,30 @@ public class MainController {
     }
 
     /**
-     * Shows the banner of a newer release (spec app-update §3), unless closed this session; its "Update" button is
-     * disabled with the reason while an operation runs, and outside Windows.
+     * Shows the banner of a newer release (spec app-update §3) and of the plugin updates (spec plugin-install §5),
+     * unless closed this session. With a release its button updates Copybot (the application first), disabled with
+     * the reason while an operation runs, and outside Windows; with plugin updates only, it opens the Plugins window
+     * with these updates chosen.
      */
     void refreshUpdateBanner() {
         var release = UpdateUi.offered();
-        updateBanner.setVisible(release.isPresent());
-        updateBanner.setManaged(release.isPresent());
-        if (release.isEmpty()) {
+        long pluginUpdates = UpdateUi.offeredPluginUpdates();
+        boolean shown = release.isPresent() || pluginUpdates > 0;
+        updateBanner.setVisible(shown);
+        updateBanner.setManaged(shown);
+        if (!shown) {
             return;
         }
-        updateLabel.setText(ResourcesEngine.getString("update.available", release.get().version()));
+        updateLabel.setText(UpdateUi.checkText(new PluginService.Check(release, pluginUpdates)));
+        updateNotesLink.setVisible(release.isPresent());
+        updateNotesLink.setManaged(release.isPresent());
+        if (release.isEmpty()) {
+            updateInstallButton.setText(ResourcesEngine.getString("plugins.show-updates"));
+            updateInstallButton.setDisable(false);
+            updateReason.setText("");
+            return;
+        }
+        updateInstallButton.setText(ResourcesEngine.getString("update.install"));
         var blocked = UpdateUi.service().flatMap(service -> service.installBlocked());
         updateInstallButton.setDisable(blocked.isPresent());
         updateReason.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
@@ -130,7 +158,12 @@ public class MainController {
 
     @FXML
     protected void onUpdateInstallClick() {
-        UpdateUi.offered().ifPresent(UpdateUi::install);
+        var release = UpdateUi.offered();
+        if (release.isPresent()) {
+            UpdateUi.install(release.get());
+        } else if (UpdateUi.offeredPluginUpdates() > 0) {
+            openPlugins(Set.of(), true, null);
+        }
     }
 
     @FXML
@@ -182,32 +215,71 @@ public class MainController {
     /** Opens the plugins window, or refreshes it when open. */
     @FXML
     protected void onPluginsClick() {
+        openPlugins(Set.of(), false, null);
+    }
+
+    /**
+     * Opens the plugins window, or refreshes it when open, with the install or update of these modules chosen
+     * (a plugin a pipeline needs) and, with {@code updates}, every update chosen (the banner).
+     *
+     * @param modalOwner a modal window the Plugins window is opened from (an editor): the Plugins window is then
+     *                   opened over it, modal too (a window under a modal one takes no input)
+     */
+    void openPlugins(Collection<String> modules, boolean updates, Window modalOwner) {
+        if (modalOwner != null && pluginsWindow != null && pluginsWindow.isShowing()
+                && pluginsWindow.getOwner() != modalOwner) {
+            carriedChoices = pluginsController.choices(); // the choices not applied yet follow the window
+            pluginsWindow.close(); // under the modal window: opened again over it
+            pluginsWindow = null;
+            pluginsController = null;
+        }
         if (pluginsWindow != null && pluginsWindow.isShowing()) {
             pluginsWindow.toFront();
         }
         // the report checks directories: off the JavaFX thread
         Background.run(CopybotMainUi.ENGINE::pluginReport,
-                this::showPlugins,
+                report -> showPlugins(report, modules, updates, modalOwner),
                 PopinUtil::showError); // an Error too: the click must not be lost silently
     }
 
-    private void showPlugins(PluginReport report) {
+    private void showPlugins(PluginReport report, Collection<String> modules, boolean updates, Window modalOwner) {
         if (pluginsWindow != null && pluginsWindow.isShowing()) {
             pluginsController.init(report);
+            pluginsController.showOfficial(modules, updates);
             return;
         }
         try {
             Views.Loaded<PluginsController> plugins = Views.load("plugins-view.fxml");
             plugins.controller().init(report);
+            if (carriedChoices != null) {
+                plugins.controller().useChoices(carriedChoices); // the request below is added to them
+                carriedChoices = null;
+            }
+            if (plugins.root() instanceof Region region) { // a small screen: the window fits it
+                double available = Screen.getPrimary().getVisualBounds().getHeight() - 60;
+                region.setPrefHeight(Math.min(region.getPrefHeight(), Math.max(400, available)));
+            }
             Stage window = new Stage();
             window.setTitle(ResourcesEngine.getString("plugins.title"));
             window.getIcons().setAll(CopybotMainUi.STAGE.getIcons());
             window.setScene(new Scene(plugins.root()));
-            window.initOwner(CopybotMainUi.STAGE);
+            if (modalOwner != null) {
+                window.initOwner(modalOwner);
+                window.initModality(Modality.WINDOW_MODAL);
+            } else {
+                window.initOwner(CopybotMainUi.STAGE);
+            }
+            window.setOnHidden(e -> {
+                if (pluginsWindow == window) {
+                    pluginsWindow = null;
+                    pluginsController = null;
+                }
+            });
             window.show();
             pluginsWindow = window;
             pluginsController = plugins.controller();
             pluginsLocale = Locale.getDefault();
+            plugins.controller().showOfficial(modules, updates);
         } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }

@@ -9,9 +9,11 @@ import com.google.gson.JsonObject;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The loaded actions as the pipeline editor uses them (spec desktop-ui §3): what a section can add, and
@@ -72,6 +74,31 @@ public final class StepCatalog {
      */
     public Optional<FailedPlugin> failedPlugin(JsonObject step) {
         return resolve(pluginName(step), text(step, "version")).map(Version::failed);
+    }
+
+    /** True when a version of this plugin was loaded, failed or not. */
+    public boolean isLoaded(String pluginName) {
+        return actions.stream().anyMatch(a -> a.pluginName().equals(pluginName))
+                || failedPlugins.stream().anyMatch(f -> f.pluginName().equals(pluginName));
+    }
+
+    /**
+     * The plugins the steps of the pipeline name that are not loaded at all, in pipeline order without duplicates
+     * (a plugin loaded in another version is not counted). Not loaded is not always not installed: a plugin that
+     * failed to load (refused for its API, a missing dependency) is here too; "Install" is offered only for what the
+     * catalogue rows say leads somewhere ({@code PluginRow.offersInstall}).
+     */
+    public List<String> missingPlugins(PipelineDocument document) {
+        Set<String> missing = new LinkedHashSet<>();
+        for (PipelineDocument.Section section : PipelineDocument.Section.values()) {
+            for (JsonObject step : document.steps(section)) {
+                String plugin = pluginName(step);
+                if (!plugin.equals(CatalogAction.EMBEDDED_PLUGIN) && !isLoaded(plugin)) {
+                    missing.add(plugin);
+                }
+            }
+        }
+        return List.copyOf(missing);
     }
 
     /** The most recent loaded version of the plugin compatible with the required one, failed or not. */

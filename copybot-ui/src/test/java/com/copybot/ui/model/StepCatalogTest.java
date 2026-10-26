@@ -110,4 +110,22 @@ public class StepCatalogTest {
         assertEquals(Optional.of(embedded), catalog.failedPlugin(step("{\"action\":\"file.read\"}")));
         assertEquals(Optional.empty(), catalog.find(Section.IN, step("{\"action\":\"file.read\"}")));
     }
+
+    @Test
+    public void thePluginsOfAPipelineThatAreNotLoadedAtAllAreMissing() {
+        FailedPlugin failed = new FailedPlugin("com.acme.failed", "1.0.0");
+        StepCatalog catalog = new StepCatalog(new PluginCatalog(List.of(EXIF_2, READ, WRITE), List.of(failed)));
+        PipelineDocument document = PipelineDocument.parse("""
+                {"inSteps": [{"action": "file.read"}],
+                 "analyseSteps": [{"plugin": "com.acme.exif", "action": "exif.read", "version": "9.0"},
+                                  {"plugin": "com.acme.gps", "action": "gps.zone"},
+                                  {"plugin": "com.acme.failed", "action": "x"}],
+                 "actionSteps": [{"plugin": "com.acme.gps", "action": "other"}],
+                 "outStep": {"plugin": "com.acme.tag", "action": "tag.write"}}""");
+
+        assertEquals(List.of("com.acme.gps", "com.acme.tag"), catalog.missingPlugins(document));
+        assertTrue(catalog.isLoaded("com.acme.exif"));
+        assertTrue(catalog.isLoaded("com.acme.failed"), "failed, but loaded: installing would not help");
+        assertFalse(catalog.isLoaded("com.acme.gps"));
+    }
 }

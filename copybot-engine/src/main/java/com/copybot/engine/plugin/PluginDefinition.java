@@ -19,6 +19,7 @@ public final class PluginDefinition {
     private Path path;
     private boolean active;
     private String errorMessage;
+    private String errorKey;
     private IPlugin pluginInstance;
     private PluginSource source;
     private boolean ignored;
@@ -40,6 +41,7 @@ public final class PluginDefinition {
         var version = ll.getVersion();
         var errorMessageResolved = errorMessage != null ? errorMessage : ll.getError();
         var definition = new PluginDefinition(name, version, path, false, errorMessageResolved, null, sourceOf(ll));
+        definition.errorKey = errorMessage != null ? null : ll.getErrorKey();
         definition.modules = ll.getModuleEntries();
         definition.pluginDependencies = dependenciesOf(ll);
         return definition;
@@ -140,6 +142,11 @@ public final class PluginDefinition {
 
     public String getErrorMessage() {
         return errorMessage;
+    }
+
+    /** The bundle key (plugin.load.*) of the loader error, null for any other message or none. */
+    public String getErrorKey() {
+        return errorKey;
     }
 
     public IPlugin getPluginInstance() {

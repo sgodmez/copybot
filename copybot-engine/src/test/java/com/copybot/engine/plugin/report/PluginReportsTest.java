@@ -48,6 +48,7 @@ public class PluginReportsTest {
         PluginEntry alpha = entry(report, "fixture.alpha");
         assertEquals(PluginStatus.LOADED, alpha.status());
         assertNull(alpha.message());
+        assertNull(alpha.errorKey());
         assertEquals(PluginSource.PLUGIN_PATH, alpha.source());
         assertEquals("1.0.0", alpha.version());
         assertEquals(1, alpha.modules().size());
@@ -66,6 +67,7 @@ public class PluginReportsTest {
         PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, List.of(), load(pluginPath, List.of()));
 
         assertEquals(PluginStatus.ERROR, entry(report, "e-empty").status());
+        assertEquals("plugin.load.no-module", entry(report, "e-empty").errorKey(), "the key does not depend on the language");
         PluginEntry mute = entry(report, "fixture.mute");
         assertEquals(PluginStatus.ACTIONS_FAILED, mute.status());
         assertTrue(mute.message().contains("no actions"), mute.message());

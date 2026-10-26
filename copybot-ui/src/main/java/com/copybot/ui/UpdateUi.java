@@ -1,6 +1,10 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginCatalog;
+import com.copybot.ui.plugins.PluginRow;
+import com.copybot.ui.plugins.PluginService;
+import com.copybot.ui.plugins.PluginState;
 import com.copybot.ui.update.Release;
 import com.copybot.ui.update.UpdateException;
 import com.copybot.ui.update.UpdateService;
@@ -12,6 +16,7 @@ import javafx.geometry.Pos;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
@@ -20,15 +25,23 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
 import javafx.stage.StageStyle;
+import javafx.stage.Window;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.Collectors;
 
 /**
- * The JavaFX side of the self-update (spec app-update §2-§5): the check at startup, the release offered in the banner
- * of the main window, and the update itself (exit confirmation, download window, launch, exit). Everything here runs on
- * the JavaFX thread; the network and the disk are left to {@link UpdateService} in the background.
+ * The JavaFX side of the self-update (spec app-update §2-§5) and of the official plugins (spec plugin-install §3-§5):
+ * the check at startup, the release and the plugin updates offered in the banner of the main window, the update itself
+ * and the application of the plugin changes (exit confirmation, download window, launch, exit). Everything here runs
+ * on the JavaFX thread; the network and the disk are left to {@link UpdateService} and {@link PluginService} in the
+ * background.
  */
 final class UpdateUi {
 
@@ -36,8 +49,12 @@ final class UpdateUi {
 
     /** Null until the startup has resolved the folders. */
     private static UpdateService service;
+    /** Null until the startup has resolved the folders. */
+    private static PluginService plugins;
     /** The newer release found this session, null when none. */
     private static Release offered;
+    /** The number of installed plugins with an update found by the last check. */
+    private static long pluginUpdates;
     /** The banner was closed: hidden until the next start. */
     private static boolean dismissed;
     /** The text of the last check of the preferences, shown again when they are reopened. */
@@ -46,33 +63,44 @@ final class UpdateUi {
     private UpdateUi() {
     }
 
-    static void init(UpdateService updateService) {
+    static void init(UpdateService updateService, PluginService pluginService) {
         service = updateService;
+        plugins = pluginService;
     }
 
     static Optional<UpdateService> service() {
         return Optional.ofNullable(service);
     }
 
+    static Optional<PluginService> plugins() {
+        return Optional.ofNullable(plugins);
+    }
+
     /**
      * The startup: the update folders left in the temporary directory more than a day ago are deleted, then the
-     * check runs when due. A failure is only logged, nothing is shown.
+     * check runs when due, with the catalogue of the plugins. A failure is only logged, nothing is shown.
      */
     static void startupCheck() {
-        if (service == null) {
+        if (service == null || plugins == null) {
             return;
         }
         Background.run(() -> {
                     service.deleteOldUpdates();
-                    return service.automaticCheck();
+                    return plugins.automaticCheck();
                 },
-                found -> found.ifPresent(UpdateUi::offer),
+                UpdateUi::offer,
                 failure -> LOG.log(System.Logger.Level.WARNING, "automatic update check failed", failure));
     }
 
-    /** Shows the banner of this release, even if an older one was closed. */
-    static void offer(Release release) {
-        offered = release;
+    /** Shows the banner of what this check found (a release, plugin updates), even if an older one was closed. */
+    static void offer(PluginService.Check check) {
+        if (check.release().isEmpty() && check.pluginUpdates() == 0) {
+            pluginUpdates = 0; // nothing more to announce; a release found before stays offered
+            CopybotMainUi.mainController().ifPresent(MainController::refreshUpdateBanner);
+            return;
+        }
+        check.release().ifPresent(release -> offered = release);
+        pluginUpdates = check.pluginUpdates();
         dismissed = false;
         CopybotMainUi.mainController().ifPresent(MainController::refreshUpdateBanner);
     }
@@ -82,9 +110,25 @@ final class UpdateUi {
         return dismissed ? Optional.empty() : Optional.ofNullable(offered);
     }
 
+    /** The plugin updates of the banner, 0 when there are none or when it was closed. */
+    static long offeredPluginUpdates() {
+        return dismissed ? 0 : pluginUpdates;
+    }
+
     static void dismiss() {
         dismissed = true;
         CopybotMainUi.mainController().ifPresent(MainController::refreshUpdateBanner);
+    }
+
+    /** The text of a check: the release, the plugin updates, both, or "up to date". */
+    static String checkText(PluginService.Check check) {
+        List<String> parts = new ArrayList<>();
+        check.release().ifPresent(release -> parts.add(ResourcesEngine.getString("update.available",
+                release.version())));
+        if (check.pluginUpdates() > 0) {
+            parts.add(ResourcesEngine.getString("plugins.updates-available", check.pluginUpdates()));
+        }
+        return parts.isEmpty() ? ResourcesEngine.getString("update.up-to-date") : String.join(" ", parts);
     }
 
     static Optional<String> lastResult() {
@@ -116,44 +160,18 @@ final class UpdateUi {
         }
         Optional<String> otherInstance = service.otherInstance();
         if (otherInstance.isPresent()) {
-            Alert alert = new Alert(Alert.AlertType.INFORMATION, ResourcesEngine.getString(otherInstance.get()));
-            alert.initOwner(CopybotMainUi.STAGE);
-            alert.setTitle(ResourcesEngine.getString("update.title"));
-            alert.setHeaderText(null);
-            alert.showAndWait();
+            inform(CopybotMainUi.STAGE, "update.title", ResourcesEngine.getString(otherInstance.get()));
             return;
         }
-        if (service.adminApprovalNeeded() && !confirmAdminApproval()) {
+        if (service.adminApprovalNeeded()
+                && !confirmAdminApproval(CopybotMainUi.STAGE, "update.title", "update.admin")) {
             return;
         }
         if (!CopybotMainUi.confirmExitForUpdate()) {
             return;
         }
-        AtomicBoolean cancelled = new AtomicBoolean();
-        ProgressBar bar = new ProgressBar(0);
-        bar.setPrefWidth(360);
-        Button cancel = new Button(ResourcesEngine.getString("update.cancel"));
-        cancel.setCancelButton(true);
-        cancel.setOnAction(e -> {
-            cancelled.set(true);
-            cancel.setDisable(true);
-        });
-        HBox buttons = new HBox(cancel);
-        buttons.setAlignment(Pos.CENTER_RIGHT);
-        VBox content = new VBox(10, new Label(ResourcesEngine.getString("update.downloading", release.version())),
-                bar, buttons);
-        content.setPadding(new Insets(16));
-        Stage window = new Stage(StageStyle.UTILITY);
-        window.initOwner(CopybotMainUi.STAGE);
-        window.initModality(Modality.APPLICATION_MODAL);
-        window.setTitle(ResourcesEngine.getString("update.title"));
-        window.setResizable(false);
-        window.setScene(new Scene(content));
-        window.setOnCloseRequest(e -> {
-            e.consume(); // closing the window is cancelling
-            cancel.fire();
-        });
-        window.show();
+        ProgressWindow progress = new ProgressWindow(CopybotMainUi.STAGE, "update.title",
+                ResourcesEngine.getString("update.downloading", release.version()));
 
         // the progress of the download thread, handed to the JavaFX thread at most once at a time
         AtomicLong received = new AtomicLong();
@@ -165,41 +183,201 @@ final class UpdateUi {
                         if (pending.compareAndSet(false, true)) {
                             Platform.runLater(() -> {
                                 pending.set(false);
-                                bar.setProgress(size > 0 ? (double) received.get() / size : -1);
+                                progress.bar.setProgress(size > 0 ? (double) received.get() / size : -1);
                             });
                         }
-                    }, cancelled::get);
-                    service.launch(prepared, cancelled::get); // a cancel during the extraction stops it too
+                    }, progress.cancelled::get);
+                    service.launch(prepared, progress.cancelled::get); // a cancel during the extraction stops it too
                     return prepared;
                 },
                 prepared -> {
-                    window.hide();
+                    progress.window.hide();
                     LOG.log(System.Logger.Level.INFO, "update to {0} started: {1}", release.version(),
                             prepared.command());
                     // only now are the editors closed: a failed or cancelled update leaves them as they were
                     CopybotMainUi.exitForUpdate(); // the installer or the script waits for this process to end
                 },
                 failure -> {
-                    window.hide();
+                    progress.window.hide();
                     if (failure instanceof UpdateException e && e.key().equals("update.error.cancelled")) {
                         return; // the user's own choice: nothing to tell
                     }
                     LOG.log(System.Logger.Level.WARNING, "update to " + release.version() + " failed", failure);
-                    Alert alert = new Alert(Alert.AlertType.ERROR, message(failure));
-                    alert.initOwner(CopybotMainUi.STAGE);
-                    alert.setTitle(ResourcesEngine.getString("update.title"));
-                    alert.setHeaderText(null);
-                    alert.show();
+                    showError(CopybotMainUi.STAGE, "update.title", failure);
                 });
     }
 
+    /**
+     * "Apply and restart" of the Plugins window (spec plugin-install §3): like the update, refused while an operation
+     * runs or while another Copybot runs from the same folder; the changes and the licences confirmed; a warning
+     * when Windows will ask for an administrator; the unsaved editors asked about; every archive downloaded and
+     * unpacked with a window that can cancel; the script launched and Copybot quits. A failure or a cancel changes
+     * nothing, deletes the download and Copybot goes on.
+     *
+     * @param owner the Plugins window
+     */
+    static void applyPlugins(List<PluginRow> toInstallOrUpdate, List<PluginRow> toRemove, Window owner) {
+        if (plugins == null || toInstallOrUpdate.isEmpty() && toRemove.isEmpty()) {
+            return;
+        }
+        Optional<String> blocked = plugins.applyBlocked().or(plugins::otherInstance);
+        if (blocked.isPresent()) {
+            inform(owner, "plugins.confirm.title", ResourcesEngine.getString(blocked.get()));
+            return;
+        }
+        if (!confirmPluginChanges(toInstallOrUpdate, toRemove, owner)) {
+            return;
+        }
+        if (plugins.adminApprovalNeeded() && !confirmAdminApproval(owner, "plugins.confirm.title", "plugins.admin")) {
+            return;
+        }
+        if (!CopybotMainUi.confirmExitForUpdate()) {
+            return;
+        }
+        int count = toInstallOrUpdate.size();
+        ProgressWindow progress = new ProgressWindow(owner, "plugins.confirm.title",
+                count == 0 ? ResourcesEngine.getString("plugins.confirm.intro") // removals only: nothing to download
+                        : ResourcesEngine.getString("plugins.downloading", toInstallOrUpdate.getFirst().entry().code(),
+                        "1", Integer.toString(count)));
+        // the size of an archive is only known once its release is read: the bar keeps moving, the text counts
+        progress.bar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
+        AtomicBoolean pending = new AtomicBoolean();
+        Background.run(() -> {
+                    UpdateService.Prepared prepared = plugins.prepare(toInstallOrUpdate, toRemove,
+                            (index, total, code, bytes) -> {
+                                if (bytes == 0 || pending.compareAndSet(false, true)) {
+                                    Platform.runLater(() -> {
+                                        pending.set(false);
+                                        progress.label.setText(ResourcesEngine.getString("plugins.downloading", code,
+                                                Integer.toString(index + 1), Integer.toString(total)));
+                                    });
+                                }
+                            }, progress.cancelled::get);
+                    plugins.launch(prepared, progress.cancelled::get);
+                    return prepared;
+                },
+                prepared -> {
+                    progress.window.hide();
+                    LOG.log(System.Logger.Level.INFO, "plugin changes started: {0}", prepared.command());
+                    CopybotMainUi.exitForUpdate(); // the script waits for this process to end
+                },
+                failure -> {
+                    progress.window.hide();
+                    if (failure instanceof UpdateException e && e.key().equals("update.error.cancelled")) {
+                        return;
+                    }
+                    LOG.log(System.Logger.Level.WARNING, "plugin changes failed", failure);
+                    showError(owner, "plugins.confirm.title", failure);
+                });
+    }
+
+    /** The changes in words, with the licences of the plugins to install; false when cancelled. */
+    private static boolean confirmPluginChanges(List<PluginRow> toInstallOrUpdate, List<PluginRow> toRemove,
+            Window owner) {
+        List<String> lines = new ArrayList<>();
+        List<PluginRow> installs = toInstallOrUpdate.stream()
+                .filter(row -> row.state() == PluginState.NOT_INSTALLED).toList();
+        List<PluginRow> updates = toInstallOrUpdate.stream().filter(row -> !installs.contains(row)).toList();
+        addLine(lines, "plugins.confirm.install", installs);
+        addLine(lines, "plugins.confirm.update", updates);
+        addLine(lines, "plugins.confirm.remove", toRemove);
+        List<String> licences = toInstallOrUpdate.stream().filter(row -> row.entry().license() != null)
+                .map(row -> ResourcesEngine.getString("plugins.license", row.entry().license().name(),
+                        localized(row.entry().license().notice())) + " (" + row.entry().code() + ")")
+                .toList();
+        if (!licences.isEmpty()) {
+            lines.add("");
+            lines.add(ResourcesEngine.getString("plugins.confirm.licenses"));
+            lines.addAll(licences);
+        }
+        lines.add("");
+        lines.add(ResourcesEngine.getString("plugins.confirm.intro"));
+        ButtonType apply = new ButtonType(ResourcesEngine.getString("plugins.apply"), ButtonBar.ButtonData.OK_DONE);
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, String.join("\n", lines), apply, ButtonType.CANCEL);
+        confirm.initOwner(owner);
+        confirm.setTitle(ResourcesEngine.getString("plugins.confirm.title"));
+        confirm.setHeaderText(null);
+        confirm.getDialogPane().setMinWidth(480);
+        return confirm.showAndWait().filter(choice -> choice == apply).isPresent();
+    }
+
+    private static void addLine(List<String> lines, String key, List<PluginRow> rows) {
+        if (!rows.isEmpty()) {
+            lines.add(ResourcesEngine.getString(key, rows.stream().map(row -> row.entry().code())
+                    .collect(Collectors.joining(", "))));
+        }
+    }
+
+    /** The text of the language of the UI, else the English one, else any. */
+    static String localized(Map<String, String> texts) {
+        String language = Locale.getDefault().getLanguage();
+        if (texts.containsKey(language)) {
+            return texts.get(language);
+        }
+        return texts.getOrDefault("en", texts.values().stream().findFirst().orElse(""));
+    }
+
+    /** The description of a catalogue entry in the language of the UI. */
+    static String description(PluginCatalog.Entry entry) {
+        return localized(entry.description());
+    }
+
+    private static void inform(Window owner, String titleKey, String text) {
+        Alert alert = new Alert(Alert.AlertType.INFORMATION, text);
+        alert.initOwner(owner);
+        alert.setTitle(ResourcesEngine.getString(titleKey));
+        alert.setHeaderText(null);
+        alert.showAndWait();
+    }
+
+    private static void showError(Window owner, String titleKey, Throwable failure) {
+        Alert alert = new Alert(Alert.AlertType.ERROR, message(failure));
+        alert.initOwner(owner);
+        alert.setTitle(ResourcesEngine.getString(titleKey));
+        alert.setHeaderText(null);
+        alert.show();
+    }
+
     /** Tells, before anything is downloaded, that Windows will ask for an administrator; false when cancelled. */
-    private static boolean confirmAdminApproval() {
-        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, ResourcesEngine.getString("update.admin"),
+    private static boolean confirmAdminApproval(Window owner, String titleKey, String textKey) {
+        Alert confirm = new Alert(Alert.AlertType.CONFIRMATION, ResourcesEngine.getString(textKey),
                 ButtonType.OK, ButtonType.CANCEL);
-        confirm.initOwner(CopybotMainUi.STAGE);
-        confirm.setTitle(ResourcesEngine.getString("update.title"));
+        confirm.initOwner(owner);
+        confirm.setTitle(ResourcesEngine.getString(titleKey));
         confirm.setHeaderText(null);
         return confirm.showAndWait().filter(choice -> choice == ButtonType.OK).isPresent();
+    }
+
+    /** The modal window of a download: a text, a bar and "Cancel" (closing it cancels too). */
+    private static final class ProgressWindow {
+        final AtomicBoolean cancelled = new AtomicBoolean();
+        final ProgressBar bar = new ProgressBar(0);
+        final Label label;
+        final Stage window = new Stage(StageStyle.UTILITY);
+
+        ProgressWindow(Window owner, String titleKey, String text) {
+            label = new Label(text);
+            bar.setPrefWidth(360);
+            Button cancel = new Button(ResourcesEngine.getString("update.cancel"));
+            cancel.setCancelButton(true);
+            cancel.setOnAction(e -> {
+                cancelled.set(true);
+                cancel.setDisable(true);
+            });
+            HBox buttons = new HBox(cancel);
+            buttons.setAlignment(Pos.CENTER_RIGHT);
+            VBox content = new VBox(10, label, bar, buttons);
+            content.setPadding(new Insets(16));
+            window.initOwner(owner);
+            window.initModality(Modality.APPLICATION_MODAL);
+            window.setTitle(ResourcesEngine.getString(titleKey));
+            window.setResizable(false);
+            window.setScene(new Scene(content));
+            window.setOnCloseRequest(e -> {
+                e.consume(); // closing the window is cancelling
+                cancel.fire();
+            });
+            window.show();
+        }
     }
 }

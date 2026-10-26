@@ -37,12 +37,12 @@
                   </Menu>
                </menus>
             </MenuBar>
-            <!-- a newer release: shown by MainController.refreshUpdateBanner -->
+            <!-- a newer release, plugin updates: shown by MainController.refreshUpdateBanner -->
             <HBox fx:id="updateBanner" alignment="CENTER_LEFT" managed="false" spacing="10.0" style="-fx-background-color: #e3f2fd; -fx-padding: 4 8 4 8;" visible="false">
                <children>
                   <Label fx:id="updateLabel" style="-fx-text-fill: #0d47a1;" />
                   <Button fx:id="updateInstallButton" mnemonicParsing="false" onAction="#onUpdateInstallClick" text="%update.install" />
-                  <Hyperlink mnemonicParsing="false" onAction="#onUpdateNotesClick" text="%update.notes" />
+                  <Hyperlink fx:id="updateNotesLink" mnemonicParsing="false" onAction="#onUpdateNotesClick" text="%update.notes" />
                   <Label fx:id="updateReason" style="-fx-text-fill: #616161;" />
                   <Region HBox.hgrow="ALWAYS" />
                   <Button mnemonicParsing="false" onAction="#onUpdateDismissClick" text="&#x2715;">

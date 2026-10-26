@@ -10,13 +10,15 @@ import java.util.Objects;
  * @param version            null for the embedded plugin or a module without version
  * @param path               the plugin directory, null for the embedded plugin
  * @param message            the cause, translated; null when LOADED
+ * @param errorKey           the bundle key of a loader error (plugin.load.*), the same in every language; null when
+ *                           LOADED or when the cause has no key
  * @param pluginDependencies "name version" of the plugins its layer is built on
  * @param missingRequires    "module:version" (or "module") nothing loaded provides
  * @param actions            empty unless LOADED
  */
 public record PluginEntry(String name, String version, PluginSource source, Path path, PluginStatus status,
                           String message, List<ModuleEntry> modules, List<String> pluginDependencies,
-                          List<String> missingRequires, List<ActionEntry> actions) {
+                          List<String> missingRequires, List<ActionEntry> actions, String errorKey) {
 
     public PluginEntry {
         Objects.requireNonNull(name, "name");

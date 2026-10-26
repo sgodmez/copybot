@@ -59,7 +59,7 @@ public final class UpdateCheck {
                 || !lastCheck.get().plus(INTERVAL).isAfter(now);
     }
 
-    static String message(IOException e) {
+    public static String message(IOException e) {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 }

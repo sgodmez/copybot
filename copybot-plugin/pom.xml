@@ -57,6 +57,34 @@
                 </executions>
             </plugin>
         </plugins>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <!--
+                        The release archive: copybot-plugin-<code>-<version>.zip holding <code>/<jar> and <code>/lib/.
+                        Managed here, switched on by each plugin module (this module has no plugin.code).
+                    -->
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <id>plugin-zip</id>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>single</goal>
+                            </goals>
+                            <configuration>
+                                <descriptors>
+                                    <descriptor>${project.basedir}/../plugin-zip.xml</descriptor>
+                                </descriptors>
+                                <finalName>copybot-plugin-${plugin.code}-${project.version}</finalName>
+                                <appendAssemblyId>false</appendAssemblyId>
+                                <attach>false</attach>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
     </build>
 
 </project>

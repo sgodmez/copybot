@@ -33,6 +33,7 @@ public final class LayerLoader {
     private Set<ModuleDescriptor> moduleDescriptors;
     private ModuleDescriptor mainModuleDescriptor;
     private String error;
+    private String errorKey;
     private Configuration pluginConfiguration;
     private ModuleLayer moduleLayer;
     private List<LayerLoader> parentLoaders = List.of();
@@ -57,7 +58,7 @@ public final class LayerLoader {
         try {
             moduleReferences = pluginsFinder.findAll();
         } catch (FindException e) { // an unreadable jar, two modules of the same name...
-            error = ResourcesEngine.getString("plugin.load.unreadable", path,
+            fail("plugin.load.unreadable", path,
                     e.getCause() != null ? e.getMessage() + " (" + e.getCause() + ")" : e.getMessage());
             return;
         }
@@ -71,11 +72,11 @@ public final class LayerLoader {
                 .toList();
 
         if (mainModules.isEmpty()) {
-            error = ResourcesEngine.getString("plugin.load.no-module", path);
+            fail("plugin.load.no-module", path);
             return;
         }
         if (mainModules.size() > 1) {
-            error = ResourcesEngine.getString("plugin.load.many-modules", path,
+            fail("plugin.load.many-modules", path,
                     mainModules.stream().map(ModuleDescriptor::name).sorted().collect(Collectors.joining(", ")));
             return;
         }
@@ -85,7 +86,7 @@ public final class LayerLoader {
         Optional<String> builtFor = incompatibleApi(moduleDescriptors, VersionUtil.engineModuleName(), engineVersion);
         if (builtFor.isPresent()) {
             // refused now, with the reason, rather than a LinkageError when an action runs
-            error = ResourcesEngine.getString("plugin.load.api-incompatible", builtFor.get(), engineVersion);
+            fail("plugin.load.api-incompatible", builtFor.get(), engineVersion);
             return;
         }
 
@@ -203,6 +204,16 @@ public final class LayerLoader {
     /** True for a development directory (classes/ and lib/ sub-directories). */
     public boolean isDev() {
         return dev;
+    }
+
+    /** The bundle key (plugin.load.*) of {@link #getError()}, which is translated once; null without error. */
+    public String getErrorKey() {
+        return errorKey;
+    }
+
+    private void fail(String key, Object... args) {
+        errorKey = key;
+        error = ResourcesEngine.getString(key, args);
     }
 
     public String getError() {

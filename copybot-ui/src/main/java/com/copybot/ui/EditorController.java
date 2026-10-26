@@ -15,6 +15,9 @@ import com.copybot.ui.model.PipelineDocument.Section;
 import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.StepCatalog;
+import com.copybot.ui.plugins.PluginRow;
+import com.copybot.ui.plugins.PluginService;
+import com.copybot.ui.plugins.PluginState;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.Choosers;
 import com.copybot.ui.util.PopinUtil;
@@ -63,6 +66,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -74,6 +78,8 @@ import java.util.stream.Collectors;
  * rewritten. The pipeline file is read and written off the JavaFX thread (it may be on a network share).
  */
 public class EditorController {
+
+    private static final System.Logger LOG = System.getLogger(EditorController.class.getName());
 
     enum Kind { PIPELINE, SECTION, STEP, POST_PROCESS }
 
@@ -103,6 +109,8 @@ public class EditorController {
      */
     private Path lossyFile;
     private StepCatalog catalog;
+    /** The rows of the official plugins the pipeline names that are not loaded, by module (empty until read). */
+    private volatile Map<String, PluginRow> officialRows = Map.of();
     private Consumer<Path> onSaved;
     /** A save runs in the background: the window is disabled and cannot be closed meanwhile. */
     private boolean saving;
@@ -259,6 +267,50 @@ public class EditorController {
                 new KeyCodeCombination(KeyCode.J, KeyCombination.SHORTCUT_DOWN), this::onShowJsonClick);
         updateTitle();
         rebuildTree(PIPELINE_NODE);
+        readCatalogueForMissingPlugins();
+    }
+
+    /**
+     * When the pipeline names plugins that are not loaded, their rows of the catalogue of the official plugins are
+     * built in the background (the catalogue in memory, else read; the plugins folder checked): the form of such a
+     * step then says whether the plugin is not installed or installed but not loaded, with "Install" only when the
+     * Plugins window offers it (spec plugin-install §6). A failure (offline) leaves the "not found" message.
+     */
+    private void readCatalogueForMissingPlugins() {
+        Optional<PluginService> service = UpdateUi.plugins();
+        List<String> missing = catalog.missingPlugins(document);
+        if (service.isEmpty() || missing.isEmpty()) {
+            return;
+        }
+        Background.run(() -> service.get().rowsOf(missing, service.get().catalog()),
+                rows -> {
+                    officialRows = rows.stream().collect(Collectors.toMap(row -> row.entry().module(), row -> row,
+                            (a, b) -> a));
+                    EditorNode node = selectedNode();
+                    if (stage.isShowing() && node != null && node.kind() == Kind.STEP
+                            && catalog.find(node.section(), step(node)).isEmpty()) {
+                        showForm(node); // the read-only form of a missing plugin: now with what can be done
+                    }
+                },
+                failure -> LOG.log(System.Logger.Level.INFO, "plugin catalogue not read: {0}",
+                        UpdateUi.message(failure)));
+    }
+
+    /** The row of the official plugin of this name, not loaded; empty before the catalogue is read. */
+    private Optional<PluginRow> officialRow(String plugin) {
+        return catalog.isLoaded(plugin) ? Optional.empty() : Optional.ofNullable(officialRows.get(plugin));
+    }
+
+    /**
+     * Why a step of a plugin that is not loaded cannot be shown: "not installed" only when it is not; installed but
+     * not loaded (refused for its API, a missing dependency...) points to the Plugins window; otherwise "not found".
+     */
+    private static String missingPluginKey(Optional<PluginRow> row) {
+        return row.map(r -> switch (r.state()) {
+            case NOT_INSTALLED -> "editor.plugin-not-installed";
+            case INCOMPATIBLE -> "editor.plugin-not-found";
+            default -> "editor.plugin-not-loaded";
+        }).orElse("editor.plugin-not-found");
     }
 
     /** The accelerator of the window, named in the tooltip of its button ("Ctrl+Shift+S"). */
@@ -580,13 +632,26 @@ public class EditorController {
         Optional<CatalogAction> action = catalog.find(node.section(), step);
         if (action.isEmpty()) {
             String plugin = member(step, "plugin");
+            Optional<PluginRow> official = catalog.failedPlugin(step).isPresent() || plugin.isBlank()
+                    ? Optional.empty() : officialRow(plugin);
             String message = catalog.failedPlugin(step)
                     .map(failed -> ResourcesEngine.getString("editor.plugin-failed", failed.pluginVersion() == null
                             ? failed.pluginName() : failed.pluginName() + " " + failed.pluginVersion()))
-                    .orElseGet(() -> ResourcesEngine.getString("editor.plugin-not-found",
+                    .orElseGet(() -> ResourcesEngine.getString(missingPluginKey(official),
                             plugin.isEmpty() ? CatalogAction.EMBEDDED_PLUGIN : plugin));
-            formBox.getChildren().addAll(title(member(step, "action")), new Label(message),
-                    readOnly(PipelineDocument.json(step)));
+            Label messageLabel = new Label(message);
+            messageLabel.setWrapText(true);
+            formBox.getChildren().addAll(title(member(step, "action")), messageLabel);
+            official.filter(PluginRow::offersInstall).ifPresent(row -> {
+                // the Plugins window with this plugin chosen (its install, or the update that fixes it), over the
+                // editor (modal)
+                Button install = new Button(ResourcesEngine.getString(row.state() == PluginState.UPDATE_AVAILABLE
+                        ? "plugins.action.UPDATE" : "editor.plugin-install"));
+                install.setOnAction(e -> CopybotMainUi.mainController()
+                        .ifPresent(main -> main.openPlugins(Set.of(row.entry().module()), false, stage)));
+                formBox.getChildren().add(install);
+            });
+            formBox.getChildren().add(readOnly(PipelineDocument.json(step)));
             return;
         }
         CatalogAction catalogAction = action.get();

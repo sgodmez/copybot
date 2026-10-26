@@ -1,6 +1,7 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.update.UpdateService;
 import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
@@ -86,17 +87,19 @@ public class PreferencesController {
                 .or(UpdateUi::lastResult).orElse(""));
     }
 
-    /** Always tells the outcome: up to date, the newer release (then offered in the banner too), or the error. */
+    /**
+     * Always tells the outcome: up to date, the newer release and the plugin updates (then offered in the banner
+     * too), or the error.
+     */
     @FXML
     protected void onUpdateCheckClick() {
-        UpdateService service = UpdateUi.service().orElseThrow(); // the button is disabled without it
+        PluginService service = UpdateUi.plugins().orElseThrow(); // the button is disabled without it
         updateCheckButton.setDisable(true);
         updateResultLabel.setText(ResourcesEngine.getString("update.checking"));
         Background.run(service::checkNow,
                 found -> {
-                    found.ifPresent(UpdateUi::offer);
-                    showUpdateResult(found.map(release -> ResourcesEngine.getString("update.available",
-                            release.version())).orElseGet(() -> ResourcesEngine.getString("update.up-to-date")));
+                    UpdateUi.offer(found);
+                    showUpdateResult(UpdateUi.checkText(found));
                 },
                 failure -> showUpdateResult(UpdateUi.message(failure)));
     }

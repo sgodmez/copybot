@@ -1,10 +1,11 @@
 param(
     [Parameter(Mandatory = $true)][int]$ProcessId,
     [Parameter(Mandatory = $true)][string]$AppDir,
-    [Parameter(Mandatory = $true)][string]$NewDir,
+    [string]$NewDir,
     [Parameter(Mandatory = $true)][string]$Exe,
     [Parameter(Mandatory = $true)][string]$LogDir,
     [string]$ConfigFile,
+    [string]$PluginManifest,
     [switch]$CopyOnly
 )
 
@@ -13,6 +14,10 @@ param(
 # deletes the temporary folder (the parent of NewDir, which must be the folder of this script). Plugins,
 # configuration, preferences, logs and any user file are never touched. Log: LogDir\update.log.
 # -ConfigFile: the --config-file Copybot was started with, given again to the relaunch.
+# -PluginManifest: the plugin mode, instead of the application image (-NewDir is then not used): a JSON manifest
+# { "install": [ { "source", "target" } ], "remove": [ path ] } written in the folder of this script. Only direct
+# subfolders of AppDir\plugins are installed (mirrored from source) or removed; a manifest going beyond is refused,
+# nothing is changed and Copybot is relaunched.
 # -CopyOnly: the copy alone, run elevated when the application folder is not writable; the relaunch and the cleanup
 # stay with the script that is not elevated.
 
@@ -24,7 +29,18 @@ function Get-FullPath([string]$path) {
 }
 
 $AppDir = Get-FullPath $AppDir
-$NewDir = Get-FullPath $NewDir
+$pluginMode = [bool]$PluginManifest
+if ($pluginMode) {
+    $PluginManifest = Get-FullPath $PluginManifest
+    # the temporary folder of the update holds the manifest and the sources
+    $TempDir = Get-FullPath (Split-Path -Parent $PluginManifest)
+} elseif ($NewDir) {
+    $NewDir = Get-FullPath $NewDir
+    $TempDir = Get-FullPath (Split-Path -Parent $NewDir)
+} else {
+    exit 2
+}
+$PluginsDir = Join-Path $AppDir 'plugins'
 $LogDir = Get-FullPath $LogDir
 
 try {
@@ -69,7 +85,7 @@ function Copy-AppImage {
             Write-Log "robocopy of $sub skipped: $src missing"
             continue
         }
-        & $robocopy $src $dst /MIR /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+        & $robocopy $src $dst /MIR /XJ /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
         $code = $LASTEXITCODE
         if ($code -ge 8) {
             Write-Log "robocopy of $sub failed with code $code, the copy stops"
@@ -77,13 +93,144 @@ function Copy-AppImage {
         }
         Write-Log "robocopy of $sub done (code $code)"
     }
-    & $robocopy $NewDir $AppDir /LEV:1 /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+    & $robocopy $NewDir $AppDir /LEV:1 /XJ /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
     $code = $LASTEXITCODE
     if ($code -ge 8) {
         Write-Log "robocopy of the root files failed with code $code"
         return $false
     }
     Write-Log "robocopy of the root files done (code $code)"
+    return $true
+}
+
+function Test-ReparsePoint([string]$path) {
+    $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    return [bool]($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint))
+}
+
+# deletes a folder tree without ever following a junction or a symbolic link: a link is deleted alone, never its target
+function Remove-Tree([string]$path) {
+    if (Test-ReparsePoint $path) {
+        if (Test-Path -LiteralPath $path -PathType Container) {
+            [System.IO.Directory]::Delete($path)
+        } else {
+            [System.IO.File]::Delete($path)
+        }
+        return
+    }
+    if (Test-Path -LiteralPath $path -PathType Container) {
+        foreach ($child in @(Get-ChildItem -LiteralPath $path -Force)) {
+            Remove-Tree $child.FullName
+        }
+        [System.IO.Directory]::Delete($path)
+    } else {
+        [System.IO.File]::SetAttributes($path, [System.IO.FileAttributes]::Normal)
+        [System.IO.File]::Delete($path)
+    }
+}
+
+# the manifest, checked: an object with Install (Source, Target) and Remove, or $null when it is unreadable or goes
+# beyond the plugins folder (the reason is logged)
+function Read-Manifest {
+    try {
+        $manifest = Get-Content -LiteralPath $PluginManifest -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        Write-Log "Manifest refused: unreadable ($($_.Exception.Message))"
+        return $null
+    }
+    $installs = @()
+    $removals = @()
+    foreach ($item in @($manifest.install)) {
+        $target = [string]$item.target
+        $source = [string]$item.source
+        # the rule of the catalogue codes (SAFE_NAME of PluginCatalog), without a final '.' that Windows trims:
+        # "..." would otherwise name the plugins folder itself
+        if (-not ($target -cmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') -or $target.EndsWith('.')) {
+            Write-Log "Manifest refused: target '$target' is not a folder name"
+            return $null
+        }
+        # the sources are unpacked next to the manifest, in the folder of this script, never elsewhere
+        $scriptDir = Get-FullPath (Split-Path -Parent $PSCommandPath)
+        $sourceFull = if ($source) { Get-FullPath $source } else { '' }
+        $sourceParent = if ($sourceFull) { Split-Path -Parent $sourceFull } else { '' }
+        if (-not $sourceParent -or -not $TempDir.Equals($scriptDir, [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not $TempDir.Equals($sourceParent, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Log "Manifest refused: source '$source' is not a direct subfolder of the folder of this script"
+            return $null
+        }
+        if (-not (Test-Path -LiteralPath $sourceFull -PathType Container) -or (Test-ReparsePoint $sourceFull)) {
+            Write-Log "Manifest refused: source '$source' is not a plain folder"
+            return $null
+        }
+        $installs += [pscustomobject]@{ Source = $sourceFull; Target = $target }
+    }
+    foreach ($item in @($manifest.remove)) {
+        if (-not $item) {
+            continue
+        }
+        $full = Get-FullPath ([string]$item)
+        $parent = Split-Path -Parent $full
+        if (-not $parent -or -not $PluginsDir.Equals($parent, [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Log "Manifest refused: '$item' is not a direct subfolder of $PluginsDir"
+            return $null
+        }
+        $removals += $full
+    }
+    return [pscustomobject]@{ Install = $installs; Remove = $removals }
+}
+
+# the plugin mode copy: each folder mirrored first (robocopy codes 0-7 are a success, 8 and more stop it before any
+# removal: a failed update never becomes an uninstall), then the removals, except a folder just mirrored onto. True
+# when everything was done.
+function Copy-Plugins {
+    $manifest = Read-Manifest
+    if (-not $manifest) {
+        return $false
+    }
+    try {
+        New-Item -ItemType Directory -Force -Path $PluginsDir -ErrorAction Stop | Out-Null
+    } catch {
+        Write-Log "The plugins folder cannot be created: $($_.Exception.Message)"
+        return $false
+    }
+    $installed = @()
+    $robocopy = Join-Path $env:SystemRoot 'System32\robocopy.exe'
+    foreach ($item in $manifest.Install) {
+        $dst = Join-Path $PluginsDir $item.Target
+        $installed += $dst
+        if ((Test-Path -LiteralPath $dst) -and (Test-ReparsePoint $dst)) {
+            # never mirror through a link: the link goes, the folder is made afresh
+            try {
+                Remove-Tree $dst
+            } catch {
+                Write-Log "Removal of the link $dst failed: $($_.Exception.Message)"
+                return $false
+            }
+        }
+        & $robocopy $item.Source $dst /MIR /XJ /R:2 /W:1 /NFL /NDL /NJH /NJS /NP | Out-Null
+        $code = $LASTEXITCODE
+        if ($code -ge 8) {
+            Write-Log "robocopy of plugin $($item.Target) failed with code $code, the copy stops"
+            return $false
+        }
+        Write-Log "robocopy of plugin $($item.Target) done (code $code)"
+    }
+    foreach ($folder in $manifest.Remove) {
+        $replaced = @($installed | Where-Object { $_.Equals($folder, [System.StringComparison]::OrdinalIgnoreCase) })
+        if ($replaced.Count -gt 0) {
+            Write-Log "Kept $($folder), replaced by the new version"
+            continue
+        }
+        if (Test-Path -LiteralPath $folder) {
+            try {
+                Remove-Tree $folder
+            } catch {
+                Write-Log "Removal of $folder failed: $($_.Exception.Message)"
+                return $false
+            }
+            Write-Log "Removed $folder"
+        }
+    }
     return $true
 }
 
@@ -120,7 +267,7 @@ function Get-Cmd {
 }
 
 function Remove-TempDir {
-    $temp = Get-FullPath (Split-Path -Parent $NewDir)
+    $temp = $TempDir
     if (-not (Test-Deletable $temp)) {
         Write-Log "Refusing to delete $temp (drive root, the application folder or one of its parents)"
         return
@@ -149,7 +296,11 @@ function Remove-TempDir {
 if ($CopyOnly) {
     # the elevated run: the copy only, never the relaunch (it would run as administrator)
     Write-Log 'Elevated copy started'
-    $copied = Copy-AppImage
+    if ($pluginMode) {
+        $copied = Copy-Plugins
+    } else {
+        $copied = Copy-AppImage
+    }
     Write-Log 'Elevated copy finished'
     if ($copied) {
         exit 0
@@ -157,7 +308,18 @@ if ($CopyOnly) {
     exit 1
 }
 
-Write-Log "Update started (process $ProcessId, app $AppDir, new $NewDir)"
+if ($pluginMode) {
+    Write-Log "Plugin update started (process $ProcessId, app $AppDir, manifest $PluginManifest)"
+    if (-not (Read-Manifest)) {
+        # refused before anything is touched
+        Start-App
+        Remove-TempDir
+        Write-Log 'Plugin update finished (refused)'
+        exit 1
+    }
+} else {
+    Write-Log "Update started (process $ProcessId, app $AppDir, new $NewDir)"
+}
 
 # 1. wait for Copybot and every process started from its folder (60 s in all); a process named like Copybot whose
 # path cannot be read (an elevated one) counts as running
@@ -186,15 +348,30 @@ if ($running.Count -gt 0) {
 Write-Log 'Copybot has exited'
 
 # 2. the copy, elevated when the application folder is not writable
-if (Test-Writable $AppDir) {
-    if (-not (Copy-AppImage)) {
+# the folder to write: plugins, or the application folder while plugins does not exist yet
+$writeDir = $AppDir
+if ($pluginMode -and (Test-Path -LiteralPath $PluginsDir)) {
+    $writeDir = $PluginsDir
+}
+if (Test-Writable $writeDir) {
+    if ($pluginMode) {
+        $done = Copy-Plugins
+    } else {
+        $done = Copy-AppImage
+    }
+    if (-not $done) {
         Write-Log 'The copy failed: Copybot is relaunched as it is'
     }
 } else {
-    Write-Log 'The application folder is not writable, the copy is run elevated'
+    Write-Log "$writeDir is not writable, the copy is run elevated"
     $quoted = { param($value) '"{0}"' -f $value }
-    $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -ProcessId {1} -AppDir {2} -NewDir {3} -Exe {4} -LogDir {5} -CopyOnly' -f `
-        (& $quoted $PSCommandPath), $ProcessId, (& $quoted $AppDir), (& $quoted $NewDir), (& $quoted $Exe), (& $quoted $LogDir)
+    if ($pluginMode) {
+        $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -ProcessId {1} -AppDir {2} -PluginManifest {3} -Exe {4} -LogDir {5} -CopyOnly' -f `
+            (& $quoted $PSCommandPath), $ProcessId, (& $quoted $AppDir), (& $quoted $PluginManifest), (& $quoted $Exe), (& $quoted $LogDir)
+    } else {
+        $argList = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File {0} -ProcessId {1} -AppDir {2} -NewDir {3} -Exe {4} -LogDir {5} -CopyOnly' -f `
+            (& $quoted $PSCommandPath), $ProcessId, (& $quoted $AppDir), (& $quoted $NewDir), (& $quoted $Exe), (& $quoted $LogDir)
+    }
     try {
         $elevated = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList $argList -Verb RunAs `
             -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop

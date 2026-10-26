@@ -272,11 +272,33 @@ tested on a real Linux yet: extract it anywhere and run `Copybot/bin/Copybot`.
 The video and sound preview needs GStreamer and ffmpeg (libavcodec), and
 updating from the application is Windows only.
 
-**Making a release:** set the version in every `pom.xml` to `X.Y.Z` (drop
-`-SNAPSHOT`), commit, tag `vX.Y.Z` and push the tag. The `release` workflow
+**Making a release:** set the version of the application to `X.Y.Z` (drop
+`-SNAPSHOT`) in the poms, commit, tag `vX.Y.Z` and push the tag. The official
+plugins (`metadata-extractor`, `gps-zone`) have their own version, in their own
+`pom.xml` (`1.0.0`, never `-SNAPSHOT`): change the application version
+without overwriting theirs (only the `<parent>` of a plugin follows the
+application; a bulk replace of the version, such as `mvn versions:set`, would
+also overwrite the plugin versions: restore them afterwards). **Raise the version
+of a plugin that changed** (any file of its module, its `catalog.json`
+included) before the release; leave it alone otherwise. The `release` workflow
 checks that the tag matches the pom version, builds the application, the
 installer and the zip, the Linux archive on a Linux runner, and attaches them to a **draft** release. Publish the
 draft once you have read it, then set the poms to the next `-SNAPSHOT`.
+
+Every release also carries a `catalogue.json` listing all the official
+plugins, each with the release that hosts its archive
+(`copybot-plugin-<code>-<version>.zip`, one `<code>/` folder holding the jar
+and its `lib/`, made by `mvn package` in the plugin's `target/`). The workflow
+(`.github/scripts/plugin-catalogue.ps1`) reads the `catalogue.json` of the
+latest **published** release (a draft does not count; with none, the catalogue
+starts empty): a plugin whose version did not change keeps its entry and its
+archive is not published again, a new version gets its zip on the current
+release. The release **fails** when a plugin kept its version although its
+module changed since the release of its entry (version not raised), or when a
+kept plugin was built for an engine that is not compatible any more (new major
+version of the application: give the plugin a new version). The description
+of a plugin, and its licence notice (`gps-zone`: ODbL), come from the
+`catalog.json` of its module.
 
 To run a pipeline from the command line with the jlink image:
 
