@@ -7,7 +7,7 @@
     <parent>
         <groupId>com.copybot</groupId>
         <artifactId>copybot-plugin-demo</artifactId>
-        <version>0.7.0</version>
+        <version>0.7.1-SNAPSHOT</version>
     </parent>
 
     <!-- the library the demo plugins embed, version 2.0: a real module (version 1.0 is copybot-plugin-demo-lib-old) -->
