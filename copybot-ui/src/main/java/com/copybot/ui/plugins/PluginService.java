@@ -17,9 +17,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 /**
  * The official plugins without JavaFX (spec plugin-install §2-§6): the catalogue kept in memory, the rows compared
@@ -181,9 +183,10 @@ public final class PluginService {
      * The plugins updated with {@code release}, from the catalogue published with it (every entry of it fits the
      * plugin API of that release): never blocks the update, an unreadable catalogue updates the application alone.
      */
-    private List<PluginRow> updatedWith(Release release, Path temp) throws InterruptedException {
+    private List<PluginRow> updatedWith(Release release, Set<String> modules, Path temp) throws InterruptedException {
         try {
-            return updatedWithTheApplication(rows(catalogs.fetch(release, temp)));
+            return updatedWithTheApplication(rows(catalogs.fetch(release, temp))).stream()
+                    .filter(row -> modules.contains(row.entry().module())).toList();
         } catch (UpdateException e) {
             LOG.log(System.Logger.Level.INFO, "plugin catalogue not read, the application is updated alone: {0} {1}",
                     e.key(), List.of(e.args()));
@@ -198,28 +201,41 @@ public final class PluginService {
      * application (a plugin found elsewhere, or without a folder of its own, is never touched).
      */
     private List<PluginRow> updatedWithTheApplication(List<PluginRow> rows) {
+        return inThePluginsFolder(rows.stream().filter(PluginRow::updatedWithTheApplication)).toList();
+    }
+
+    /**
+     * The plugin lines of the Updates window: the installed plugins of the catalogue whose folders are all in the
+     * plugins folder of the application, up to date ones included (the same folder rule as for an update).
+     */
+    public List<PluginRow> rowsForUpdates(PluginCatalog catalog) {
+        return inThePluginsFolder(rows(catalog).stream().filter(row -> row.installedVersion() != null)).toList();
+    }
+
+    private Stream<PluginRow> inThePluginsFolder(Stream<PluginRow> rows) {
         Optional<Path> plugins = updates.appDir().map(app -> app.resolve("plugins").toAbsolutePath().normalize());
-        return rows.stream().filter(PluginRow::updatedWithTheApplication)
-                .filter(row -> plugins.isPresent() && !row.installedFolders().isEmpty()
-                        && row.installedFolders().stream()
-                        .allMatch(folder -> plugins.get().equals(folder.toAbsolutePath().normalize().getParent())))
-                .toList();
+        return rows.filter(row -> plugins.isPresent() && !row.installedFolders().isEmpty()
+                && row.installedFolders().stream()
+                .allMatch(folder -> plugins.get().equals(folder.toAbsolutePath().normalize().getParent())));
     }
 
     // ---- applying ----
 
     /**
      * The update of the application with its plugins (spec update-with-plugins §1): one temporary folder, the
-     * application, then the catalogue of {@code release} read and each installed plugin with a newer version in it
-     * unpacked, one script applying both. Without such a plugin, the usual update.
+     * application, then the catalogue of {@code release} read and each chosen installed plugin with a newer version in
+     * it unpacked, one script applying both. Without such a plugin, the usual update.
      *
+     * @param modules        the plugins to update (a module not installed in the plugins folder, or without a newer
+     *                       version in that catalogue, is ignored); empty: the application alone
      * @param appProgress    the bytes of the application received so far
      * @param pluginProgress the archives, once the application is downloaded
      */
-    public UpdateService.Prepared prepareUpdate(Release release, LongConsumer appProgress, Progress pluginProgress,
-            BooleanSupplier cancelled) throws UpdateException, InterruptedException {
+    public UpdateService.Prepared prepareUpdate(Release release, Set<String> modules, LongConsumer appProgress,
+            Progress pluginProgress, BooleanSupplier cancelled) throws UpdateException, InterruptedException {
+        Set<String> chosen = Set.copyOf(modules);
         return updates.prepare(release, appProgress, cancelled, temp -> {
-            List<PluginRow> plugins = updatedWith(release, temp);
+            List<PluginRow> plugins = updatedWith(release, chosen, temp);
             if (cancelled.getAsBoolean()) {
                 throw new UpdateException("update.error.cancelled");
             }

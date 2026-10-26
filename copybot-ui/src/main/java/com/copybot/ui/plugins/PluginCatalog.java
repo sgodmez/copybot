@@ -26,13 +26,15 @@ public final class PluginCatalog {
      * @param tag         the release that holds its archive
      * @param asset       the archive in that release
      * @param description by language ({@code en}, {@code fr}, {@code it})
+     * @param changes     what this version changes, by language; empty when the catalogue says nothing
      * @param license     null when the plugin has none to show
      */
     public record Entry(String module, String code, String version, String engine, String tag, String asset,
-                        Map<String, String> description, License license) {
+                        Map<String, String> description, Map<String, String> changes, License license) {
 
         public Entry {
             description = Map.copyOf(description);
+            changes = Map.copyOf(changes);
         }
     }
 
@@ -84,7 +86,7 @@ public final class PluginCatalog {
             throw new IllegalArgumentException("unsafe name");
         }
         return new Entry(text(o, "module"), code, text(o, "version"), text(o, "engine"), tag, asset,
-                strings(o.get("description")), license(o.get("license")));
+                strings(o.get("description")), strings(o.get("changes")), license(o.get("license")));
     }
 
     private static License license(JsonElement element) {

@@ -392,7 +392,7 @@ public class PluginServiceTest {
         var release = service.checkNow().release().orElseThrow();
         List<String> seen = new ArrayList<>();
 
-        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { },
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(A, B, D), bytes -> { },
                 (i, n, code, bytes) -> seen.add(i + "/" + n + " " + code), () -> false);
 
         assertEquals(List.of("1.2.0"), catalogs.releaseFetches);
@@ -416,11 +416,62 @@ public class PluginServiceTest {
         PluginService service = service();
         var release = service.checkNow().release().orElseThrow();
 
-        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { }, (i, n, code, bytes) -> { },
-                () -> false);
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(A, B, D), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
 
         assertFalse(prepared.command().contains("-PluginManifest"));
         assertTrue(catalogs.downloads.isEmpty());
+    }
+
+    @Test
+    public void onlyTheChosenPluginsGoWithTheApplication() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        report = report(installed(A, "1.0.0", pluginsDir.resolve("old-a")), installed(D, "0.9.0", pluginsDir.resolve("d")));
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(A), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
+
+        JsonObject json = manifestOf(prepared.command());
+        assertEquals(1, json.getAsJsonArray("install").size());
+        assertEquals("a", json.getAsJsonArray("install").get(0).getAsJsonObject().get("target").getAsString());
+        assertEquals(List.of("a"), catalogs.downloads);
+    }
+
+    @Test
+    public void noChosenPluginIsTheUsualUpdateWithoutPlugins() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
+
+        assertFalse(prepared.command().contains("-PluginManifest"));
+        assertTrue(prepared.command().contains("-NewDir"));
+        assertTrue(catalogs.downloads.isEmpty());
+    }
+
+    @Test
+    public void theLinesOfTheUpdatesWindowAreTheInstalledPluginsOfThePluginsFolder() throws Exception {
+        // A to update, B up to date (both kept), C not installed, D installed elsewhere
+        report = report(installed(A, "1.0.0", pluginsDir.resolve("old-a")), installed(B, "1.0.0", pluginsDir.resolve("b")),
+                installed(D, "0.9.0", dir.resolve("elsewhere/d")));
+        PluginService service = service();
+
+        List<PluginRow> lines = service.rowsForUpdates(service.catalog());
+
+        assertEquals(List.of(A, B), lines.stream().map(r -> r.entry().module()).toList());
+    }
+
+    @Test
+    public void aPluginWithoutAFolderOfItsOwnIsNotALineOfTheUpdatesWindow() throws Exception {
+        report = report(installed(A, "1.0.0", null), installed(B, "1.0.0", pluginsDir.resolve("b")));
+        PluginService service = service();
+
+        assertEquals(List.of(B), service.rowsForUpdates(service.catalog()).stream()
+                .map(r -> r.entry().module()).toList());
     }
 
     @Test
@@ -430,8 +481,8 @@ public class PluginServiceTest {
         var release = service.checkNow().release().orElseThrow();
         catalogs.fetchFailure = new UpdateException("plugins.error.no-catalogue");
 
-        UpdateService.Prepared prepared = service.prepareUpdate(release, bytes -> { }, (i, n, code, bytes) -> { },
-                () -> false);
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(A), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
 
         assertFalse(prepared.command().contains("-PluginManifest"));
         assertTrue(prepared.command().contains("-NewDir"));

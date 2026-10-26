@@ -11,15 +11,24 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 
-/** A GitHub release: its version (the tag without the leading {@code v}), the page of its notes and its files. */
-public record Release(String version, URI notesUrl, List<Asset> assets) {
+/**
+ * A GitHub release: its version (the tag without the leading {@code v}), the page of its notes, the notes themselves
+ * ({@code body} of the API, empty when none) and its files.
+ */
+public record Release(String version, URI notesUrl, String notes, List<Asset> assets) {
 
     /** A file of the release; {@code sha256} is lower-case hex without prefix, null when GitHub gave no digest. */
     public record Asset(String name, URI url, long size, String sha256) {
     }
 
     public Release {
+        notes = notes == null ? "" : notes;
         assets = List.copyOf(assets);
+    }
+
+    /** A release without notes. */
+    public Release(String version, URI notesUrl, List<Asset> assets) {
+        this(version, notesUrl, "", assets);
     }
 
     /** Reads the answer of {@code releases/latest}. */
@@ -28,7 +37,7 @@ public record Release(String version, URI notesUrl, List<Asset> assets) {
             JsonObject root = JsonParser.parseString(json).getAsJsonObject();
             String tag = root.get("tag_name").getAsString();
             String version = tag.startsWith("v") ? tag.substring(1) : tag;
-            URI notes = URI.create(root.get("html_url").getAsString());
+            URI notesUrl = URI.create(root.get("html_url").getAsString());
             List<Asset> assets = new ArrayList<>();
             JsonElement array = root.get("assets");
             for (JsonElement element : array == null || array.isJsonNull() ? new JsonArray() : array.getAsJsonArray()) {
@@ -37,7 +46,8 @@ public record Release(String version, URI notesUrl, List<Asset> assets) {
                         URI.create(asset.get("browser_download_url").getAsString()),
                         asset.get("size").getAsLong(), sha256(asset.get("digest"))));
             }
-            return new Release(version, notes, assets);
+            JsonElement body = root.get("body");
+            return new Release(version, notesUrl, body == null || body.isJsonNull() ? "" : body.getAsString(), assets);
         } catch (RuntimeException e) { // includes the JsonParseException of Gson
             // a malformed document, a missing field, a wrong type or a bad URI: the same for the user
             throw new UpdateException("update.error.unreadable");

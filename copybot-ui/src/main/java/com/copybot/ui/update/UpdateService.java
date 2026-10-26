@@ -140,6 +140,11 @@ public final class UpdateService {
         return currentVersion;
     }
 
+    /** When this version last asked GitHub (automatically or not), empty when never: the Updates window tells it. */
+    public Optional<Instant> lastCheck() {
+        return settings.lastCheck();
+    }
+
     /** The message key telling why there is no update at all here: not a release, or not the packaged application. */
     public Optional<String> unavailableReason() {
         return AppVersion.isRelease(currentVersion) && exe != null && exe.getParent() != null

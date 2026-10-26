@@ -1,14 +1,9 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
-import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.update.UpdateService;
-import com.copybot.ui.util.AppInfo;
-import com.copybot.ui.util.Background;
 import com.copybot.ui.util.UiPreferences;
 import javafx.fxml.FXML;
-import javafx.scene.Node;
-import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
@@ -27,17 +22,9 @@ public class PreferencesController {
     @FXML
     private ComboBox<UiPreferences.ResourcesLayout> resourcesLayoutCombo;
     @FXML
-    private Label updateVersionLabel;
-    @FXML
     private CheckBox updateAutoCheck;
     @FXML
-    private Button updateCheckButton;
-    @FXML
-    private Label updateResultLabel;
-    @FXML
-    private Button updateInstallButton;
-    @FXML
-    private Label updateReasonLabel;
+    private Label updateUnavailable;
 
     @FXML
     public void initialize() {
@@ -80,71 +67,26 @@ public class PreferencesController {
         initUpdates();
     }
 
-    /** The Updates section (spec app-update §3): the check is possible only for a released, packaged Copybot. */
+
+    /** The automatic check is possible only for a released, packaged Copybot: otherwise disabled, with why. */
     private void initUpdates() {
-        updateVersionLabel.setText(ResourcesEngine.getString("update.current", AppInfo.version()));
         updateAutoCheck.setSelected(UiPreferences.updateCheck());
         Optional<String> unavailable = UpdateUi.service().map(UpdateService::unavailableReason)
                 .orElse(Optional.of("update.unavailable-dev"));
         updateAutoCheck.setDisable(unavailable.isPresent());
-        updateCheckButton.setDisable(unavailable.isPresent());
-        updateResultLabel.setText(unavailable.map(key -> ResourcesEngine.getString(key))
-                .or(UpdateUi::lastResult).orElse(""));
-        refreshInstallButton();
+        unavailable.ifPresent(key -> {
+            updateUnavailable.setText(ResourcesEngine.getString(key));
+            updateUnavailable.setVisible(true);
+            updateUnavailable.setManaged(true);
+        });
     }
 
-    /**
-     * The button of the banner, when an update is offered (spec update-with-plugins §3): same text, disabled for the
-     * same reason, told below it.
-     */
-    private void refreshInstallButton() {
-        var release = UpdateUi.offered();
-        boolean shown = release.isPresent() || UpdateUi.offeredPluginUpdates() > 0;
-        updateInstallButton.setText(ResourcesEngine.getString(release.isPresent() ? "update.install"
-                : "plugins.show-updates"));
-        Optional<String> blocked = release.isEmpty() ? Optional.empty()
-                : UpdateUi.service().flatMap(UpdateService::installBlocked);
-        updateInstallButton.setDisable(blocked.isPresent());
-        updateReasonLabel.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
-        show(updateInstallButton, shown);
-        show(updateReasonLabel, shown && blocked.isPresent());
-    }
-
-    private static void show(Node node, boolean shown) {
-        node.setVisible(shown);
-        node.setManaged(shown);
-    }
-
-    /** Saves the preferences as OK does, closes them, then does what the button of the banner does. */
+    /** Saves the preferences as OK does, closes them, then opens the Updates window. */
     @FXML
-    protected void onUpdateInstallClick() {
+    protected void onUpdatesClick() {
         save();
         close();
-        CopybotMainUi.mainController().ifPresent(MainController::installOffered);
-    }
-
-    /**
-     * Always tells the outcome: up to date, the newer release and the plugin updates (then offered in the banner
-     * too), or the error.
-     */
-    @FXML
-    protected void onUpdateCheckClick() {
-        PluginService service = UpdateUi.plugins().orElseThrow(); // the button is disabled without it
-        updateCheckButton.setDisable(true);
-        updateResultLabel.setText(ResourcesEngine.getString("update.checking"));
-        Background.run(service::checkNow,
-                found -> {
-                    UpdateUi.offer(found);
-                    showUpdateResult(UpdateUi.checkText(found));
-                },
-                failure -> showUpdateResult(UpdateUi.message(failure)));
-    }
-
-    private void showUpdateResult(String text) {
-        UpdateUi.setLastResult(text);
-        updateResultLabel.setText(text);
-        updateCheckButton.setDisable(false);
-        refreshInstallButton();
+        CopybotMainUi.mainController().ifPresent(MainController::openUpdates);
     }
 
     @FXML

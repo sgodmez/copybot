@@ -75,26 +75,39 @@ public class UiBundleTest {
             "error.title", "error.unexpected", "exit.title", "exit.running", "exit.stop", "exit.stopping",
             "about.title", "about.java", "about.javafx", "about.plugin-api", "about.license",
             "pipeline.document.not-object", "pipeline.document.not-steps",
-            "update.title", "update.available", "update.install", "update.notes", "update.dismiss", "update.busy",
-            "update.windows-only", "update.unavailable-dev", "update.section", "update.current", "update.auto",
-            "update.check-now", "update.checking", "update.up-to-date", "update.downloading", "update.cancel",
+            "update.title", "update.banner.app", "update.banner.plugins", "update.banner.app-and-plugins",
+            "update.view", "menu.edit.updates", "update.dismiss", "update.busy",
+            "update.windows-only", "update.unavailable-dev", "update.section", "update.auto",
+            "update.checking", "update.up-to-date", "update.downloading", "update.cancel",
             "update.error.http", "update.error.network", "update.error.unreadable", "update.error.no-digest",
             "update.error.digest", "update.error.size", "update.error.stalled", "update.error.cancelled",
             "update.error.no-asset", "update.error.zip", "update.error.io", "update.error.launch",
             "update.other-instance", "update.admin", "update.no-release",
-            "plugins.official.title", "plugins.official.loading", "plugins.official.unreadable",
-            "plugins.official.empty", "plugins.official.installed", "plugins.official.available",
+            "plugins.official.loading", "plugins.official.unreadable", "plugins.official.empty",
             "plugins.state.NOT_INSTALLED", "plugins.state.UP_TO_DATE", "plugins.state.UPDATE_AVAILABLE",
             "plugins.state.INSTALLED_INCOMPATIBLE", "plugins.state.INCOMPATIBLE", "plugins.state.update-fixes",
             "plugins.state.needs-newer-engine", "plugins.error.no-release", "editor.plugin-not-loaded",
             "plugins.action.INSTALL", "plugins.action.UPDATE", "plugins.action.REMOVE", "plugins.chosen.INSTALL",
-            "plugins.chosen.UPDATE", "plugins.chosen.REMOVE", "plugins.action.undo", "plugins.update-all",
+            "plugins.chosen.UPDATE", "plugins.chosen.REMOVE", "plugins.action.undo",
             "plugins.apply", "plugins.pending", "plugins.license", "plugins.confirm.title", "plugins.confirm.intro",
             "plugins.confirm.install", "plugins.confirm.update", "plugins.confirm.remove", "plugins.confirm.licenses",
             "plugins.admin", "plugins.downloading", "plugins.unavailable-dev", "plugins.windows-only",
             "plugins.other-instance", "plugins.error.no-catalogue", "plugins.error.no-asset", "plugins.error.outside",
-            "plugins.updates-available", "plugins.show-updates", "editor.plugin-not-installed",
-            "editor.plugin-install", "plan.needs-plugins", "plan.install-plugins");
+            "editor.plugin-not-installed",
+            "editor.plugin-install", "plan.needs-plugins", "plan.install-plugins",
+            "updates.title", "updates.check", "updates.never-checked", "updates.checked-today", "updates.checked-on",
+            "updates.plugins", "updates.plugin-up-to-date", "updates.with-app", "updates.needs-app",
+            "updates.needs-newer-app", "updates.whats-new", "updates.see-on-github", "updates.summary.app",
+            "updates.summary.plugins", "updates.summary.app-and-plugins", "updates.summary.size",
+            "updates.summary.one-restart", "updates.nothing", "updates.later", "updates.apply",
+            "plugins.filter.ALL", "plugins.filter.INSTALLED", "plugins.filter.AVAILABLE", "plugins.card.none",
+            "plugins.state.update-to", "plugins.card.failed", "plugins.card.unofficial", "plugins.card.depends-on",
+            "plugins.card.missing", "plugins.card.pipeline-plugin", "plugins.card.license", "plugins.card.details",
+            "plugins.embedded", "plugins.dev-path");
+
+    /** The keys formatted with a number. */
+    private static final List<String> NUMBER_KEYS = List.of("plugins.pending",
+            "updates.summary.plugins", "updates.summary.app-and-plugins", "updates.summary.size");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
 
@@ -178,8 +191,9 @@ public class UiBundleTest {
     @Test
     public void everyKeyIsResolvedByTheEngine() {
         for (String key : KEYS) {
-            Object[] args = key.startsWith("plan.resume.count.") || key.equals("plugins.pending")
-                    || key.equals("plugins.updates-available") ? new Object[]{2} : new Object[]{"a", "b", "c", "d", "e"};
+            Object[] args = key.startsWith("plan.resume.count.") || NUMBER_KEYS.contains(key)
+                    ? new Object[]{2}
+                    : key.startsWith("update.banner.") ? new Object[]{"a", 2} : new Object[]{"a", "b", "c", "d", "e"};
             assertFalse(ResourcesEngine.getString(key, args).startsWith("%"), key);
         }
     }
@@ -192,6 +206,49 @@ public class UiBundleTest {
             String many = ResourcesEngine.getString(key, 803);
             assertTrue(one.startsWith("1 "), one);
             assertTrue(many.startsWith("803 "), many);
+        }
+    }
+
+    /** The summary of the Updates window counts the plugins with a plural, in every language; the size is in MB. */
+    @Test
+    public void theUpdatesSummaryHasItsPlural() throws IOException {
+        List<List<String>> expected = List.of(
+                List.of("1 plugin", "2 plugins", "Copybot and 1 plugin", "Copybot and 2 plugins", "48.5 MB"),
+                List.of("1 plugin", "2 plugins", "Copybot et 1 plugin", "Copybot et 2 plugins", "48.5 Mo"),
+                List.of("1 plugin", "2 plugin", "Copybot e 1 plugin", "Copybot e 2 plugin", "48.5 MB"));
+        for (int i = 0; i < BUNDLES.size(); i++) {
+            Properties bundle = bundle(BUNDLES.get(i));
+            MessageFormat plugins = new MessageFormat(bundle.getProperty("updates.summary.plugins"), Locale.ROOT);
+            MessageFormat both = new MessageFormat(bundle.getProperty("updates.summary.app-and-plugins"), Locale.ROOT);
+            MessageFormat size = new MessageFormat(bundle.getProperty("updates.summary.size"), Locale.ROOT);
+            assertEquals(expected.get(i), List.of(plugins.format(new Object[]{1}), plugins.format(new Object[]{2}),
+                    both.format(new Object[]{1}), both.format(new Object[]{2}), size.format(new Object[]{48.5})),
+                    BUNDLES.get(i));
+        }
+    }
+
+    /** The banner counts the plugins with a plural, in every language, with the release and/or the plugins. */
+    @Test
+    public void theUpdateBannerHasItsPlural() throws IOException {
+        List<List<String>> expected = List.of(
+                List.of("Updates available: Copybot 0.7.0", "Updates available: 1 plugin",
+                        "Updates available: 2 plugins", "Updates available: Copybot 0.7.0 and 1 plugin",
+                        "Updates available: Copybot 0.7.0 and 2 plugins"),
+                List.of("Mises à jour disponibles : Copybot 0.7.0", "Mises à jour disponibles : 1 plugin",
+                        "Mises à jour disponibles : 2 plugins",
+                        "Mises à jour disponibles : Copybot 0.7.0 et 1 plugin",
+                        "Mises à jour disponibles : Copybot 0.7.0 et 2 plugins"),
+                List.of("Aggiornamenti disponibili: Copybot 0.7.0", "Aggiornamenti disponibili: 1 plugin",
+                        "Aggiornamenti disponibili: 2 plugin", "Aggiornamenti disponibili: Copybot 0.7.0 e 1 plugin",
+                        "Aggiornamenti disponibili: Copybot 0.7.0 e 2 plugin"));
+        for (int i = 0; i < BUNDLES.size(); i++) {
+            Properties bundle = bundle(BUNDLES.get(i));
+            MessageFormat app = new MessageFormat(bundle.getProperty("update.banner.app"), Locale.ROOT);
+            MessageFormat plugins = new MessageFormat(bundle.getProperty("update.banner.plugins"), Locale.ROOT);
+            MessageFormat both = new MessageFormat(bundle.getProperty("update.banner.app-and-plugins"), Locale.ROOT);
+            assertEquals(expected.get(i), List.of(app.format(new Object[]{"0.7.0", 0}),
+                    plugins.format(new Object[]{"0.7.0", 1}), plugins.format(new Object[]{"0.7.0", 2}),
+                    both.format(new Object[]{"0.7.0", 1}), both.format(new Object[]{"0.7.0", 2})), BUNDLES.get(i));
         }
     }
 

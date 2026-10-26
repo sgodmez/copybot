@@ -38,6 +38,20 @@ public class PluginCatalogTest {
     }
 
     @Test
+    public void theChangesOfAnEntryAreReadPerLanguage() throws Exception {
+        PluginCatalog catalog = PluginCatalog.parse("""
+                { "format": 1, "plugins": [
+                  { "module": "m.a", "code": "a", "version": "1.0.1", "engine": "1.0", "tag": "v1", "asset": "a.zip",
+                    "changes": { "en": "Smaller", "fr": "Plus petit" } },
+                  { "module": "m.b", "code": "b", "version": "1.0.0", "engine": "1.0", "tag": "v1", "asset": "b.zip" }
+                ] }""");
+
+        assertEquals("Plus petit", catalog.entries().get(0).changes().get("fr"));
+        assertEquals("Smaller", catalog.entries().get(0).changes().get("en"));
+        assertTrue(catalog.entries().get(1).changes().isEmpty());
+    }
+
+    @Test
     public void anEntryWithoutModuleIsIgnoredNotTheWholeCatalogue() throws Exception {
         PluginCatalog catalog = PluginCatalog.parse("""
                 { "format": 1, "plugins": [

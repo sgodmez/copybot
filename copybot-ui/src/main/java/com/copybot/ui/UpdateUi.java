@@ -27,11 +27,14 @@ import javafx.stage.Stage;
 import javafx.stage.StageStyle;
 import javafx.stage.Window;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
@@ -58,8 +61,6 @@ final class UpdateUi {
     private static long pluginUpdates;
     /** The banner was closed: hidden until the next start. */
     private static boolean dismissed;
-    /** The text of the last check of the preferences, shown again when they are reopened. */
-    private static String lastResult;
 
     private UpdateUi() {
     }
@@ -111,6 +112,19 @@ final class UpdateUi {
         return dismissed ? Optional.empty() : Optional.ofNullable(offered);
     }
 
+    /**
+     * The newer release found this session, even when the banner was closed: closing the banner hides the
+     * announcement, not the update the Updates window offers.
+     */
+    static Optional<Release> knownRelease() {
+        return Optional.ofNullable(offered);
+    }
+
+    /** When this version last checked for updates, empty when never (or outside the packaged application). */
+    static Optional<Instant> lastCheck() {
+        return service == null ? Optional.empty() : service.lastCheck();
+    }
+
     /** The plugin updates of the banner, 0 when there are none or when it was closed. */
     static long offeredPluginUpdates() {
         return dismissed ? 0 : pluginUpdates;
@@ -121,23 +135,13 @@ final class UpdateUi {
         CopybotMainUi.mainController().ifPresent(MainController::refreshUpdateBanner);
     }
 
-    /** The text of a check: the release, the plugin updates, both, or "up to date". */
-    static String checkText(PluginService.Check check) {
-        List<String> parts = new ArrayList<>();
-        check.release().ifPresent(release -> parts.add(ResourcesEngine.getString("update.available",
-                release.version())));
-        if (check.pluginUpdates() > 0) {
-            parts.add(ResourcesEngine.getString("plugins.updates-available", check.pluginUpdates()));
+    /** The text of the banner: the release, the plugin updates, or both. */
+    static String bannerText(Optional<Release> release, long pluginUpdates) {
+        if (release.isEmpty()) {
+            return ResourcesEngine.getString("update.banner.plugins", pluginUpdates);
         }
-        return parts.isEmpty() ? ResourcesEngine.getString("update.up-to-date") : String.join(" ", parts);
-    }
-
-    static Optional<String> lastResult() {
-        return Optional.ofNullable(lastResult);
-    }
-
-    static void setLastResult(String text) {
-        lastResult = text;
+        return ResourcesEngine.getString(pluginUpdates > 0 ? "update.banner.app-and-plugins" : "update.banner.app",
+                release.get().version(), pluginUpdates);
     }
 
     /** The text of a failed check or update: the translated key of an {@link UpdateException}, else its message. */
@@ -149,36 +153,50 @@ final class UpdateUi {
     }
 
     /**
-     * The "Update" button: refused while an operation runs, and with a message while another Copybot runs from the
-     * same folder; a warning when Windows will ask for an administrator's approval; then the usual exit questions
-     * (unsaved pipelines, a refusal cancels everything), the download with its window (the application, then the
-     * installed plugins with a newer version: spec update-with-plugins), the launch of the installer or of the script,
-     * and the usual exit, which only then closes the editors. A failure or a cancel deletes the download and Copybot
-     * goes on with its editors untouched.
+     * "Update and restart" of the Updates window with Copybot ticked: the application and exactly these plugins (a
+     * module not installed in the plugins folder, or without a newer version in the catalogue of the release, is
+     * ignored).
+     *
+     * @param owner the window the confirmations and the download window belong to
      */
-    static void install(Release release) {
+    static void install(Release release, Set<String> modules, Window owner) {
+        Set<String> chosen = Set.copyOf(modules);
+        install(release, () -> chosen, owner);
+    }
+
+    /**
+     * Refused while an operation runs, and with a message while another Copybot runs from the same folder; a warning
+     * when Windows will ask for an administrator's approval; then the usual exit questions (unsaved pipelines, a
+     * refusal cancels everything), the download with its window (the application, then the chosen installed plugins
+     * with a newer version: spec update-with-plugins), the launch of the installer or of the script, and the usual
+     * exit, which only then closes the editors. A failure or a cancel deletes the download and Copybot goes on with
+     * its editors untouched.
+     *
+     * @param modules the plugins to update, asked for in the background
+     */
+    private static void install(Release release, Callable<Set<String>> modules, Window owner) {
         if (service == null) {
             return;
         }
         Optional<String> blocked = service.installBlocked();
         if (blocked.isPresent()) {
-            // e.g. a run started while the preferences offering the update were open
-            inform(CopybotMainUi.STAGE, "update.title", ResourcesEngine.getString(blocked.get()));
+            // e.g. a run started while the window offering the update was open
+            inform(owner, "update.title", ResourcesEngine.getString(blocked.get()));
             return;
         }
         Optional<String> otherInstance = service.otherInstance();
         if (otherInstance.isPresent()) {
-            inform(CopybotMainUi.STAGE, "update.title", ResourcesEngine.getString(otherInstance.get()));
+            inform(owner, "update.title", ResourcesEngine.getString(otherInstance.get()));
             return;
         }
         if (service.adminApprovalNeeded()
-                && !confirmAdminApproval(CopybotMainUi.STAGE, "update.title", "update.admin")) {
+                && !confirmAdminApproval(owner, "update.title", "update.admin")) {
             return;
         }
         if (!CopybotMainUi.confirmExitForUpdate()) {
             return;
         }
-        ProgressWindow progress = new ProgressWindow(CopybotMainUi.STAGE, "update.title",
+        ProgressWindow progress = new ProgressWindow(owner, "update.title",
                 ResourcesEngine.getString("update.downloading", release.version()));
 
         // the progress of the download thread, handed to the JavaFX thread at most once at a time
@@ -195,10 +213,11 @@ final class UpdateUi {
                             });
                         }
                     };
-                    // the installed plugins with a newer version go with it: one stop, one relaunch
+                    // the chosen plugins with a newer version go with it: one stop, one relaunch
                     UpdateService.Prepared prepared = plugins == null
                             ? service.prepare(release, appProgress, progress.cancelled::get)
-                            : plugins.prepareUpdate(release, appProgress, (index, total, code, bytes) -> {
+                            : plugins.prepareUpdate(release, modules.call(), appProgress,
+                            (index, total, code, bytes) -> {
                                 if (bytes == 0) {
                                     Platform.runLater(() -> {
                                         progress.label.setText(ResourcesEngine.getString("plugins.downloading", code,
@@ -223,7 +242,7 @@ final class UpdateUi {
                         return; // the user's own choice: nothing to tell
                     }
                     LOG.log(System.Logger.Level.WARNING, "update to " + release.version() + " failed", failure);
-                    showError(CopybotMainUi.STAGE, "update.title", failure);
+                    showError(owner, "update.title", failure);
                 });
     }
 

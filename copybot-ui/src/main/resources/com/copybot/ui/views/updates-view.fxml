@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+
+<!-- the Updates window (spec updates-window): filled by UpdatesController.show -->
+<BorderPane prefHeight="460.0" prefWidth="720.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.UpdatesController">
+   <top>
+      <VBox spacing="6.0">
+         <padding><Insets bottom="8.0" left="12.0" right="12.0" top="12.0" /></padding>
+         <children>
+            <HBox alignment="CENTER_LEFT" spacing="10.0">
+               <children>
+                  <Label fx:id="headerLabel" />
+                  <Region HBox.hgrow="ALWAYS" />
+                  <Button fx:id="checkButton" mnemonicParsing="false" onAction="#onCheckClick" text="%updates.check" />
+               </children>
+            </HBox>
+            <Label fx:id="errorLabel" wrapText="true" maxWidth="1.7976931348623157E308" style="-fx-text-fill: #c62828;" />
+         </children>
+      </VBox>
+   </top>
+   <center>
+      <ScrollPane fitToWidth="true">
+         <content>
+            <VBox fx:id="rowsBox" spacing="6.0">
+               <padding><Insets bottom="8.0" left="12.0" right="12.0" top="4.0" /></padding>
+            </VBox>
+         </content>
+      </ScrollPane>
+   </center>
+   <bottom>
+      <VBox spacing="6.0">
+         <padding><Insets bottom="12.0" left="12.0" right="12.0" top="8.0" /></padding>
+         <children>
+            <Label fx:id="summaryLabel" />
+            <HBox alignment="CENTER_RIGHT" spacing="10.0">
+               <children>
+                  <Label fx:id="applyReason" wrapText="true" style="-fx-text-fill: #616161;" />
+                  <Region HBox.hgrow="ALWAYS" />
+                  <Button cancelButton="true" mnemonicParsing="false" onAction="#onLaterClick" text="%updates.later" />
+                  <Button fx:id="applyButton" defaultButton="true" mnemonicParsing="false" onAction="#onApplyClick" text="%updates.apply" />
+               </children>
+            </HBox>
+         </children>
+      </VBox>
+   </bottom>
+</BorderPane>

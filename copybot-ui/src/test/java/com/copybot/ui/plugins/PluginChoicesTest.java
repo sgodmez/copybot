@@ -16,7 +16,7 @@ public class PluginChoicesTest {
 
     private static PluginRow row(String code, PluginState state, Path... folders) {
         PluginCatalog.Entry entry = new PluginCatalog.Entry("com.copybot.plugin." + code, code, "1.0.0", "1.0", "v1",
-                code + ".zip", Map.of(), null);
+                code + ".zip", Map.of(), Map.of(), null);
         return new PluginRow(entry, state == PluginState.NOT_INSTALLED || state == PluginState.INCOMPATIBLE ? null
                 : "0.9.0", List.of(folders), state);
     }

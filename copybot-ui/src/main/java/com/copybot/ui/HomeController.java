@@ -1,14 +1,11 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
-import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.util.UiPreferences;
 import javafx.application.Platform;
 import javafx.fxml.FXML;
-import javafx.scene.control.Alert;
-import javafx.scene.control.ButtonType;
 import javafx.scene.control.ContextMenu;
 import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
@@ -16,9 +13,7 @@ import javafx.scene.control.ListView;
 import javafx.scene.control.MenuItem;
 import javafx.scene.input.MouseButton;
 import javafx.scene.layout.VBox;
-import javafx.stage.FileChooser;
 
-import java.io.File;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashSet;
@@ -127,20 +122,7 @@ public class HomeController {
 
     @FXML
     protected void onOpenClick() {
-        FileChooser chooser = new FileChooser();
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(ResourcesEngine.getString("home.file-filter"), "*.json"));
-        File file = chooser.showOpenDialog(CopybotMainUi.STAGE);
-        if (file == null) {
-            return;
-        }
-        if (PipelineDocument.isResumeCursor(file.toPath())) { // "*.json" lists the engine's resume cursors too
-            Alert alert = new Alert(Alert.AlertType.WARNING,
-                    ResourcesEngine.getString("home.state-file", file.getName()), ButtonType.OK);
-            alert.initOwner(CopybotMainUi.STAGE);
-            alert.showAndWait();
-            return;
-        }
-        main.showPlan(file.toPath());
+        main.openPipelineChooser();
     }
 
     @FXML

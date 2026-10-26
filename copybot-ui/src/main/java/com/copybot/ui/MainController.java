@@ -2,8 +2,8 @@ package com.copybot.ui;
 
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.plugins.PluginChoices;
-import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
@@ -12,7 +12,6 @@ import com.copybot.ui.util.Views;
 import javafx.fxml.FXML;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
-import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
@@ -22,11 +21,13 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
+import javafx.stage.FileChooser;
 import javafx.stage.Modality;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.stage.Window;
 
+import java.io.File;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Collection;
@@ -47,6 +48,12 @@ public class MainController {
     /** The choices of a Plugins window closed to be opened again (over an editor, in a new language). */
     private static PluginChoices carriedChoices;
 
+    /** The Updates window, at most one, non modal: kept to bring it to front and refresh it. */
+    private static Stage updatesWindow;
+    private static UpdatesController updatesController;
+    /** The language the Updates window was built in: built again after a change. */
+    private static Locale updatesLocale;
+
     /** A preparation or a copy runs in the plan view (see {@link #setBusy}). */
     private volatile boolean busy;
 
@@ -60,12 +67,6 @@ public class MainController {
     private HBox updateBanner;
     @FXML
     private Label updateLabel;
-    @FXML
-    private Button updateInstallButton;
-    @FXML
-    private Label updateReason;
-    @FXML
-    private Hyperlink updateNotesLink;
 
     @FXML
     public void initialize() {
@@ -82,6 +83,10 @@ public class MainController {
             pluginsController = null;
             onPluginsClick();
         }
+        if (updatesWindow != null && updatesWindow.isShowing() && !Locale.getDefault().equals(updatesLocale)) {
+            updatesWindow.close(); // a language change: the window is built again in the new language
+            openUpdates();
+        }
     }
 
     public void showHome() {
@@ -90,6 +95,34 @@ public class MainController {
         Views.Loaded<HomeController> home = Views.load("home-view.fxml");
         home.controller().init(this);
         root.setCenter(home.root());
+    }
+
+    /**
+     * Asks for a pipeline file (*.json) and opens its plan view: the "Open a pipeline" button of the home screen and
+     * the File menu item. A resume cursor (.state.json, listed by the same filter) is refused with a message.
+     */
+    void openPipelineChooser() {
+        FileChooser chooser = new FileChooser();
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+                ResourcesEngine.getString("home.file-filter"), "*.json"));
+        File file = chooser.showOpenDialog(CopybotMainUi.STAGE);
+        if (file == null) {
+            return;
+        }
+        if (PipelineDocument.isResumeCursor(file.toPath())) { // "*.json" lists the engine's resume cursors too
+            Alert alert = new Alert(Alert.AlertType.WARNING,
+                    ResourcesEngine.getString("home.state-file", file.getName()), ButtonType.OK);
+            alert.initOwner(CopybotMainUi.STAGE);
+            alert.showAndWait();
+            return;
+        }
+        showPlan(file.toPath());
+    }
+
+    /** "Open a pipeline" of the File menu: from any screen, as the button of the home screen. */
+    @FXML
+    protected void onOpenPipelineClick() {
+        openPipelineChooser();
     }
 
     /** Opens the plan view of the pipeline, nothing prepared (spec desktop-ui §1), and makes it the most recent. */
@@ -114,6 +147,9 @@ public class MainController {
         if (pluginsController != null) {
             pluginsController.refreshActions(); // nor plugin changes
         }
+        if (updatesController != null) {
+            updatesController.refreshActions();
+        }
     }
 
     /** Exiting then asks first: the operation would be stopped. */
@@ -128,9 +164,8 @@ public class MainController {
 
     /**
      * Shows the banner of a newer release (spec app-update §3) and of the plugin updates (spec plugin-install §5),
-     * unless closed this session. With a release its button updates Copybot and its plugins at once, disabled with
-     * the reason while an operation runs, and outside Windows; with plugin updates only, it opens the Plugins window
-     * with these updates chosen.
+     * unless closed this session: what is available, and "View", which opens the Updates window where it is chosen
+     * and applied.
      */
     void refreshUpdateBanner() {
         var release = UpdateUi.offered();
@@ -138,43 +173,15 @@ public class MainController {
         boolean shown = release.isPresent() || pluginUpdates > 0;
         updateBanner.setVisible(shown);
         updateBanner.setManaged(shown);
-        if (!shown) {
-            return;
+        if (shown) {
+            updateLabel.setText(UpdateUi.bannerText(release, pluginUpdates));
         }
-        updateLabel.setText(UpdateUi.checkText(new PluginService.Check(release, pluginUpdates)));
-        updateNotesLink.setVisible(release.isPresent());
-        updateNotesLink.setManaged(release.isPresent());
-        if (release.isEmpty()) {
-            updateInstallButton.setText(ResourcesEngine.getString("plugins.show-updates"));
-            updateInstallButton.setDisable(false);
-            updateReason.setText("");
-            return;
-        }
-        updateInstallButton.setText(ResourcesEngine.getString("update.install"));
-        var blocked = UpdateUi.service().flatMap(service -> service.installBlocked());
-        updateInstallButton.setDisable(blocked.isPresent());
-        updateReason.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
     }
 
+    /** "View" of the banner and the Edit menu item: the Updates window. */
     @FXML
-    protected void onUpdateInstallClick() {
-        installOffered();
-    }
-
-    /** What the button of the banner does, also offered by the preferences: update, or show the plugin updates. */
-    void installOffered() {
-        var release = UpdateUi.offered();
-        if (release.isPresent()) {
-            UpdateUi.install(release.get());
-        } else if (UpdateUi.offeredPluginUpdates() > 0) {
-            openPlugins(Set.of(), true, null);
-        }
-    }
-
-    @FXML
-    protected void onUpdateNotesClick() {
-        UpdateUi.offered().ifPresent(release ->
-                CopybotMainUi.HOST_SERVICES.showDocument(release.notesUrl().toString()));
+    protected void onUpdatesClick() {
+        openUpdates();
     }
 
     @FXML
@@ -285,6 +292,56 @@ public class MainController {
             pluginsController = plugins.controller();
             pluginsLocale = Locale.getDefault();
             plugins.controller().showOfficial(modules, updates);
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+        }
+    }
+
+    /**
+     * Opens the Updates window (spec updates-window), or brings it to front and shows it again when open: everything
+     * updatable is ticked again with what the last check found.
+     */
+    void openUpdates() {
+        openUpdates(null);
+    }
+
+    /**
+     * Same, from a modal window (the Plugins window opened over an editor): the Updates window is then opened over
+     * it, modal too (a window under a modal one takes no input).
+     */
+    void openUpdates(Window modalOwner) {
+        if (modalOwner != null && updatesWindow != null && updatesWindow.isShowing()
+                && updatesWindow.getOwner() != modalOwner) {
+            updatesWindow.close(); // under the modal window: opened again over it
+        }
+        if (updatesWindow != null && updatesWindow.isShowing()) {
+            updatesWindow.toFront();
+            updatesController.show();
+            return;
+        }
+        try {
+            Views.Loaded<UpdatesController> updates = Views.load("updates-view.fxml");
+            Stage window = new Stage();
+            window.setTitle(ResourcesEngine.getString("updates.title"));
+            window.getIcons().setAll(CopybotMainUi.STAGE.getIcons());
+            window.setScene(new Scene(updates.root()));
+            if (modalOwner != null) {
+                window.initOwner(modalOwner);
+                window.initModality(Modality.WINDOW_MODAL);
+            } else {
+                window.initOwner(CopybotMainUi.STAGE);
+            }
+            window.setOnHidden(e -> {
+                if (updatesWindow == window) {
+                    updatesWindow = null;
+                    updatesController = null;
+                }
+            });
+            window.show();
+            updatesWindow = window;
+            updatesController = updates.controller();
+            updatesLocale = Locale.getDefault();
+            updates.controller().show();
         } catch (RuntimeException e) {
             PopinUtil.showError(e);
         }

@@ -1,11 +1,14 @@
 package com.copybot.ui;
 
-import com.copybot.engine.plugin.report.ActionEntry;
 import com.copybot.engine.plugin.report.ModuleEntry;
 import com.copybot.engine.plugin.report.PluginEntry;
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.engine.plugin.report.PluginStatus;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginCard;
+import com.copybot.ui.plugins.PluginCard.ActionLine;
+import com.copybot.ui.plugins.PluginCard.Filter;
+import com.copybot.ui.plugins.PluginCard.Status;
 import com.copybot.ui.plugins.PluginCatalog;
 import com.copybot.ui.plugins.PluginChoices;
 import com.copybot.ui.plugins.PluginChoices.Action;
@@ -15,139 +18,125 @@ import com.copybot.ui.plugins.PluginState;
 import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
-import javafx.beans.property.ReadOnlyStringWrapper;
 import javafx.fxml.FXML;
 import javafx.geometry.Pos;
-import javafx.scene.control.*;
+import javafx.scene.Node;
+import javafx.scene.control.Button;
+import javafx.scene.control.Label;
+import javafx.scene.control.TitledPane;
+import javafx.scene.control.ToggleButton;
+import javafx.scene.control.ToggleGroup;
 import javafx.scene.input.Clipboard;
 import javafx.scene.input.ClipboardContent;
+import javafx.scene.layout.GridPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.VBox;
 import javafx.scene.paint.Color;
 import javafx.scene.shape.Circle;
+import javafx.stage.Modality;
 import javafx.stage.Stage;
+import javafx.stage.Window;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
- * The plugins of this JVM as they were loaded (spec plugins-view §2), and the official plugins of the catalogue with
- * their install, update and removal, applied together with a restart (spec plugin-install §3).
+ * The plugins of this JVM as they were loaded (spec plugins-view §2) and the official plugins of the catalogue with
+ * their install and removal, applied together with a restart (spec plugin-install §3), as one card per plugin (spec
+ * updates-window, "Refonte de l'écran Plugins"). What a card shows is decided by {@link PluginCard}; this class
+ * builds its nodes. The updates of installed plugins are chosen in the Updates window.
  */
 public class PluginsController {
 
-    private static final Map<PluginStatus, Color> STATUS_COLORS = Map.of(
-            PluginStatus.LOADED, Color.web("#2e7d32"),
-            PluginStatus.ACTIONS_FAILED, Color.web("#ef6c00"),
-            PluginStatus.ERROR, Color.web("#c62828"),
-            PluginStatus.IGNORED, Color.web("#9e9e9e"));
+    /** The colour of the state of a card, as the dots of the former list. */
+    private static final Map<Status, String> STATUS_COLORS = Map.of(
+            Status.UP_TO_DATE, "#2e7d32",
+            Status.LOADED, "#2e7d32",
+            Status.UPDATE_AVAILABLE, "#0d47a1",
+            Status.AVAILABLE, "#616161",
+            Status.INCOMPATIBLE, "#c62828",
+            Status.FAILED, "#c62828",
+            Status.IGNORED, "#9e9e9e");
+    private static final String RED = "-fx-text-fill: #c62828;";
+    private static final String GREY = "-fx-text-fill: #616161;";
+    private static final String CARD = "-fx-border-color: #d0d0d0; -fx-border-radius: 4; -fx-padding: 8 10 8 10;";
 
-    @FXML private Label configFileLabel;
-    @FXML private Label pluginPathLabel;
     @FXML private VBox warningsBox;
-    @FXML private ListView<PluginEntry> pluginList;
-    @FXML private VBox detailBox;
-    @FXML private Label detailTitle;
-    @FXML private Label detailPath;
-    @FXML private Button openFolderButton;
-    @FXML private Label detailMessage;
-    @FXML private TableView<ModuleEntry> moduleTable;
-    @FXML private TableColumn<ModuleEntry, String> moduleNameCol;
-    @FXML private TableColumn<ModuleEntry, String> moduleVersionCol;
-    @FXML private TableColumn<ModuleEntry, String> moduleMainCol;
-    @FXML private TableColumn<ModuleEntry, String> moduleAutomaticCol;
-    @FXML private TableColumn<ModuleEntry, String> moduleLocationCol;
-    @FXML private ListView<String> dependencyList;
-    @FXML private TableView<ActionEntry> actionTable;
-    @FXML private TableColumn<ActionEntry, String> actionTypeCol;
-    @FXML private TableColumn<ActionEntry, String> actionCodeCol;
-    @FXML private TableColumn<ActionEntry, String> actionNameCol;
-    @FXML private Label copiedLabel;
-    @FXML private TitledPane officialPane;
+    @FXML private ToggleButton allFilter;
+    @FXML private ToggleButton installedFilter;
+    @FXML private ToggleButton availableFilter;
     @FXML private Label officialStatus;
-    @FXML private VBox officialRows;
+    @FXML private VBox cardsBox;
+    @FXML private TitledPane embeddedPane;
+    @FXML private VBox embeddedBox;
+    @FXML private GridPane technicalGrid;
+    @FXML private HBox applyBar;
     @FXML private Label pendingLabel;
     @FXML private Label applyReason;
-    @FXML private Button updateAllButton;
     @FXML private Button applyButton;
+    @FXML private Label copiedLabel;
+    @FXML private Button closeButton;
 
     private PluginReport report;
     /** The official plugins shown, empty until the catalogue is read. */
     private List<PluginRow> rows = List.of();
-    /** The actions chosen in the official section, kept across refreshes. */
+    /** The actions chosen, kept across refreshes. */
     private PluginChoices choices = new PluginChoices();
     /** The last read of the catalogue started: an older one that ends later is ignored. */
     private Object officialToken;
+    /**
+     * The modules a pipeline asked for while this window is open (a missing or refused plugin): their update is
+     * chosen here, as their install, instead of leading to the Updates window.
+     */
+    private final Set<String> repairModules = new LinkedHashSet<>();
+    private Filter filter = Filter.ALL;
+    /** The catalogue was read: a plugin it does not list is then known not to be official. */
+    private boolean catalogueRead;
 
     @FXML
     public void initialize() {
-        moduleNameCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().name()));
-        moduleVersionCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(Optional.ofNullable(c.getValue().version()).orElse("")));
-        moduleMainCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().main() ? "✔" : ""));
-        moduleAutomaticCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().automatic() ? "✔" : ""));
-        moduleLocationCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(Optional.ofNullable(c.getValue().location()).map(Path::toString).orElse("")));
-        actionTypeCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().type().name()));
-        actionCodeCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().code()));
-        actionNameCol.setCellValueFactory(c -> new ReadOnlyStringWrapper(c.getValue().name()));
-        dependencyList.setCellFactory(list -> new ListCell<>() {
-            @Override
-            protected void updateItem(String item, boolean empty) {
-                super.updateItem(item, empty);
-                setText(empty ? null : item);
-                setStyle(!empty && item != null && item.startsWith(missingPrefix()) ? "-fx-text-fill: #c62828;" : "");
+        ToggleGroup filters = new ToggleGroup();
+        Map<ToggleButton, Filter> byButton = Map.of(allFilter, Filter.ALL, installedFilter, Filter.INSTALLED,
+                availableFilter, Filter.AVAILABLE);
+        byButton.keySet().forEach(button -> button.setToggleGroup(filters));
+        filters.selectedToggleProperty().addListener((obs, old, selected) -> {
+            if (selected == null) {
+                filters.selectToggle(old); // one filter always applies
+                return;
             }
+            filter = byButton.get(selected);
+            render();
         });
-        pluginList.setCellFactory(list -> new ListCell<>() {
-            @Override
-            protected void updateItem(PluginEntry item, boolean empty) {
-                super.updateItem(item, empty);
-                if (empty || item == null) {
-                    setText(null);
-                    setGraphic(null);
-                    setTooltip(null);
-                    return;
-                }
-                String source = ResourcesEngine.getString("plugins.source." + item.source().name());
-                setText(item.name() + (item.version() != null ? " " + item.version() : "")
-                        + (source.isBlank() ? "" : "  [" + source + "]"));
-                Circle dot = new Circle(5, STATUS_COLORS.get(item.status()));
-                setGraphic(dot);
-                setTooltip(new Tooltip(ResourcesEngine.getString("plugins.status." + item.status().name())));
-            }
-        });
-        pluginList.getSelectionModel().selectedItemProperty().addListener((obs, old, entry) -> showDetail(entry));
+        show(officialStatus, false);
+        show(applyBar, false);
     }
 
+    /** Shows the report of a (re)loading of the plugins: warnings, cards, technical details; the choices stay. */
     public void init(PluginReport report) {
         this.report = report;
-        configFileLabel.setText(report.configFile().toString());
-        pluginPathLabel.setText(report.pluginPath().toString());
         warningsBox.getChildren().clear();
         for (String warning : report.warnings()) {
             warningsBox.getChildren().add(banner(warning, "#fff3e0", "#e65100"));
         }
-        PluginEntry selected = pluginList.getSelectionModel().getSelectedItem(); // a refresh keeps the selection
-        pluginList.getItems().setAll(report.plugins());
-        if (report.plugins().isEmpty()) {
-            pluginList.setPlaceholder(new Label(ResourcesEngine.getString("plugins.none")));
-            detailBox.setVisible(false);
-        } else {
-            int index = 0;
-            for (int i = 0; selected != null && i < report.plugins().size(); i++) {
-                PluginEntry entry = report.plugins().get(i);
-                if (entry.name().equals(selected.name()) && Objects.equals(entry.path(), selected.path())) {
-                    index = i;
-                    break;
-                }
-            }
-            pluginList.getSelectionModel().select(index);
+        technicalGrid.getChildren().clear();
+        int line = 0;
+        technicalGrid.addRow(line++, new Label(ResourcesEngine.getString("plugins.config-file")),
+                wrapped(report.configFile().toString()));
+        technicalGrid.addRow(line++, new Label(ResourcesEngine.getString("plugins.plugin-path")),
+                wrapped(report.pluginPath().toString()));
+        for (Path dev : report.devPluginPaths()) {
+            technicalGrid.addRow(line++, new Label(ResourcesEngine.getString("plugins.dev-path")),
+                    wrapped(dev.toString()));
         }
+        render();
     }
 
     private static Label banner(String text, String background, String foreground) {
@@ -156,44 +145,6 @@ public class PluginsController {
         label.setMaxWidth(Double.MAX_VALUE);
         label.setStyle("-fx-background-color: " + background + "; -fx-text-fill: " + foreground + "; -fx-padding: 4 8 4 8;");
         return label;
-    }
-
-    private void showDetail(PluginEntry entry) {
-        detailBox.setVisible(entry != null);
-        if (entry == null) {
-            return;
-        }
-        detailTitle.setText(entry.name() + (entry.version() != null ? " " + entry.version() : "")
-                + " — " + ResourcesEngine.getString("plugins.status." + entry.status().name()));
-        detailPath.setText(entry.path() != null ? entry.path().toString() : "—");
-        openFolderButton.setDisable(entry.path() == null);
-        detailMessage.setText(entry.message() != null ? entry.message() : "");
-        detailMessage.setManaged(entry.message() != null);
-        detailMessage.setVisible(entry.message() != null);
-        moduleTable.getItems().setAll(entry.modules());
-        dependencyList.getItems().setAll(entry.pluginDependencies().stream()
-                .map(d -> ResourcesEngine.getString("plugins.dep.plugin", d)).toList());
-        dependencyList.getItems().addAll(entry.missingRequires().stream()
-                .map(m -> ResourcesEngine.getString("plugins.dep.missing", m)).toList());
-        actionTable.getItems().setAll(entry.actions());
-    }
-
-    private static String missingPrefix() {
-        String sample = ResourcesEngine.getString("plugins.dep.missing", "\u0000");
-        return sample.substring(0, sample.indexOf('\u0000'));
-    }
-
-    @FXML
-    protected void onOpenFolderClick() {
-        PluginEntry entry = pluginList.getSelectionModel().getSelectedItem();
-        if (entry == null || entry.path() == null) {
-            return;
-        }
-        try {
-            CopybotMainUi.HOST_SERVICES.showDocument(entry.path().toUri().toString());
-        } catch (RuntimeException e) {
-            PopinUtil.showError(e);
-        }
     }
 
     @FXML
@@ -218,13 +169,13 @@ public class PluginsController {
 
     /**
      * Shows the official plugins: the catalogue in memory, else read in the background (offline: a message, the
-     * diagnostic stays). The install or update of {@code modules} is chosen, and every update with {@code updates};
-     * the choices already made are kept when they still fit.
+     * loaded plugins stay shown). The install or update of {@code modules} is chosen (a plugin a pipeline needs), and
+     * every update with {@code updates}; the choices already made are kept when they still fit.
      */
     void showOfficial(Collection<String> modules, boolean updates) {
+        repairModules.addAll(modules);
         Optional<PluginService> service = UpdateUi.plugins();
-        officialPane.setVisible(service.isPresent());
-        officialPane.setManaged(service.isPresent());
+        show(applyBar, service.isPresent());
         if (service.isEmpty()) {
             return;
         }
@@ -234,20 +185,21 @@ public class PluginsController {
         if (rows.isEmpty()) {
             officialStatus.setText(ResourcesEngine.getString("plugins.official.loading"));
         }
-        renderOfficial();
+        render();
         Background.run(() -> service.get().rows(service.get().catalog(), loaded),
                 found -> {
                     if (token != officialToken) {
                         return;
                     }
                     rows = found;
+                    catalogueRead = true;
                     choices.retain(rows);
                     choices.preselect(rows, modules);
                     if (updates) {
                         choices.updateAll(rows);
                     }
                     officialStatus.setText(rows.isEmpty() ? ResourcesEngine.getString("plugins.official.empty") : "");
-                    renderOfficial();
+                    render();
                 },
                 failure -> {
                     if (token != officialToken) {
@@ -255,99 +207,126 @@ public class PluginsController {
                     }
                     officialStatus.setText(ResourcesEngine.getString("plugins.official.unreadable",
                             UpdateUi.message(failure)));
-                    renderOfficial();
+                    render();
                 });
     }
 
-    private void renderOfficial() {
-        officialRows.getChildren().clear();
-        Optional<String> blocked = UpdateUi.plugins().flatMap(PluginService::applyBlocked);
-        for (PluginRow row : rows) {
-            officialRows.getChildren().add(officialRow(row, blocked.isPresent()));
+    /** Builds the cards again: after a report, a read of the catalogue, a choice, a filter, an operation. */
+    private void render() {
+        if (report == null) {
+            return;
         }
-        officialStatus.setManaged(!officialStatus.getText().isEmpty());
-        officialStatus.setVisible(!officialStatus.getText().isEmpty());
+        boolean blocked = UpdateUi.plugins().flatMap(PluginService::applyBlocked).isPresent();
+        cardsBox.getChildren().clear();
+        for (PluginCard card : PluginCard.of(rows, report)) {
+            if (card.shownBy(filter)) {
+                cardsBox.getChildren().add(card(card, blocked));
+            }
+        }
+        if (cardsBox.getChildren().isEmpty()) {
+            Label none = new Label(ResourcesEngine.getString("plugins.card.none"));
+            none.setStyle(GREY);
+            cardsBox.getChildren().add(none);
+        }
+        Optional<PluginCard> embedded = PluginCard.embedded(report);
+        show(embeddedPane, embedded.isPresent());
+        embedded.ifPresent(card -> {
+            List<String> codes = card.actions().stream().map(ActionLine::code).toList();
+            String shown = codes.stream().limit(3).collect(Collectors.joining(", "))
+                    + (codes.size() > 3 ? ", …" : "");
+            embeddedPane.setText(ResourcesEngine.getString("plugins.embedded", shown));
+            embeddedBox.getChildren().setAll(card(card, blocked));
+        });
+        show(officialStatus, !officialStatus.getText().isEmpty());
         refreshFooter();
     }
 
-    /** One plugin: its name, description, licence, versions, state, and its actions or the one chosen. */
-    private HBox officialRow(PluginRow row, boolean blocked) {
-        PluginCatalog.Entry entry = row.entry();
-        Label title = new Label(entry.code() + "  " + entry.version());
-        title.setStyle("-fx-font-weight: bold;");
-        Label module = new Label(entry.module());
-        module.setStyle("-fx-text-fill: #757575;");
-        HBox head = new HBox(8, title, module);
-        head.setAlignment(Pos.BASELINE_LEFT);
-        VBox info = new VBox(2, head);
-        String description = UpdateUi.description(entry);
-        if (!description.isBlank()) {
-            Label text = new Label(description);
-            text.setWrapText(true);
-            info.getChildren().add(text);
+    /** One plugin: its header (title, version, state, buttons) and its body. */
+    private VBox card(PluginCard card, boolean blocked) {
+        Label title = new Label(card.title());
+        title.setStyle("-fx-font-weight: bold; -fx-font-size: 1.15em;");
+        HBox head = new HBox(8, title);
+        head.setAlignment(Pos.CENTER_LEFT);
+        if (card.version() != null) {
+            head.getChildren().add(new Label(card.version()));
         }
-        if (entry.license() != null) {
-            Label license = new Label(ResourcesEngine.getString("plugins.license", entry.license().name(),
-                    UpdateUi.localized(entry.license().notice())));
-            license.setWrapText(true);
-            license.setStyle("-fx-text-fill: #616161; -fx-font-size: 0.9em;");
-            info.getChildren().add(license);
-        }
-        List<String> versions = new ArrayList<>();
-        if (row.installedVersion() != null) {
-            versions.add(ResourcesEngine.getString("plugins.official.installed", row.installedVersion()));
-        }
-        versions.add(ResourcesEngine.getString("plugins.official.available", entry.version()));
-        Label state = new Label(stateText(row) + "  ·  " + String.join("  ·  ", versions));
+        String color = STATUS_COLORS.get(card.status());
+        Label state = new Label(stateText(card), new Circle(5, Color.web(color)));
+        state.setStyle("-fx-text-fill: " + color + ";");
         state.setWrapText(true);
-        state.setStyle(switch (row.state()) {
-            case UPDATE_AVAILABLE -> "-fx-text-fill: #0d47a1;";
-            case INSTALLED_INCOMPATIBLE, INCOMPATIBLE -> "-fx-text-fill: #c62828;";
-            default -> "-fx-text-fill: #424242;";
-        });
-        info.getChildren().add(state);
-        HBox.setHgrow(info, Priority.ALWAYS);
-        info.setMaxWidth(Double.MAX_VALUE);
+        head.getChildren().add(state);
+        card.loaded().stream().map(p -> ResourcesEngine.getString("plugins.source." + p.source().name()))
+                .filter(source -> !source.isBlank()).distinct()
+                .forEach(source -> head.getChildren().add(grey("[" + source + "]")));
+        if (catalogueRead && !card.official() && !card.isEmbedded()) {
+            head.getChildren().add(grey(ResourcesEngine.getString("plugins.card.unofficial")));
+        }
+        Region space = new Region();
+        HBox.setHgrow(space, Priority.ALWAYS);
+        head.getChildren().addAll(space, buttons(card, blocked));
 
-        HBox actions = new HBox(6);
-        actions.setAlignment(Pos.CENTER_RIGHT);
-        Optional<Action> chosen = choices.chosen(row);
-        if (chosen.isPresent()) {
-            Label label = new Label(ResourcesEngine.getString("plugins.chosen." + chosen.get().name()));
-            label.setStyle("-fx-font-weight: bold; -fx-text-fill: #0d47a1;");
-            Button undo = new Button(ResourcesEngine.getString("plugins.action.undo"));
-            undo.setOnAction(e -> {
-                choices.cancel(row);
-                renderOfficial();
-            });
-            actions.getChildren().addAll(label, undo);
-        } else {
-            for (Action action : PluginChoices.offered(row)) {
-                Button button = new Button(ResourcesEngine.getString("plugins.action." + action.name()));
-                button.setDisable(blocked);
-                button.setOnAction(e -> {
-                    choices.choose(row, action);
-                    renderOfficial();
-                });
-                actions.getChildren().add(button);
+        VBox box = new VBox(4);
+        if (!card.isEmbedded()) {
+            box.getChildren().add(head); // the embedded card is the content of its own section
+        }
+        for (String error : card.loadErrors()) {
+            Label label = wrapped(error);
+            label.setStyle(RED);
+            box.getChildren().add(label);
+        }
+        if (card.official()) {
+            String description = UpdateUi.description(card.row().entry());
+            if (!description.isBlank()) {
+                box.getChildren().add(wrapped(description));
             }
         }
-        HBox line = new HBox(12, info, actions);
-        line.setAlignment(Pos.CENTER_LEFT);
-        line.setStyle("-fx-border-color: transparent transparent #e0e0e0 transparent; -fx-padding: 4 0 6 0;");
-        return line;
+        if (!card.actions().isEmpty()) {
+            box.getChildren().add(actions(card));
+        }
+        if (!card.dependsOn().isEmpty()) {
+            box.getChildren().add(labelled("plugins.card.depends-on", String.join(", ", card.dependsOn()), ""));
+        }
+        if (!card.missing().isEmpty()) {
+            box.getChildren().add(labelled("plugins.card.missing", String.join(", ", card.missing()), RED));
+        }
+        if (card.official() && card.row().entry().license() != null) {
+            PluginCatalog.License license = card.row().entry().license();
+            box.getChildren().add(folded(ResourcesEngine.getString("plugins.card.license", license.name()),
+                    wrapped(UpdateUi.localized(license.notice()))));
+        }
+        if (card.loaded().stream().anyMatch(p -> p.path() != null || !p.modules().isEmpty())) {
+            VBox details = new VBox(8);
+            card.loaded().forEach(entry -> details.getChildren().add(technical(entry, card.loaded().size() > 1)));
+            box.getChildren().add(folded(ResourcesEngine.getString("plugins.card.details"), details));
+        }
+        if (!card.isEmbedded()) {
+            box.setStyle(CARD);
+        }
+        return box;
     }
 
     /**
-     * The state in words; an update that fixes a plugin refused for its API says so, and so does a newer version that
-     * needs a newer plugin API, hence a newer Copybot (the installed one goes on working). The versions shown are
-     * plugin API versions, never versions of Copybot.
+     * The state in words. An official plugin says what its row says (an update that fixes a plugin refused for its
+     * API, a newer version that needs a newer plugin API); one that does not load says so; a plugin the catalogue
+     * does not list says how it was loaded.
      */
-    private String stateText(PluginRow row) {
-        String text = row.state() == PluginState.INCOMPATIBLE
-                ? ResourcesEngine.getString("plugins.state.INCOMPATIBLE", row.entry().engine(),
-                        AppInfo.pluginApiVersion())
-                : ResourcesEngine.getString("plugins.state." + row.state().name());
+    private String stateText(PluginCard card) {
+        Status status = card.status();
+        if (status == Status.FAILED) {
+            return ResourcesEngine.getString("plugins.card.failed");
+        }
+        if (!card.official()) {
+            PluginStatus loaded = card.loaded().stream().map(PluginEntry::status)
+                    .filter(s -> s == PluginStatus.LOADED).findFirst().orElse(card.loaded().get(0).status());
+            return ResourcesEngine.getString("plugins.status." + loaded.name());
+        }
+        PluginRow row = card.row();
+        String text = switch (row.state()) {
+            case INCOMPATIBLE -> ResourcesEngine.getString("plugins.state.INCOMPATIBLE", row.entry().engine(),
+                    AppInfo.pluginApiVersion());
+            case UPDATE_AVAILABLE -> ResourcesEngine.getString("plugins.state.update-to", row.entry().version());
+            default -> ResourcesEngine.getString("plugins.state." + row.state().name());
+        };
         if (row.state() == PluginState.UPDATE_AVAILABLE && refusedForItsApi(row)) {
             text += " (" + ResourcesEngine.getString("plugins.state.update-fixes") + ")";
         }
@@ -364,29 +343,139 @@ public class PluginsController {
                         && "plugin.load.api-incompatible".equals(p.errorKey()));
     }
 
-    /** Shown again when an operation starts or ends: the actions are disabled while it runs. */
+    /** The choice made (with Cancel), else the buttons the card offers; disabled while changes cannot be applied. */
+    private HBox buttons(PluginCard card, boolean blocked) {
+        HBox buttons = new HBox(6);
+        buttons.setAlignment(Pos.CENTER_RIGHT);
+        if (!card.official()) {
+            return buttons;
+        }
+        PluginRow row = card.row();
+        Optional<Action> chosen = choices.chosen(row);
+        if (chosen.isPresent()) {
+            Label label = new Label(ResourcesEngine.getString("plugins.chosen." + chosen.get().name()));
+            label.setStyle("-fx-font-weight: bold; -fx-text-fill: #0d47a1;");
+            Button undo = new Button(ResourcesEngine.getString("plugins.action.undo"));
+            undo.setOnAction(e -> {
+                choices.cancel(row);
+                render();
+            });
+            buttons.getChildren().addAll(label, undo);
+            return buttons;
+        }
+        for (PluginCard.Action action : card.offered(repairModules.contains(row.entry().module()))) {
+            Optional<Action> choice = action.choice();
+            Button button = new Button(choice
+                    .map(c -> ResourcesEngine.getString("plugins.action." + c.name()))
+                    .orElseGet(() -> ResourcesEngine.getString("menu.edit.updates")));
+            if (choice.isPresent()) {
+                button.setDisable(blocked);
+                button.setOnAction(e -> {
+                    choices.choose(row, choice.get());
+                    render();
+                });
+            } else {
+                // the Updates window: the update of an installed plugin goes with that of Copybot when it must
+                // over this window when it is modal (opened from an editor): otherwise it would take no input
+                button.setOnAction(e -> {
+                    Window here = button.getScene().getWindow();
+                    Window modalOwner = here instanceof Stage stage && stage.getModality() != Modality.NONE
+                            ? here : null;
+                    CopybotMainUi.mainController().ifPresent(main -> main.openUpdates(modalOwner));
+                });
+            }
+            buttons.getChildren().add(button);
+        }
+        return buttons;
+    }
+
+    /** The actions provided, one per line: name, type (the section of the editor) and the code of a step. */
+    private Node actions(PluginCard card) {
+        VBox lines = new VBox(2);
+        for (ActionLine action : card.actions()) {
+            String type = ResourcesEngine.getString("editor.section." + action.type().name());
+            Label name = new Label(action.named() ? action.name() + " (" + type + ")" : "(" + type + ")");
+            Label code = new Label(action.code());
+            code.setStyle("-fx-font-family: monospace;");
+            HBox line = action.named() ? new HBox(6, name, grey("·"), code) : new HBox(6, code, name);
+            line.setAlignment(Pos.BASELINE_LEFT);
+            lines.getChildren().add(line);
+        }
+        card.pipelinePlugin().ifPresent(plugin -> {
+            Label hint = grey(ResourcesEngine.getString("plugins.card.pipeline-plugin", plugin));
+            hint.setStyle(GREY + " -fx-font-size: 0.9em;");
+            lines.getChildren().add(hint);
+        });
+        return labelled("plugins.actions", lines);
+    }
+
+    /** One plugin directory found: its folder (opened from here), how it was loaded and its modules. */
+    private Node technical(PluginEntry entry, boolean several) {
+        VBox box = new VBox(4);
+        if (several) {
+            Label status = new Label(entry.name() + (entry.version() != null ? " " + entry.version() : "")
+                    + " — " + ResourcesEngine.getString("plugins.status." + entry.status().name()));
+            status.setStyle("-fx-font-weight: bold;");
+            box.getChildren().add(status);
+            if (entry.status() == PluginStatus.IGNORED && entry.message() != null) {
+                box.getChildren().add(wrapped(entry.message())); // why this one is not the one loaded
+            }
+        }
+        if (entry.path() != null) {
+            Label path = wrapped(entry.path().toString());
+            HBox.setHgrow(path, Priority.ALWAYS);
+            Button open = new Button(ResourcesEngine.getString("plugins.open-folder"));
+            open.setOnAction(e -> openFolder(entry.path()));
+            HBox folder = new HBox(8, new Label(ResourcesEngine.getString("plugins.folder")), path, open);
+            folder.setAlignment(Pos.CENTER_LEFT);
+            box.getChildren().add(folder);
+        }
+        if (!entry.modules().isEmpty()) {
+            GridPane modules = new GridPane();
+            modules.setHgap(12);
+            modules.setVgap(2);
+            String[] columns = {"plugins.col.name", "plugins.col.version", "plugins.col.main", "plugins.col.automatic",
+                    "plugins.col.location"};
+            for (int i = 0; i < columns.length; i++) {
+                Label header = new Label(ResourcesEngine.getString(columns[i]));
+                header.setStyle("-fx-font-weight: bold;");
+                modules.add(header, i, 0);
+            }
+            int line = 1;
+            for (ModuleEntry module : entry.modules()) {
+                modules.addRow(line++, new Label(module.name()),
+                        new Label(Optional.ofNullable(module.version()).orElse("")),
+                        new Label(module.main() ? "✔" : ""), new Label(module.automatic() ? "✔" : ""),
+                        wrapped(Optional.ofNullable(module.location()).map(Path::toString).orElse("")));
+            }
+            box.getChildren().add(labelled("plugins.modules", modules));
+        }
+        return box;
+    }
+
+    private static void openFolder(Path path) {
+        try {
+            CopybotMainUi.HOST_SERVICES.showDocument(path.toUri().toString());
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+        }
+    }
+
+    /** Shown again when an operation starts or ends: the buttons are disabled while it runs. */
     void refreshActions() {
-        renderOfficial();
+        render();
     }
 
     /**
-     * The buttons of the section and the reason they are disabled (not the packaged release, not Windows, an
-     * operation running).
+     * What is chosen and the button that applies it, with the reason it is disabled (not the packaged release, not
+     * Windows, an operation running).
      */
     private void refreshFooter() {
         Optional<String> blocked = UpdateUi.plugins().flatMap(PluginService::applyBlocked);
         int pending = choices.toInstallOrUpdate(rows).size() + choices.toRemove(rows).size();
         pendingLabel.setText(ResourcesEngine.getString("plugins.pending", pending));
         applyReason.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
-        updateAllButton.setDisable(blocked.isPresent()
-                || rows.stream().noneMatch(r -> r.state() == PluginState.UPDATE_AVAILABLE));
         applyButton.setDisable(blocked.isPresent() || pending == 0);
-    }
-
-    @FXML
-    protected void onUpdateAllClick() {
-        choices.updateAll(rows);
-        renderOfficial();
     }
 
     @FXML
@@ -397,6 +486,51 @@ public class PluginsController {
 
     @FXML
     protected void onCloseClick() {
-        ((Stage) pluginList.getScene().getWindow()).close();
+        ((Stage) closeButton.getScene().getWindow()).close();
+    }
+
+    // ---- small nodes ----
+
+    private static Label wrapped(String text) {
+        Label label = new Label(text);
+        label.setWrapText(true);
+        label.setMaxWidth(Double.MAX_VALUE);
+        return label;
+    }
+
+    private static Label grey(String text) {
+        Label label = new Label(text);
+        label.setStyle(GREY);
+        return label;
+    }
+
+    /** A bold label before a value, on one line; the value wraps. */
+    private static Node labelled(String key, String value, String style) {
+        Label text = wrapped(value);
+        text.setStyle(style);
+        return labelled(key, text);
+    }
+
+    private static Node labelled(String key, Node value) {
+        Label label = new Label(ResourcesEngine.getString(key));
+        label.setStyle("-fx-font-weight: bold;");
+        label.setMinWidth(Region.USE_PREF_SIZE);
+        HBox.setHgrow(value, Priority.ALWAYS);
+        HBox line = new HBox(10, label, value);
+        line.setAlignment(Pos.TOP_LEFT);
+        return line;
+    }
+
+    /** A section closed until clicked: the licence, the technical details. */
+    private static TitledPane folded(String title, Node content) {
+        TitledPane pane = new TitledPane(title, content);
+        pane.setExpanded(false);
+        pane.setAnimated(false);
+        return pane;
+    }
+
+    private static void show(Node node, boolean shown) {
+        node.setVisible(shown);
+        node.setManaged(shown);
     }
 }

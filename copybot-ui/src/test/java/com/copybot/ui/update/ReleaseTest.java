@@ -33,6 +33,14 @@ public class ReleaseTest {
     }
 
     @Test
+    public void theNotesAreTheBodyOfTheRelease() throws UpdateException {
+        String body = "{\"tag_name\": \"v1.2.0\", \"html_url\": \"https://example.com/n\", \"body\": \"What is new\\nA line\"}";
+        assertEquals("What is new\nA line", Release.parse(body).notes());
+        assertEquals("", Release.parse(JSON).notes());
+        assertEquals("", Release.parse(body.replace("\"What is new\\nA line\"", "null")).notes());
+    }
+
+    @Test
     public void anInvalidDocumentIsUnreadable() {
         for (String json : new String[]{"not json", "[]", "{}", "{\"tag_name\": \"v1\"}"}) {
             UpdateException e = assertThrows(UpdateException.class, () -> Release.parse(json), json);

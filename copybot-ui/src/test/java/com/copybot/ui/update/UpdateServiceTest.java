@@ -204,6 +204,18 @@ public class UpdateServiceTest {
         assertEquals(0, checks.get());
     }
 
+    /** The header of the Updates window: never, then the date of the last check, recorded even when it fails. */
+    @Test
+    public void theLastCheckIsTheDateRecordedByTheChecks() throws Exception {
+        UpdateService service = service();
+        assertTrue(service.lastCheck().isEmpty());
+
+        service.checkNow();
+
+        assertEquals(settings.last, service.lastCheck());
+        assertTrue(service.lastCheck().isPresent());
+    }
+
     @Test
     public void anOlderOrEqualReleaseIsNotOffered() throws Exception {
         latestVersion = "1.0.0";

@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <?import javafx.scene.control.Button?>
-<?import javafx.scene.control.Hyperlink?>
 <?import javafx.scene.control.Label?>
 <?import javafx.scene.control.Menu?>
 <?import javafx.scene.control.MenuBar?>
@@ -20,6 +19,7 @@
                <menus>
                   <Menu mnemonicParsing="false" text="%menu.file">
                      <items>
+                        <MenuItem mnemonicParsing="false" onAction="#onOpenPipelineClick" text="%home.open" />
                         <MenuItem mnemonicParsing="false" onAction="#onExitClick" text="%menu.file.exit" />
                      </items>
                   </Menu>
@@ -28,6 +28,7 @@
                         <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
                         <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
                         <MenuItem mnemonicParsing="false" onAction="#onResourcesClick" text="%menu.tools.resources" />
+                        <MenuItem mnemonicParsing="false" onAction="#onUpdatesClick" text="%menu.edit.updates" />
                      </items>
                   </Menu>
                   <Menu mnemonicParsing="false" text="%menu.help">
@@ -41,9 +42,7 @@
             <HBox fx:id="updateBanner" alignment="CENTER_LEFT" managed="false" spacing="10.0" style="-fx-background-color: #e3f2fd; -fx-padding: 4 8 4 8;" visible="false">
                <children>
                   <Label fx:id="updateLabel" style="-fx-text-fill: #0d47a1;" />
-                  <Button fx:id="updateInstallButton" mnemonicParsing="false" onAction="#onUpdateInstallClick" text="%update.install" />
-                  <Hyperlink fx:id="updateNotesLink" mnemonicParsing="false" onAction="#onUpdateNotesClick" text="%update.notes" />
-                  <Label fx:id="updateReason" style="-fx-text-fill: #616161;" />
+                  <Button fx:id="updateViewButton" mnemonicParsing="false" onAction="#onUpdatesClick" text="%update.view" />
                   <Region HBox.hgrow="ALWAYS" />
                   <Button mnemonicParsing="false" onAction="#onUpdateDismissClick" text="&#x2715;">
                      <tooltip>

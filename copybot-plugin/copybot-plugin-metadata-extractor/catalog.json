@@ -5,5 +5,10 @@
     "en": "Reads the metadata of photos and videos (EXIF, IPTC, XMP, QuickTime) and rewrites the EXIF date of a JPEG.",
     "fr": "Lit les métadonnées des photos et vidéos (EXIF, IPTC, XMP, QuickTime) et réécrit la date EXIF d'un JPEG.",
     "it": "Legge i metadati di foto e video (EXIF, IPTC, XMP, QuickTime) e riscrive la data EXIF di un JPEG."
+  },
+  "changes": {
+    "en": "First version: reads capture dates and GPS positions, and rewrites the EXIF date of a JPEG when its time zone is corrected.",
+    "fr": "Première version : lit les dates de prise de vue et les positions GPS, et réécrit la date EXIF d'un JPEG quand son fuseau horaire est corrigé.",
+    "it": "Prima versione: legge le date di scatto e le posizioni GPS, e riscrive la data EXIF di un JPEG quando il suo fuso orario viene corretto."
   }
 }

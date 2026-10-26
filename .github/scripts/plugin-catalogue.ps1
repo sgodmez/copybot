@@ -116,7 +116,8 @@ function Get-PomWithoutParentVersion([string]$text) {
 # true when the module changed since the tag (git diff --quiet: 0 same, 1 changed, else an error)
 function Test-ModuleChanged([string]$tag, [string]$moduleDir) {
     $rel = "copybot-plugin/$moduleDir"
-    & git -C $root diff --quiet $tag HEAD -- $rel ":(exclude)$rel/pom.xml"
+    # catalog.json is the text of the catalogue, not the plugin: a kept entry keeps its own, the next version takes it
+    & git -C $root diff --quiet $tag HEAD -- $rel ":(exclude)$rel/pom.xml" ":(exclude)$rel/catalog.json"
     if ($LASTEXITCODE -eq 1) { return $true }
     if ($LASTEXITCODE -ne 0) { throw "git diff against $tag failed (is the tag fetched?)" }
     $old = (& git -C $root show "${tag}:$rel/pom.xml" | Out-String)
@@ -175,6 +176,7 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
         asset       = $asset
         description = $source.description
     }
+    if ($source.changes) { $entry.changes = $source.changes }
     if ($source.license) { $entry.license = $source.license }
     $reason = if ($old) { "was $($old.version)" } else { 'new' }
     Write-Host "Published: $code $version on $Tag ($reason)"
