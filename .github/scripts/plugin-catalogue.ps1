@@ -29,7 +29,7 @@
     Offline mode: no git comparison of a kept plugin with the tag of its entry.
 
 .PARAMETER Offline
-    Passes -o to Maven when it reads the plugin versions.
+    Kept for compatibility, no effect: the plugin versions are read from their pom.xml, without Maven.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
@@ -138,12 +138,11 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
     $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $catalogFile.FullName | ConvertFrom-Json
     $code = $source.code
 
-    $mvnArgs = @('-B', '-q')
-    if ($Offline) { $mvnArgs += '-o' }
-    $mvnArgs += @('help:evaluate', '-Dexpression=project.version', '-DforceStdout')
-    Push-Location $moduleRoot
-    try { $version = (& mvn @mvnArgs | Out-String).Trim() } finally { Pop-Location }
-    if ($LASTEXITCODE -ne 0) { throw "Could not read the version of $moduleDir" }
+    # read from the module's own pom, not through Maven: on a fresh runner help:evaluate would need the parent and
+    # the imported BOM in the local repository (the build only packages); an official plugin declares its version
+    $pom = [xml](Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $moduleRoot 'pom.xml'))
+    $version = "$($pom.project.version)".Trim()
+    if (-not $version) { throw "$moduleDir has no <version> of its own in its pom.xml" }
     if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "The version of $moduleDir ($version) is not X.Y.Z" }
 
     $old = $previous | Where-Object { $_.code -eq $code } | Select-Object -First 1
