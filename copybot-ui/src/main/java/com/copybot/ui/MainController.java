@@ -285,13 +285,17 @@ public class MainController {
         }
     }
 
-    /** Help > About: the versions of Copybot, Java and JavaFX, the licence, the data attribution and the source code. */
+    /**
+     * Help > About: the versions of Copybot, Java, JavaFX and the plugin API, the licence, the data attribution and
+     * the source code.
+     */
     @FXML
     protected void onAboutClick() {
         Label name = new Label(AppInfo.NAME + " " + AppInfo.version());
         name.setStyle("-fx-font-size: 16px; -fx-font-weight: bold;");
         Label versions = new Label(ResourcesEngine.getString("about.java", AppInfo.javaVersion()) + "\n"
-                + ResourcesEngine.getString("about.javafx", AppInfo.javafxVersion()));
+                + ResourcesEngine.getString("about.javafx", AppInfo.javafxVersion()) + "\n"
+                + ResourcesEngine.getString("about.plugin-api", AppInfo.pluginApiVersion()));
         Label license = new Label(ResourcesEngine.getString("about.license"));
         license.setWrapText(true);
         // ODbL attribution of the time zone data of the gps-zone plugin (see NOTICE)

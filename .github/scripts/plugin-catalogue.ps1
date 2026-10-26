@@ -10,13 +10,14 @@
     and its zip (built by `mvn package`) is copied into the output folder.
 
     Fails when a plugin keeps its version although its module changed since the tag of its entry (version not
-    raised), and when a kept entry targets an engine that is not compatible with this one any more.
+    raised), and when a kept entry was built for a plugin API that this one is not compatible with any more.
 
 .PARAMETER Tag
     Tag of the release being made, e.g. v1.2.0.
 
-.PARAMETER EngineVersion
-    Version of the engine (the application), X.Y.Z.
+.PARAMETER ApiVersion
+    Version of the plugin API, X.Y: the property copybot.plugin.api.version of the root pom, which is the module
+    version of com.copybot.engine (not the application version). It is the `engine` of the new entries.
 
 .PARAMETER OutDir
     Folder that receives catalogue.json and the new plugin zips.
@@ -32,7 +33,7 @@
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Tag,
-    [Parameter(Mandatory = $true)][string]$EngineVersion,
+    [Parameter(Mandatory = $true)][string]$ApiVersion,
     [Parameter(Mandatory = $true)][string]$OutDir,
     [string]$PreviousCatalogue,
     [switch]$SkipGit,
@@ -41,10 +42,10 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-if ($EngineVersion -notmatch '^(\d+)\.(\d+)\.\d+$') { throw "The engine version ($EngineVersion) is not X.Y.Z" }
-$engineMajor = [int]$Matches[1]
-$engineMinor = [int]$Matches[2]
-$engineLine = "$engineMajor.$engineMinor"
+if ($ApiVersion -notmatch '^(\d+)\.(\d+)$') { throw "The plugin API version ($ApiVersion) is not X.Y" }
+$apiMajor = [int]$Matches[1]
+$apiMinor = [int]$Matches[2]
+$apiLine = "$apiMajor.$apiMinor"
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -152,8 +153,8 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
             throw "Plugin $code is still at version $version but copybot-plugin/$moduleDir changed since $($old.tag): raise its version in its pom.xml"
         }
         if ($old.engine -notmatch '^(\d+)\.(\d+)$') { throw "The kept entry of $code has a bad engine ($($old.engine))" }
-        if ([int]$Matches[1] -ne $engineMajor -or [int]$Matches[2] -gt $engineMinor) {
-            throw "Plugin $code $version was built for engine $($old.engine), not compatible with engine ${EngineVersion}: give it a new version"
+        if ([int]$Matches[1] -ne $apiMajor -or [int]$Matches[2] -gt $apiMinor) {
+            throw "Plugin $code $version was built for the plugin API $($old.engine), not compatible with the plugin API ${ApiVersion}: give it a new version"
         }
         Write-Host "Kept: $code $version ($($old.tag))"
         $entries += $old
@@ -170,7 +171,7 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
         module      = $source.module
         code        = $code
         version     = $version
-        engine      = $engineLine
+        engine      = $apiLine
         tag         = $Tag
         asset       = $asset
         description = $source.description

@@ -55,7 +55,9 @@ Faits du moteur qui cadrent la conception :
                    "asset": "copybot-plugin-metadata-extractor-1.0.0.zip",
                    "description": { "en": "...", "fr": "...", "it": "..." } } ] }
   ```
-  `engine` = majeur.mineur du moteur pour lequel l'archive a été compilée. La CI lit le `catalogue.json` de la
+  `engine` = majeur.mineur de la **version d'API des plugins** pour laquelle l'archive a été compilée (propriété
+  `copybot.plugin.api.version`, version du module `com.copybot.engine`, distincte de la version de l'appli : voir
+  `2026-10-26-plugin-api-version-design.md`). La CI lit le `catalogue.json` de la
   dernière release **publiée** (s'il existe) : un plugin dont la version n'a pas changé garde son entrée (son `tag`,
   son `engine`) et son archive n'est pas republiée ; un plugin dont la version a changé (ou absent) est empaqueté,
   attaché à la release en cours et son entrée pointe sur elle. Une release ne republie donc que les plugins qui ont
@@ -65,7 +67,7 @@ Faits du moteur qui cadrent la conception :
   ligne du plugin et dans la confirmation avant installation, sans acceptation obligatoire (*choix*).
 - *Choix :* garde-fou de CI : la release échoue si un plugin garde sa version alors que des fichiers de son module ont
   changé depuis le tag de son entrée (version oubliée), et si l'`engine` d'une entrée gardée n'est plus compatible
-  avec la nouvelle version du moteur (changement de majeur : il faut une nouvelle version du plugin).
+  avec la version d'API en cours (changement de majeur de l'API : il faut une nouvelle version du plugin).
 - *Choix :* entre deux releases, les poms des plugins gardent leur dernière version publiée `X.Y.Z` (pas de
   `-SNAPSHOT`) ; seule la référence au pom parent suit la version de l'appli. Le README décrit les étapes (la version
   de l'appli se change sans écraser celles des plugins).
@@ -80,8 +82,9 @@ Faits du moteur qui cadrent la conception :
   refusé, taille et SHA-256 vérifiées, comme l'appli).
 - État d'un plugin du catalogue, comparé aux plugins chargés (`CopybotEngine.pluginReport()`, par nom de module) :
   **non installé**, **installé (à jour)**, **mise à jour disponible** (version du catalogue plus récente), **installé
-  mais incompatible** (refusé au chargement), **incompatible** (l'`engine` du catalogue n'est pas compatible avec le
-  moteur en cours, règle `VersionUtil.isCompatible(moteur, engine, false)` : grisé avec la raison). Les plugins
+  mais incompatible** (refusé au chargement), **incompatible** (l'`engine` du catalogue n'est pas compatible avec la
+  version d'API en cours, jamais la version de l'appli, règle `VersionUtil.isCompatible(api, engine, false)` : grisé
+  avec la raison). Les plugins
   installés absents du catalogue (dev, anciens) restent affichés par le diagnostic actuel.
 - Indisponible (comme la mise à jour de l'appli) hors de l'appli packagée, en `-SNAPSHOT`, hors Windows pour
   l'application : la liste du catalogue peut s'afficher, les actions sont grisées avec la raison. Hors ligne : message,

@@ -66,26 +66,29 @@ public final class PluginService {
     private final UpdateService updates;
     private final Catalogs catalogs;
     private final Supplier<PluginReport> report;
-    private final String engineVersion;
+    private final String apiVersion;
     /** The last catalogue read, null before. */
     private volatile PluginCatalog cached;
 
     /**
      * @param report        the plugins loaded (the report of the engine: it checks folders, call it off the JavaFX thread)
-     * @param engineVersion the version of the engine, for the compatibility of the catalogue entries
+     * @param apiVersion    the plugin API version, for the compatibility of the catalogue entries (null when unknown)
      */
-    public PluginService(UpdateService updates, Catalogs catalogs, Supplier<PluginReport> report, String engineVersion) {
+    public PluginService(UpdateService updates, Catalogs catalogs, Supplier<PluginReport> report, String apiVersion) {
         this.updates = updates;
         this.catalogs = catalogs;
         this.report = report;
-        this.engineVersion = engineVersion;
+        this.apiVersion = apiVersion;
     }
 
-    /** The service of this application: the catalogue of GitHub, the version of the engine. */
+    /**
+     * The service of this application: the catalogue of GitHub, the plugin API version (the version of the engine
+     * module, never the application version: unknown when the engine runs from the class path).
+     */
     public static PluginService forThisApp(UpdateService updates, Supplier<PluginReport> report) {
         String version = updates.currentVersion();
         return new PluginService(updates, new CatalogService(UpdateCheck.httpClient(), CatalogService.LATEST,
-                CatalogService.TAGS, version), report, VersionUtil.engineVersion().orElse(version));
+                CatalogService.TAGS, version), report, VersionUtil.engineVersion().orElse(null));
     }
 
     // ---- the catalogue ----
@@ -119,7 +122,7 @@ public final class PluginService {
     }
 
     public List<PluginRow> rows(PluginCatalog catalog, PluginReport loaded) {
-        return PluginRow.of(catalog, loaded, engineVersion);
+        return PluginRow.of(catalog, loaded, apiVersion);
     }
 
     /** The rows of these modules (plugins a pipeline names that are not loaded), in catalogue order. */

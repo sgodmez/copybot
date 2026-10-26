@@ -216,13 +216,62 @@ reports the progress of the file it works on with `updateStatus` /
 once per phase (preparation, execution) and `beforeEach` / `afterEach`
 around each file (see the `IAction` javadoc).
 
-The plugin API is the engine module, `com.copybot.engine`: its version is the
-API version. A plugin declares the one it was built for without doing
-anything, since `javac` records the version of the engine it compiles against
-in the plugin's `requires com.copybot.engine`. A plugin built for another
-major version, or for a newer minor version than the running Copybot, is not
-loaded: the plugins window says which API it needs. Rebuild it against this
-version of the engine.
+The plugin API is what the engine module, `com.copybot.engine`, exports to
+every module (`com.copybot.plugin.api.*`, `com.copybot.utils`,
+`com.copybot.resources`, `com.copybot.exception`). It has a version of its
+own, `X.Y`, distinct from the version of Copybot: the property
+`copybot.plugin.api.version` of the root `pom.xml`, which the build makes the
+module version of `com.copybot.engine` (`jar --describe-module` shows
+`com.copybot.engine@1.0`). A plugin declares the API it was built for without
+doing anything, since `javac` records the version of the engine module it
+compiles against in the plugin's `requires com.copybot.engine`. A plugin runs
+on every Copybot whose API has the same major version and a minor version at
+least the one it was built for; one built for another major version, or for a
+newer minor version, is not loaded: the plugins window says which API it
+needs. Rebuild it against this version of the engine. The About window shows
+the plugin API version. The built-in actions (`file.read`, `file.write`) are
+reported with the API version too: a `version` pinned on an embedded step of
+a pipeline is an API version.
+
+**When to raise the API version:** the minor (`1.0` → `1.1`) when the API
+gains something that existing plugins need not know (a type, a field, a
+constructor, a concrete or `default` method…: they still run), the major
+(`1.4` → `2.0`) when something is removed or changed, or when a type that
+plugins implement or extend gains an **abstract** member (an interface method
+without `default`, an abstract method, an annotation element without default
+value): an old plugin implementing it lacks the member. Turning a `default`
+method abstract is breaking too; turning an abstract method `default` is not.
+
+You cannot forget: the `PluginApiFingerprintTest` of `copybot-engine`
+compares the API with its committed fingerprint,
+`copybot-engine/src/test/resources/plugin-api.txt` (`api X.Y`, then one sorted
+line per public or protected type, field, constructor and method, with its
+signature), and fails the build with what changed and the version to set
+(the release workflow runs it before publishing). Raise the property, then
+regenerate the fingerprint, commit it, and rebuild everything so that the
+plugins record the new version in their `requires`:
+
+```sh
+mvn clean verify -pl copybot-engine -Dplugin.api.update=true
+mvn clean verify
+```
+
+(`clean`: the compiler does not notice a new module version by itself.) The
+update prints the lines removed (`-`) and added (`+`). It refuses to record a
+change whose version is not raised enough, and never recreates a deleted
+file; a version raised without any change is allowed, and only needs the file
+regenerated. `-Dplugin.api.update=force` rewrites the file whatever the
+comparison says (and creates it when missing): use it only after reading the
+diff it prints, when the change is not one plugins can see, such as a JDK
+that prints signatures differently, interfaces listed in another order, or an
+abstract method made `default`.
+
+The fingerprint only sees signatures. Raise the version **by hand** (minor or
+major as above) for what it does not see: the value of a `static final`
+constant (javac copies it into the plugins), the `@Retention` or `@Target` of
+an annotation (its elements and their default values are in the fingerprint), a `sealed` type's `permits`, a change of
+behaviour behind an unchanged signature, and an upgrade of Gson (the engine
+`requires transitive com.google.gson`, and `JsonElement` is in signatures).
 
 The [`copybot-plugin-demo`](copybot-plugin-demo) modules are worked examples:
 a standard module plugin, the same plugin built on an older library, a
@@ -295,8 +344,11 @@ starts empty): a plugin whose version did not change keeps its entry and its
 archive is not published again, a new version gets its zip on the current
 release. The release **fails** when a plugin kept its version although its
 module changed since the release of its entry (version not raised), or when a
-kept plugin was built for an engine that is not compatible any more (new major
-version of the application: give the plugin a new version). The description
+kept plugin was built for a plugin API that is not compatible any more (new
+major version of the API: give the plugin a new version). The `engine` of an
+entry is the plugin API version (`X.Y`) its archive was built for, which the
+plugins window compares with the API of the running Copybot (never with the
+version of the application). The description
 of a plugin, and its licence notice (`gps-zone`: ODbL), come from the
 `catalog.json` of its module.
 

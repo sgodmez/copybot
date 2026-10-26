@@ -12,6 +12,7 @@ import com.copybot.ui.plugins.PluginChoices.Action;
 import com.copybot.ui.plugins.PluginRow;
 import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.plugins.PluginState;
+import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
 import javafx.beans.property.ReadOnlyStringWrapper;
@@ -339,11 +340,13 @@ public class PluginsController {
 
     /**
      * The state in words; an update that fixes a plugin refused for its API says so, and so does a newer version that
-     * needs a newer Copybot (the installed one goes on working).
+     * needs a newer plugin API, hence a newer Copybot (the installed one goes on working). The versions shown are
+     * plugin API versions, never versions of Copybot.
      */
     private String stateText(PluginRow row) {
         String text = row.state() == PluginState.INCOMPATIBLE
-                ? ResourcesEngine.getString("plugins.state.INCOMPATIBLE", row.entry().engine())
+                ? ResourcesEngine.getString("plugins.state.INCOMPATIBLE", row.entry().engine(),
+                        AppInfo.pluginApiVersion())
                 : ResourcesEngine.getString("plugins.state." + row.state().name());
         if (row.state() == PluginState.UPDATE_AVAILABLE && refusedForItsApi(row)) {
             text += " (" + ResourcesEngine.getString("plugins.state.update-fixes") + ")";

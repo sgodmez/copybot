@@ -112,11 +112,12 @@ public final class LayerLoader {
      * The plugin API version a module of the plugin was built against, when this engine cannot run it. A plugin
      * declares it without doing anything: javac records the version of the engine module it compiled against in
      * its {@code requires com.copybot.engine} (the engine module holds the plugin API, its version is the API
-     * version). Compatible: the same major version, a minor version at most the engine's
+     * version, distinct from the application version). Compatible: the same major version, a minor version at most
+     * the engine's
      * ({@link VersionUtil#isCompatible}).
      *
      * @param engineModule  the name of the engine module, null when the engine runs from the class path
-     * @param engineVersion the version of the engine, null when it has none
+     * @param engineVersion the version of the engine module (the plugin API version), null when it has none
      * @return empty when compatible, or when a version is unknown (nothing recorded, engine without version)
      */
     static Optional<String> incompatibleApi(Collection<ModuleDescriptor> modules, String engineModule, String engineVersion) {

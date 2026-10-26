@@ -62,7 +62,7 @@ public class PluginCatalogTest {
         assertEquals("embedded", read.pluginName());
         assertEquals("embedded", read.pluginCode());
         assertEquals(com.copybot.utils.VersionUtil.engineVersion().orElse(null), read.pluginVersion(),
-                "the embedded plugin has the version of the engine");
+                "the embedded plugin has the version of the engine module (the plugin API version)");
     }
 
     @Test

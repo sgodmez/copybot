@@ -405,7 +405,7 @@ public class PluginLoaderTest {
     public void aPluginBuiltForTheSameMajorAndAnOlderOrEqualMinorIsCompatible() {
         assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.2")), "com.copybot.engine", "1.3"));
         assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.3")), "com.copybot.engine", "1.3.2"));
-        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.0-SNAPSHOT")), "com.copybot.engine", "1.0-SNAPSHOT"));
+        assertEquals(Optional.empty(), LayerLoader.incompatibleApi(List.of(builtFor("1.0")), "com.copybot.engine", "1.0"));
     }
 
     @Test
@@ -432,7 +432,8 @@ public class PluginLoaderTest {
         List<PluginDefinition> definitions = load(good);
 
         assertNull(loaded(definitions, "test.api").getErrorMessage());
-        assertTrue(VersionUtil.engineVersion().isPresent(), "the build records the engine version in its module");
+        assertTrue(VersionUtil.engineVersion().isPresent(), "the build records the plugin API version in the engine module");
+        assertTrue(VersionUtil.engineVersion().get().matches("\\d+\\.\\d+"), "X.Y, not the application version");
         assertEquals(VersionUtil.engineVersion().get(), loaded(definitions, CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME).getVersion());
     }
 

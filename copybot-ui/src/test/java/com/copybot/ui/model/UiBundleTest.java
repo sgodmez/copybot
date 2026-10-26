@@ -73,7 +73,7 @@ public class UiBundleTest {
             "plan.menu.detail", "plan.menu.details", "plan.menu.analyse", "plan.detail.title", "plan.detail.position", "plan.detail.status", "plan.detail.filtered",
             "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false",
             "error.title", "error.unexpected", "exit.title", "exit.running", "exit.stop", "exit.stopping",
-            "about.title", "about.java", "about.javafx", "about.license",
+            "about.title", "about.java", "about.javafx", "about.plugin-api", "about.license",
             "pipeline.document.not-object", "pipeline.document.not-steps",
             "update.title", "update.available", "update.install", "update.notes", "update.dismiss", "update.busy",
             "update.windows-only", "update.unavailable-dev", "update.section", "update.current", "update.auto",
@@ -125,6 +125,21 @@ public class UiBundleTest {
                 assertDoesNotThrow(() -> new MessageFormat(value), key + " in " + file);
                 assertFalse(value.contains("\uFFFD"), key + " in " + file + " was re-encoded");
             }
+        }
+    }
+
+    /** The incompatibility texts name plugin API versions ({0} of the plugin, {1} of this Copybot), not Copybot ones. */
+    @Test
+    public void theIncompatibilityTextsShowBothApiVersions() throws IOException {
+        for (String file : BUNDLES) {
+            Properties properties = bundle(file);
+            for (String key : List.of("plugins.state.INCOMPATIBLE", "plugins.state.needs-newer-engine")) {
+                String text = new MessageFormat(properties.getProperty(key)).format(new Object[]{"2.0", "1.3"});
+                assertTrue(text.contains("API") && text.contains("2.0"), key + " in " + file + ": " + text);
+            }
+            String incompatible = new MessageFormat(properties.getProperty("plugins.state.INCOMPATIBLE"))
+                    .format(new Object[]{"2.0", "1.3"});
+            assertTrue(incompatible.contains("1.3"), file + ": " + incompatible);
         }
     }
 

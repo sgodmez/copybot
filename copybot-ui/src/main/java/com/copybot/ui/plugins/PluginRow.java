@@ -25,11 +25,16 @@ public record PluginRow(PluginCatalog.Entry entry, String installedVersion, List
         installedFolders = List.copyOf(installedFolders);
     }
 
-    /** One row per catalogue entry, in catalogue order, matched with the loaded plugins by module name. */
-    public static List<PluginRow> of(PluginCatalog catalog, PluginReport report, String engineVersion) {
+    /**
+     * One row per catalogue entry, in catalogue order, matched with the loaded plugins by module name.
+     *
+     * @param apiVersion the plugin API version of this Copybot (never the application version), compared with the
+     *                   API version each entry was built for; null when unknown
+     */
+    public static List<PluginRow> of(PluginCatalog catalog, PluginReport report, String apiVersion) {
         List<PluginRow> rows = new ArrayList<>();
         for (PluginCatalog.Entry entry : catalog.entries()) {
-            rows.add(row(entry, report, engineVersion));
+            rows.add(row(entry, report, apiVersion));
         }
         return rows;
     }
@@ -39,12 +44,13 @@ public record PluginRow(PluginCatalog.Entry entry, String installedVersion, List
         return rows.stream().filter(r -> r.state() == PluginState.UPDATE_AVAILABLE).count();
     }
 
-    private static PluginRow row(PluginCatalog.Entry entry, PluginReport report, String engineVersion) {
+    private static PluginRow row(PluginCatalog.Entry entry, PluginReport report, String apiVersion) {
         List<PluginEntry> found = report.plugins().stream()
                 .filter(p -> p.name().equals(entry.module()) && p.source() != PluginSource.EMBEDDED).toList();
         List<Path> folders = found.stream().filter(p -> p.source() == PluginSource.PLUGIN_PATH && p.path() != null)
                 .map(PluginEntry::path).distinct().toList();
-        boolean compatible = VersionUtil.isCompatible(engineVersion, entry.engine(), false);
+        // an unknown API version (engine from the class path) refuses nothing, as the loader does
+        boolean compatible = apiVersion == null || VersionUtil.isCompatible(apiVersion, entry.engine(), false);
         if (found.isEmpty()) {
             return new PluginRow(entry, null, folders, compatible ? PluginState.NOT_INSTALLED : PluginState.INCOMPATIBLE);
         }

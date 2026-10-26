@@ -1,10 +1,15 @@
 package com.copybot.ui.util;
 
+import com.copybot.utils.VersionUtil;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Properties;
 
-/** What the About dialog tells: the version of Copybot (written by the build), of Java and of JavaFX. */
+/**
+ * What the About dialog tells: the version of Copybot (written by the build), of Java, of JavaFX and of the plugin
+ * API.
+ */
 public final class AppInfo {
 
     public static final String NAME = "Copybot";
@@ -23,6 +28,14 @@ public final class AppInfo {
         } catch (IOException e) {
             return UNKNOWN;
         }
+    }
+
+    /**
+     * The version of the plugin API (X.Y, the version of the engine module), distinct from the version of
+     * Copybot: a plugin built for API X.Y runs on any Copybot whose API has the same major and a minor at least Y.
+     */
+    public static String pluginApiVersion() {
+        return VersionUtil.engineVersion().orElse(UNKNOWN);
     }
 
     static String version(InputStream in) throws IOException {

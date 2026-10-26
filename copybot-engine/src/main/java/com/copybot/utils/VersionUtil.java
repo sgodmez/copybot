@@ -16,7 +16,8 @@ public final class VersionUtil {
     }
 
     /**
-     * The version of the engine module, which is the version of the plugin API: recorded by the build in its
+     * The version of the engine module, which is the version of the plugin API (X.Y, the property
+     * copybot.plugin.api.version of the build, not the version of the application): recorded by the build in its
      * module descriptor. Empty when the engine runs from the class path or was built without version.
      */
     public static Optional<String> engineVersion() {

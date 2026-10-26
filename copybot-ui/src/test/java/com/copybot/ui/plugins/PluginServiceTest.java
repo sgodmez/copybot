@@ -49,7 +49,7 @@ public class PluginServiceTest {
     private static final String C = "com.copybot.plugin.c";
     private static final String D = "com.copybot.plugin.d";
 
-    /** A: 1.1.0 (1.0.0 installed: an update), B: installed at its version, C: not installed, D: another engine. */
+    /** A: 1.1.0 (1.0.0 installed: an update), B: installed at its version, C: not installed, D: another plugin API. */
     private static final String CATALOGUE = """
             { "format": 1, "plugins": [
               { "module": "com.copybot.plugin.a", "code": "a", "version": "1.1.0", "engine": "1.0", "tag": "v1",
@@ -127,7 +127,7 @@ public class PluginServiceTest {
         UpdateService updates = new UpdateService(UpdateCheck.httpClient(),
                 URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/latest"), "1.0.0", host,
                 dir.resolve("logs"), tmp(), Clock.fixed(NOW, ZoneOffset.UTC), settings, () -> busy, launched::add);
-        return new PluginService(updates, catalogs, () -> report, "1.0.0");
+        return new PluginService(updates, catalogs, () -> report, "1.0");
     }
 
     private List<PluginRow> rows(PluginService service) throws Exception {
@@ -321,9 +321,9 @@ public class PluginServiceTest {
                 true, List::of, folder -> asked.add(folder));
         UpdateService updates = new UpdateService(UpdateCheck.httpClient(), URI.create("http://127.0.0.1:1/"),
                 "1.0.0", host, dir, tmp(), Clock.systemUTC(), settings, () -> false, launched::add);
-        new PluginService(updates, catalogs, () -> report, "1.0.0").adminApprovalNeeded();
+        new PluginService(updates, catalogs, () -> report, "1.0").adminApprovalNeeded();
         Files.delete(pluginsDir);
-        new PluginService(updates, catalogs, () -> report, "1.0.0").adminApprovalNeeded();
+        new PluginService(updates, catalogs, () -> report, "1.0").adminApprovalNeeded();
         assertEquals(List.of(pluginsDir, appDir), asked);
     }
 
@@ -332,7 +332,7 @@ public class PluginServiceTest {
         PluginService.Check check = service().automaticCheck();
 
         assertEquals("1.2.0", check.release().orElseThrow().version());
-        assertEquals(1, check.pluginUpdates()); // A only: D is for another engine, B is up to date
+        assertEquals(1, check.pluginUpdates()); // A only: D is for another plugin API, B is up to date
         assertEquals(Optional.of(NOW), settings.last);
     }
 

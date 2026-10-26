@@ -16,7 +16,8 @@ import java.util.Optional;
  * @param pluginName    what the "plugin" of a pipeline step names ("embedded" for the embedded actions,
  *                      which a step may leave out)
  * @param pluginCode    the plugin code of the i18n keys ("plugin.&lt;code&gt;.&lt;action&gt;.name")
- * @param pluginVersion the version of the engine for the embedded plugin (null when the engine has none)
+ * @param pluginVersion the version of the engine module (the plugin API version) for the embedded plugin (null
+ *                      when the engine has none)
  * @param name          the localized name, the action code when the plugin has none
  * @param description   the localized description, empty when the plugin has none
  * @param schema        the configuration schema, keys prefixed with "plugin.&lt;code&gt;.&lt;action&gt;";

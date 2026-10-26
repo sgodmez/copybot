@@ -83,7 +83,10 @@ public final class PluginDefinition {
         return ll.getMainModuleDescriptor().name() + (version != null ? " " + version : "");
     }
 
-    /** The plugin built into the engine: the version of the engine (null when the engine module has none). */
+    /**
+     * The plugin built into the engine: the version of the engine module, which is the plugin API version (null
+     * when the engine module has none).
+     */
     public static PluginDefinition ofEmbedded(IPlugin pluginInstance) {
         return new PluginDefinition(CBEmbeddedPlugin.EMBEDDED_PLUGN_NAME, VersionUtil.engineVersion().orElse(null), null,
                 true, null, pluginInstance, PluginSource.EMBEDDED);

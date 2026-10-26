@@ -27,6 +27,14 @@ public class AppInfoTest {
         assertEquals("2.1.0", AppInfo.version(stream("version=2.1.0\n")));
     }
 
+    /** The version of the engine module, X.Y: the plugin API, not the version of Copybot. */
+    @Test
+    public void thePluginApiVersionIsTheOneOfTheEngineModule() {
+        String api = AppInfo.pluginApiVersion();
+        assertEquals(com.copybot.utils.VersionUtil.engineVersion().orElse(AppInfo.UNKNOWN), api);
+        assertTrue(api.matches("\\d+\\.\\d+"), api);
+    }
+
     @Test
     public void theJavaVersionIsShown() {
         assertTrue(AppInfo.javaVersion().startsWith(String.valueOf(Runtime.version().feature())), AppInfo.javaVersion());
