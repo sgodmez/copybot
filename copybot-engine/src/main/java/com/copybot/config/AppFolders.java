@@ -81,7 +81,7 @@ public record AppFolders(Path appDir, Path dataDir, Path configFile, boolean con
     }
 
     /** True when a file can be created in the folder; the probe file is removed straight away. */
-    static boolean isWritable(Path dir) {
+    public static boolean isWritable(Path dir) {
         Path probe = null;
         try {
             probe = Files.createTempFile(dir, ".copybot-write-test", null);

@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Consumer;
@@ -28,6 +29,8 @@ public final class UiPreferences {
     private static final String LANGUAGE_KEY = "language";
     private static final String RESOURCES_LAYOUT_KEY = "resourcesLayout";
     static final String RECENTS_KEY = "recentPipelines";
+    private static final String UPDATE_CHECK_KEY = "updateCheck";
+    private static final String UPDATE_LAST_CHECK_KEY = "updateLastCheck";
 
     /** The prefs.json in use; null until {@link #use(Path)}. */
     private static volatile Path file;
@@ -122,6 +125,50 @@ public final class UiPreferences {
         String json = recents.toJson();
         write(prefsFile, RECENTS_KEY, JsonParser.parseString(json));
         return RecentPipelines.fromJson(json);
+    }
+
+    /** Whether Copybot looks for a new version at startup (the default). */
+    public static boolean updateCheck() {
+        return updateCheck(file);
+    }
+
+    public static void saveUpdateCheck(boolean enabled) {
+        saveUpdateCheck(file, enabled);
+    }
+
+    /** When the last check for a new version ended, successful or not; empty when never. */
+    public static Optional<Instant> updateLastCheck() {
+        return updateLastCheck(file);
+    }
+
+    public static void saveUpdateLastCheck(Instant when) {
+        saveUpdateLastCheck(file, when);
+    }
+
+    static boolean updateCheck(Path prefsFile) {
+        JsonElement value = read(prefsFile).get(UPDATE_CHECK_KEY);
+        return value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()
+                || value.getAsBoolean();
+    }
+
+    static void saveUpdateCheck(Path prefsFile, boolean enabled) {
+        write(prefsFile, UPDATE_CHECK_KEY, new JsonPrimitive(enabled));
+    }
+
+    static Optional<Instant> updateLastCheck(Path prefsFile) {
+        JsonElement value = read(prefsFile).get(UPDATE_LAST_CHECK_KEY);
+        if (value == null || !value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+            return Optional.empty();
+        }
+        try {
+            return Optional.of(Instant.ofEpochSecond(value.getAsLong()));
+        } catch (RuntimeException e) {
+            return Optional.empty(); // a number out of range or not whole
+        }
+    }
+
+    static void saveUpdateLastCheck(Path prefsFile, Instant when) {
+        write(prefsFile, UPDATE_LAST_CHECK_KEY, new JsonPrimitive(when.getEpochSecond()));
     }
 
     private static Optional<String> string(JsonObject preferences, String key) {

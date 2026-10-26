@@ -90,6 +90,28 @@ public class UiPreferencesTest {
     }
 
     @Test
+    public void theUpdateCheckIsOnUnlessTurnedOff() {
+        Path file = tempDir.resolve("prefs.json");
+        assertTrue(UiPreferences.updateCheck(file));
+
+        UiPreferences.saveUpdateCheck(file, false);
+
+        assertFalse(UiPreferences.updateCheck(file));
+        UiPreferences.saveUpdateCheck(file, true);
+        assertTrue(UiPreferences.updateCheck(file));
+    }
+
+    @Test
+    public void theLastUpdateCheckIsKeptToTheSecond() {
+        Path file = tempDir.resolve("prefs.json");
+        assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file));
+
+        UiPreferences.saveUpdateLastCheck(file, T0.plusMillis(900));
+
+        assertEquals(Optional.of(T0), UiPreferences.updateLastCheck(file));
+    }
+
+    @Test
     public void theRecentsKeepTheMaximumWithoutASizeLimit() {
         Path file = tempDir.resolve("prefs.json");
         String longName = "x".repeat(1000);

@@ -262,6 +262,18 @@ folder is writable, else in `%APPDATA%\Copybot` (`~/.copybot` without
 `APPDATA`). `--config-file=<file>` puts the data in the folder of that file.
 Unzip the application outside `Program Files` to get a self-contained folder.
 
+**Installing a release:** a release offers `copybot-<version>-setup.exe`, an
+installer that asks whether to install for you alone (no administrator rights,
+the default) or for all users, and `copybot-<version>-windows-x64.zip`, the
+portable version (unzip it anywhere and run `Copybot\Copybot.exe`). A new
+installer installs over the previous version and keeps your data and plugins.
+
+**Making a release:** set the version in every `pom.xml` to `X.Y.Z` (drop
+`-SNAPSHOT`), commit, tag `vX.Y.Z` and push the tag. The `release` workflow
+checks that the tag matches the pom version, builds the application, the
+installer and the zip, and attaches them to a **draft** release. Publish the
+draft once you have read it, then set the poms to the next `-SNAPSHOT`.
+
 To run a pipeline from the command line with the jlink image:
 
 ```sh
@@ -361,7 +373,7 @@ The design specifications and implementation plans are in
 
 ## Status
 
-Copybot is under active development and has no release yet. The pipeline
+Copybot is under active development. The pipeline
 format and the plugin API may still change. These are not built yet:
 detecting a card when it is inserted, sidecar files, transcoding, and step
 priorities.

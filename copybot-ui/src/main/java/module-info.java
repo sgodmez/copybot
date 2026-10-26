@@ -4,6 +4,7 @@ module com.copybot.ui {
     requires javafx.media; // the preview of videos and sounds
     requires java.logging; // the log file (System.Logger writes through java.util.logging)
     requires jdk.management; // the CPU load shown while a plan runs
+    requires java.net.http; // the check and the download of updates
     requires com.google.gson;
 
     requires org.controlsfx.controls;

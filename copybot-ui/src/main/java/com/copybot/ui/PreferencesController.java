@@ -1,15 +1,22 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.update.UpdateService;
+import com.copybot.ui.util.AppInfo;
+import com.copybot.ui.util.Background;
 import com.copybot.ui.util.UiPreferences;
 import javafx.fxml.FXML;
+import javafx.scene.control.Button;
+import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
+import javafx.scene.control.Label;
 import javafx.stage.Stage;
 import javafx.util.StringConverter;
 
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 
 public class PreferencesController {
 
@@ -17,6 +24,14 @@ public class PreferencesController {
     private ComboBox<Locale> languageCombo;
     @FXML
     private ComboBox<UiPreferences.ResourcesLayout> resourcesLayoutCombo;
+    @FXML
+    private Label updateVersionLabel;
+    @FXML
+    private CheckBox updateAutoCheck;
+    @FXML
+    private Button updateCheckButton;
+    @FXML
+    private Label updateResultLabel;
 
     @FXML
     public void initialize() {
@@ -56,10 +71,47 @@ public class PreferencesController {
             }
         });
         resourcesLayoutCombo.getSelectionModel().select(UiPreferences.resourcesLayout());
+        initUpdates();
+    }
+
+    /** The Updates section (spec app-update §3): the check is possible only for a released, packaged Copybot. */
+    private void initUpdates() {
+        updateVersionLabel.setText(ResourcesEngine.getString("update.current", AppInfo.version()));
+        updateAutoCheck.setSelected(UiPreferences.updateCheck());
+        Optional<String> unavailable = UpdateUi.service().map(UpdateService::unavailableReason)
+                .orElse(Optional.of("update.unavailable-dev"));
+        updateAutoCheck.setDisable(unavailable.isPresent());
+        updateCheckButton.setDisable(unavailable.isPresent());
+        updateResultLabel.setText(unavailable.map(key -> ResourcesEngine.getString(key))
+                .or(UpdateUi::lastResult).orElse(""));
+    }
+
+    /** Always tells the outcome: up to date, the newer release (then offered in the banner too), or the error. */
+    @FXML
+    protected void onUpdateCheckClick() {
+        UpdateService service = UpdateUi.service().orElseThrow(); // the button is disabled without it
+        updateCheckButton.setDisable(true);
+        updateResultLabel.setText(ResourcesEngine.getString("update.checking"));
+        Background.run(service::checkNow,
+                found -> {
+                    found.ifPresent(UpdateUi::offer);
+                    showUpdateResult(found.map(release -> ResourcesEngine.getString("update.available",
+                            release.version())).orElseGet(() -> ResourcesEngine.getString("update.up-to-date")));
+                },
+                failure -> showUpdateResult(UpdateUi.message(failure)));
+    }
+
+    private void showUpdateResult(String text) {
+        UpdateUi.setLastResult(text);
+        updateResultLabel.setText(text);
+        updateCheckButton.setDisable(false);
     }
 
     @FXML
     protected void onOkClick() {
+        if (!updateAutoCheck.isDisabled() && updateAutoCheck.isSelected() != UiPreferences.updateCheck()) {
+            UiPreferences.saveUpdateCheck(updateAutoCheck.isSelected());
+        }
         UiPreferences.ResourcesLayout layout = resourcesLayoutCombo.getValue();
         if (layout != null && layout != UiPreferences.resourcesLayout()) {
             UiPreferences.saveResourcesLayout(layout); // the plan view reads it at each refresh

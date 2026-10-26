@@ -3,6 +3,8 @@ package com.copybot.ui;
 import com.copybot.config.AppFolders;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.update.UpdateService;
+import com.copybot.ui.util.AppInfo;
 import com.copybot.ui.util.AppLogging;
 import com.copybot.ui.util.Background;
 import com.copybot.ui.util.PopinUtil;
@@ -61,6 +63,8 @@ public class CopybotMainUi extends Application {
             ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
             UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
             ENGINE = CopybotEngine.create(folders);
+            UpdateUi.init(UpdateService.forThisApp(AppInfo.version(), folders.logsDir(),
+                    folders.configChosen() ? folders.configFile() : null, CopybotMainUi::isBusy));
         } catch (Exception e) {
             PopinUtil.showError(e);
             System.exit(1);
@@ -77,6 +81,7 @@ public class CopybotMainUi extends Application {
             requestExit();
         });
         stage.show();
+        UpdateUi.startupCheck(); // in the background: offline, nothing is shown and nothing waits
     }
 
     /**
@@ -95,6 +100,34 @@ public class CopybotMainUi extends Application {
         Views.Loaded<MainController> main = Views.load("main-view.fxml");
         mainController = main.controller();
         return main.root();
+    }
+
+    /** The controller of the main view shown, empty before the first one is loaded. */
+    static Optional<MainController> mainController() {
+        return Optional.ofNullable(mainController);
+    }
+
+    /** A preparation or a copy runs (read by the update from its background thread too). */
+    static boolean isBusy() {
+        MainController main = mainController;
+        return main != null && main.isBusy();
+    }
+
+    /**
+     * The questions of {@link #requestExit()} for an update, before its download: the open editors ask about their
+     * unsaved changes and stay open. False when the user keeps one, or when the exit is already under way.
+     */
+    static boolean confirmExitForUpdate() {
+        return !exiting && EditorController.confirmAllForExit();
+    }
+
+    /**
+     * The update is launched: the editors, whose changes the user gave up in {@link #confirmExitForUpdate()}, are
+     * closed and the application exits the usual way.
+     */
+    static void exitForUpdate() {
+        EditorController.closeAll();
+        requestExit();
     }
 
     /** The exit is decided: the failures of the operations being stopped are logged, not shown. */
@@ -172,6 +205,9 @@ public class CopybotMainUi extends Application {
     }
 
     public static void main(String[] args) {
+        if (System.getProperty("java.net.useSystemProxies") == null) {
+            System.setProperty("java.net.useSystemProxies", "true"); // the update check goes through the system proxy
+        }
         launch(args);
     }
 

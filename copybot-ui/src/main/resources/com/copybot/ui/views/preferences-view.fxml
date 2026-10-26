@@ -2,8 +2,10 @@
 
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.Button?>
+<?import javafx.scene.control.CheckBox?>
 <?import javafx.scene.control.ComboBox?>
 <?import javafx.scene.control.Label?>
+<?import javafx.scene.control.Separator?>
 <?import javafx.scene.layout.HBox?>
 <?import javafx.scene.layout.Region?>
 <?import javafx.scene.layout.VBox?>
@@ -25,6 +27,17 @@
             <ComboBox fx:id="resourcesLayoutCombo" maxWidth="1.7976931348623157E308" HBox.hgrow="ALWAYS" />
          </children>
       </HBox>
+      <Separator />
+      <Label style="-fx-font-weight: bold;" text="%update.section" />
+      <Label fx:id="updateVersionLabel" />
+      <CheckBox fx:id="updateAutoCheck" mnemonicParsing="false" text="%update.auto" />
+      <HBox alignment="CENTER_LEFT" spacing="10.0">
+         <children>
+            <Button fx:id="updateCheckButton" mnemonicParsing="false" onAction="#onUpdateCheckClick" text="%update.check-now" />
+            <Label fx:id="updateResultLabel" maxWidth="1.7976931348623157E308" wrapText="true" HBox.hgrow="ALWAYS" />
+         </children>
+      </HBox>
+      <Separator />
       <HBox alignment="CENTER_RIGHT" spacing="10.0">
          <children>
             <Region HBox.hgrow="ALWAYS" />

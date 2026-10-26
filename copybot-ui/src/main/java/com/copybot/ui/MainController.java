@@ -10,12 +10,14 @@ import com.copybot.ui.util.Views;
 import javafx.fxml.FXML;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
+import javafx.scene.control.Button;
 import javafx.scene.control.ButtonType;
 import javafx.scene.control.Hyperlink;
 import javafx.scene.control.Label;
 import javafx.scene.control.MenuItem;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.BorderPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.Modality;
 import javafx.stage.Stage;
@@ -37,13 +39,22 @@ public class MainController {
     private static Locale pluginsLocale;
 
     /** A preparation or a copy runs in the plan view (see {@link #setBusy}). */
-    private boolean busy;
+    private volatile boolean busy;
 
     @FXML
     private BorderPane root;
 
     @FXML
     private MenuItem preferencesItem;
+
+    @FXML
+    private HBox updateBanner;
+    @FXML
+    private Label updateLabel;
+    @FXML
+    private Button updateInstallButton;
+    @FXML
+    private Label updateReason;
 
     @FXML
     public void initialize() {
@@ -87,6 +98,7 @@ public class MainController {
     public void setBusy(boolean busy) {
         this.busy = busy;
         preferencesItem.setDisable(busy);
+        refreshUpdateBanner(); // no update while an operation runs
     }
 
     /** Exiting then asks first: the operation would be stopped. */
@@ -97,6 +109,39 @@ public class MainController {
     @FXML
     protected void onExitClick() {
         CopybotMainUi.requestExit(); // the same way out as closing the window
+    }
+
+    /**
+     * Shows the banner of a newer release (spec app-update §3), unless closed this session; its "Update" button is
+     * disabled with the reason while an operation runs, and outside Windows.
+     */
+    void refreshUpdateBanner() {
+        var release = UpdateUi.offered();
+        updateBanner.setVisible(release.isPresent());
+        updateBanner.setManaged(release.isPresent());
+        if (release.isEmpty()) {
+            return;
+        }
+        updateLabel.setText(ResourcesEngine.getString("update.available", release.get().version()));
+        var blocked = UpdateUi.service().flatMap(service -> service.installBlocked());
+        updateInstallButton.setDisable(blocked.isPresent());
+        updateReason.setText(blocked.map(key -> ResourcesEngine.getString(key)).orElse(""));
+    }
+
+    @FXML
+    protected void onUpdateInstallClick() {
+        UpdateUi.offered().ifPresent(UpdateUi::install);
+    }
+
+    @FXML
+    protected void onUpdateNotesClick() {
+        UpdateUi.offered().ifPresent(release ->
+                CopybotMainUi.HOST_SERVICES.showDocument(release.notesUrl().toString()));
+    }
+
+    @FXML
+    protected void onUpdateDismissClick() {
+        UpdateUi.dismiss();
     }
 
     @FXML

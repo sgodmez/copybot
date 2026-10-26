@@ -186,14 +186,32 @@ public class EditorController {
      * False when one stays open (the user keeps its changes, or a save is running); the exit is then given up.
      */
     static boolean closeAllForExit() {
+        if (!confirmAllForExit()) {
+            return false;
+        }
+        closeAll();
+        return true;
+    }
+
+    /**
+     * The questions of {@link #closeAllForExit()} without closing anything (an update asks before its download, and
+     * closes the editors only once it is launched). False when one is to stay open.
+     */
+    static boolean confirmAllForExit() {
         for (EditorController editor : List.copyOf(OPEN)) {
             if (editor.saving || editor.document.isModified()
                     && !editor.confirm(ResourcesEngine.getString("editor.discard"))) {
                 return false;
             }
-            editor.stage.close(); // not a close request: it was asked above
         }
         return true;
+    }
+
+    /** Closes every open editor, its changes given up: the user was asked by {@link #confirmAllForExit()}. */
+    static void closeAll() {
+        for (EditorController editor : List.copyOf(OPEN)) {
+            editor.stage.close(); // not a close request: it was asked before
+        }
     }
 
     @FXML

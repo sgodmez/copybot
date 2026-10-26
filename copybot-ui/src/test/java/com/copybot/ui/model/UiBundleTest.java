@@ -74,7 +74,14 @@ public class UiBundleTest {
             "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false",
             "error.title", "error.unexpected", "exit.title", "exit.running", "exit.stop", "exit.stopping",
             "about.title", "about.java", "about.javafx", "about.license",
-            "pipeline.document.not-object", "pipeline.document.not-steps");
+            "pipeline.document.not-object", "pipeline.document.not-steps",
+            "update.title", "update.available", "update.install", "update.notes", "update.dismiss", "update.busy",
+            "update.windows-only", "update.unavailable-dev", "update.section", "update.current", "update.auto",
+            "update.check-now", "update.checking", "update.up-to-date", "update.downloading", "update.cancel",
+            "update.error.http", "update.error.network", "update.error.unreadable", "update.error.no-digest",
+            "update.error.digest", "update.error.size", "update.error.stalled", "update.error.cancelled",
+            "update.error.no-asset", "update.error.zip", "update.error.io", "update.error.launch",
+            "update.other-instance", "update.admin", "update.no-release");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");
 
