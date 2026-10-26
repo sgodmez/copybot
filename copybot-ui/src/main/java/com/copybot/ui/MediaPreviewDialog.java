@@ -228,6 +228,9 @@ final class MediaPreviewDialog {
         loading.setMaxSize(48, 48);
         center.getChildren().setAll(loading);
         boolean playable = !engineBusy.getAsBoolean();
+        if (playable && (kind == Kind.VIDEO || kind == Kind.AUDIO)) {
+            startLoading(current); // reading the media can hang too, not only the player
+        }
         // the file is read off the JavaFX thread: a share may be slow or gone
         Background.run(() -> read(file, kind, playable), read -> {
             if (token == current) {
@@ -266,6 +269,9 @@ final class MediaPreviewDialog {
     }
 
     private void show(Path file, Kind kind, Read read) {
+        if (read.media() == null) {
+            stopLoading(); // nothing to play: the file is gone, or the engine started meanwhile
+        }
         if (!read.exists()) {
             message(MISSING, ResourcesEngine.getString("preview.missing", file));
             return;
@@ -343,15 +349,6 @@ final class MediaPreviewDialog {
                 failed(played.getError());
             }
         });
-        Duration timeout = loadTimeout;
-        loading = new PauseTransition(timeout);
-        loading.setOnFinished(e -> {
-            if (player == played) {
-                release();
-                message(FAILED, ResourcesEngine.getString("preview.load-timeout", Math.round(timeout.toSeconds())));
-            }
-        });
-        loading.play();
         Button toggle = new Button(ResourcesEngine.getString("preview.pause"));
         toggle.setOnAction(e -> togglePlay());
         played.statusProperty().addListener((obs, old, status) -> toggle.setText(ResourcesEngine.getString(
@@ -429,6 +426,25 @@ final class MediaPreviewDialog {
         if (CopybotMainUi.HOST_SERVICES != null) {
             CopybotMainUi.HOST_SERVICES.showDocument(files.get(index).toUri().toString());
         }
+    }
+
+    /**
+     * Gives up on this media when it is still not ready after {@link #loadTimeout}: what is still read in the
+     * background is dropped when it comes (another token), the player shown is released.
+     */
+    private void startLoading(Object current) {
+        stopLoading();
+        Duration timeout = loadTimeout;
+        PauseTransition timer = new PauseTransition(timeout);
+        timer.setOnFinished(e -> {
+            if (token == current && loading == timer) {
+                token = new Object();
+                release();
+                message(FAILED, ResourcesEngine.getString("preview.load-timeout", Math.round(timeout.toSeconds())));
+            }
+        });
+        loading = timer;
+        timer.play();
     }
 
     private void stopLoading() {
