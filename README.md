@@ -250,7 +250,7 @@ mvn -Pdist package
 
 It produces:
 
-- `copybot-ui/target/dist/Copybot/` — the desktop application (`Copybot.exe` on Windows), as a jpackage app image;
+- `copybot-ui/target/dist/Copybot/` — the desktop application (`Copybot.exe` on Windows, `bin/Copybot` on Linux), as a jpackage app image;
 - `copybot-ui/target/copybot/` — the same as a jlink runtime image, also zipped as `copybot.zip`;
 - `copybot-plugin/copybot-plugin-metadata-extractor/target/` — the metadata plugin. Copy its jar and its `lib/` folder into `plugins/metadata-extractor/` next to the application.
 - `copybot-plugin/copybot-plugin-gps-zone/target/` — the optional GPS time zone check. Copy its jar and its `lib/` folder (about 36 MB, mostly the time zone boundaries) into `plugins/gps-zone/` next to the application. It loads the boundaries at the first photo whose GPS can tell (about 1 s and 200 MB of memory), never for an import without GPS. Its data is under the ODbL: see [NOTICE](NOTICE).
@@ -267,11 +267,15 @@ installer that asks whether to install for you alone (no administrator rights,
 the default) or for all users, and `copybot-<version>-windows-x64.zip`, the
 portable version (unzip it anywhere and run `Copybot\Copybot.exe`). A new
 installer installs over the previous version and keeps your data and plugins.
+It also offers `copybot-<version>-linux-x64.tar.gz`, the Linux version, not
+tested on a real Linux yet: extract it anywhere and run `Copybot/bin/Copybot`.
+The video and sound preview needs GStreamer and ffmpeg (libavcodec), and
+updating from the application is Windows only.
 
 **Making a release:** set the version in every `pom.xml` to `X.Y.Z` (drop
 `-SNAPSHOT`), commit, tag `vX.Y.Z` and push the tag. The `release` workflow
 checks that the tag matches the pom version, builds the application, the
-installer and the zip, and attaches them to a **draft** release. Publish the
+installer and the zip, the Linux archive on a Linux runner, and attaches them to a **draft** release. Publish the
 draft once you have read it, then set the poms to the next `-SNAPSHOT`.
 
 To run a pipeline from the command line with the jlink image:

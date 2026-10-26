@@ -11,6 +11,11 @@
 
     <artifactId>copybot-ui</artifactId>
 
+    <properties>
+        <!-- the icon of the app image: jpackage takes an .ico on Windows, a .png on Linux (profile linux) -->
+        <app.icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.ico</app.icon>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>com.copybot</groupId>
@@ -140,6 +145,17 @@
     </build>
 
     <profiles>
+        <profile>
+            <id>linux</id>
+            <activation>
+                <os>
+                    <name>linux</name>
+                </os>
+            </activation>
+            <properties>
+                <app.icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.png</app.icon>
+            </properties>
+        </profile>
         <!-- the desktop application: mvn -Pdist package (jlink runtime image, then jpackage app image) -->
         <profile>
             <id>dist</id>
@@ -228,7 +244,7 @@
                                     <module>com.copybot.ui/com.copybot.ui.CopybotMainUi</module>
                                     <type>APP_IMAGE</type>
                                     <runtimeImage>target/copybot</runtimeImage>
-                                    <icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.ico</icon>
+                                    <icon>${app.icon}</icon>
                                     <javaOptions>
                                         <option>-Dfile.encoding=UTF-8</option>
                                         <!-- the disk lookup of Windows calls kernel32, JavaFX loads its own libraries -->

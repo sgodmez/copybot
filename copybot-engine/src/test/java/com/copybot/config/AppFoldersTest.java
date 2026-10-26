@@ -37,6 +37,17 @@ public class AppFoldersTest {
     }
 
     @Test
+    public void theLinuxLauncherInBinGivesTheImageFolder() {
+        Path app = abs("Copybot");
+        AppFolders folders = AppFolders.resolve(Optional.empty(), app.resolve("bin").resolve("Copybot").toString(),
+                abs("work"), null, "home", dir -> true);
+
+        assertEquals(app, folders.appDir());
+        assertEquals(app, folders.dataDir());
+        assertEquals(app.resolve("plugins"), folders.pluginsDir());
+    }
+
+    @Test
     public void aProtectedAppFolderSendsTheDataToAppData() {
         Path app = abs("app");
         Path appData = abs("roaming");

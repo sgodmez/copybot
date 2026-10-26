@@ -8,7 +8,40 @@ permissions:
   contents: write
 
 jobs:
+  # the Linux app image, handed to the release job: one job publishes, so the tag gets a single draft
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # the release job checks the tag against the pom version
+      - name: Version
+        id: version
+        run: echo "version=$(mvn -B -q -N help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
+
+      # the linux profile of copybot-ui switches the icon to the .png
+      - name: Build application
+        run: mvn -B -Pdist package -DskipTests
+
+      # a tar keeps the launcher executable; the Copybot folder is the archive root
+      - name: Portable archive
+        run: |
+          mkdir -p copybot-ui/target/release
+          tar -czf "copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C copybot-ui/target/dist Copybot
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: copybot-ui/target/release/*.tar.gz
+          if-no-files-found: error
+
   release:
+    needs: linux
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -53,6 +86,11 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: Compress-Archive -Path copybot-ui\target\dist\Copybot -DestinationPath "copybot-ui\target\release\copybot-$env:VERSION-windows-x64.zip"
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: copybot-ui/target/release
+
       - name: GitHub release
         uses: softprops/action-gh-release@v2
         with:
@@ -61,3 +99,4 @@ jobs:
           files: |
             copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-setup.exe
             copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-windows-x64.zip
+            copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-linux-x64.tar.gz

@@ -12,8 +12,8 @@ import java.util.function.Predicate;
 /**
  * The folders of a self-contained Copybot. Three rules:
  * <ol>
- *   <li>The app folder (code and {@code plugins/}) is the parent of {@code jpackage.app-path} when the
- *       application is packaged, else the working directory.</li>
+ *   <li>The app folder (code and {@code plugins/}) is the app image when the application is packaged (the
+ *       folder of {@code jpackage.app-path}, above its {@code bin} folder on Linux), else the working directory.</li>
  *   <li>The data folder (config, preferences, logs) is the parent of the config file chosen with
  *       {@code --config-file}; otherwise the app folder when it is writable; otherwise
  *       {@code %APPDATA%/Copybot}, or {@code ~/.copybot} when there is no APPDATA.</li>
@@ -38,7 +38,7 @@ public record AppFolders(Path appDir, Path dataDir, Path configFile, boolean con
 
     static AppFolders resolve(Optional<Path> chosenConfig, String jpackageAppPath, Path workingDir,
                               String appData, String userHome, Predicate<Path> writable) {
-        Path appDir = normalize(jpackageAppPath != null ? Path.of(jpackageAppPath).getParent() : workingDir);
+        Path appDir = normalize(jpackageAppPath != null ? imageFolder(Path.of(jpackageAppPath)) : workingDir);
         Optional<Path> chosen = chosenConfig.map(AppFolders::normalize);
         Path dataDir;
         if (chosen.isPresent()) {
@@ -51,6 +51,13 @@ public record AppFolders(Path appDir, Path dataDir, Path configFile, boolean con
             dataDir = normalize(Path.of(userHome).resolve(".copybot"));
         }
         return new AppFolders(appDir, dataDir, chosen.orElseGet(() -> dataDir.resolve("config.json")), chosen.isPresent());
+    }
+
+    /** The app image holding a launcher: its folder on Windows, the parent of its {@code bin} folder on Linux. */
+    private static Path imageFolder(Path launcher) {
+        Path folder = launcher.toAbsolutePath().getParent();
+        Path name = folder.getFileName();
+        return name != null && name.toString().equals("bin") && folder.getParent() != null ? folder.getParent() : folder;
     }
 
     public Path pluginsDir() {
