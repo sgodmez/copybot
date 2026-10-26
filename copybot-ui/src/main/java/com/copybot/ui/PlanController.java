@@ -221,7 +221,7 @@ public class PlanController implements PlanOperations.View {
         itemsTable.getSelectionModel().setSelectionMode(SelectionMode.MULTIPLE);
         itemsTable.setRowFactory(table -> rowWithMenu());
 
-        filterCombo.getItems().setAll(Filter.values());
+        filterCombo.getItems().setAll(new PlanViewModel().filters()); // without a plan: the GPS filter comes in render
         filterCombo.setConverter(new StringConverter<>() {
             @Override
             public String toString(Filter filter) {
@@ -989,6 +989,10 @@ public class PlanController implements PlanOperations.View {
         Optional<String> suggestions = model.suggestionSummary();
         suggestionLabel.setText(suggestions.map(s -> "⚠ " + s).orElse(""));
         show(suggestionLabel, suggestions.isPresent());
+        List<Filter> filters = model.filters();
+        if (!filters.equals(filterCombo.getItems())) {
+            filterCombo.getItems().setAll(filters); // the GPS filter comes with the first flagged row
+        }
         changeResumeLink.setDisable(busy || !model.canChangeResumePoint() && !model.canChooseResumePoint());
 
         placeholder.setText(phase == Phase.NOT_PREPARED ? ResourcesEngine.getString("plan.placeholder") : "");

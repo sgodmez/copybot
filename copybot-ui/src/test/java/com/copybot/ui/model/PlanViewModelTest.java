@@ -957,7 +957,7 @@ public class PlanViewModelTest {
     }
 
     @Test
-    public void suggestionSummaryCountsTheRowsStillToCopy() throws IOException {
+    public void suggestionSummaryCountsEveryFlaggedRow() throws IOException {
         WorkItemExecution toCopy = suggested("a.jpg", "America/Mexico_City");
         WorkItemExecution ignored = suggested("b.jpg", "America/Mexico_City");
         ignored.setIgnored("ignored for this run");
@@ -971,7 +971,33 @@ public class PlanViewModelTest {
 
         model = prepared(false, toCopy, ignored, failed, skipped, plain);
 
-        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", 1)), model.suggestionSummary());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", 4)), model.suggestionSummary(),
+                "the whole card is checked, also the files not copied");
+    }
+
+    @Test
+    public void theGpsFilterShowsEveryFlaggedRowAndIsOfferedOnlyWithOne() throws IOException {
+        WorkItemExecution toCopy = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution skipped = suggested("b.jpg", "America/Mexico_City");
+        skipped.setSkipped("already at the destination");
+        WorkItemExecution plain = shot("c.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, plain);
+        assertFalse(model.filters().contains(Filter.SUGGESTED_ZONE), "nothing flagged");
+
+        model = prepared(false, toCopy, plain, skipped);
+
+        assertTrue(model.filters().contains(Filter.SUGGESTED_ZONE));
+        model.setFilter(Filter.SUGGESTED_ZONE);
+        assertEquals(List.of(toCopy, skipped), model.visibleItems());
+    }
+
+    @Test
+    public void theChosenGpsFilterStaysOfferedWithoutFlaggedRow() throws IOException {
+        PlanViewModel model = prepared(false, shot("a.jpg", "2026-10-26T05:30:00Z"));
+
+        model.setFilter(Filter.SUGGESTED_ZONE);
+
+        assertTrue(model.filters().contains(Filter.SUGGESTED_ZONE), "the combo keeps showing the filter chosen");
     }
 
     @Test

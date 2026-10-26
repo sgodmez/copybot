@@ -11,7 +11,7 @@
 
     <artifactId>copybot-plugin-gps-zone</artifactId>
     <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 
     <properties>
         <!-- IPlugin.getPluginCode(): the folder of the release archive -->
@@ -24,6 +24,13 @@
             <groupId>net.iakovlev</groupId>
             <artifactId>timeshape</artifactId>
             <version>2026b.29</version>
+            <exclusions>
+                <!-- declared by timeshape but used by none of its classes: 600 KB less in the plugin archive -->
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-core</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>

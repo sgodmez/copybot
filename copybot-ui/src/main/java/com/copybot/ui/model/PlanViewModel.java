@@ -28,6 +28,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -72,7 +73,8 @@ public final class PlanViewModel {
     }
 
     /** CONFLICTS: the files to copy whose target already exists (spec conflict-check §5). */
-    public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS, CONFLICTS }
+    /** SUGGESTED_ZONE: the rows whose time zone the GPS suggests, whatever their status (the whole card checked). */
+    public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS, CONFLICTS, SUGGESTED_ZONE }
 
     /**
      * The steps of a preparation: listing the source (total unknown), analysing the files, checking the targets still
@@ -449,6 +451,13 @@ public final class PlanViewModel {
         return filter;
     }
 
+    /** The filters to offer: SUGGESTED_ZONE only with a flagged row (the gps-zone plugin) or while it is chosen. */
+    public List<Filter> filters() {
+        return Arrays.stream(Filter.values())
+                .filter(f -> f != Filter.SUGGESTED_ZONE || filter == f || items.stream().anyMatch(PlanViewModel::isSuggested))
+                .toList();
+    }
+
     /** The "automatic execution" box of mode plan: a one-shot toggle of the view, never stored (spec execution-mode §1). */
     public void setAutoExecute(boolean autoExecute) {
         this.autoExecute = autoExecute;
@@ -800,11 +809,17 @@ public final class PlanViewModel {
                 OFFSET_TEXT.format(zone.get().getRules().getOffset(shot.get()))));
     }
 
-    /** "12 photos of a badly set camera": the flagged rows still to copy (not ignored, copied nor in error); empty without any. */
+    /**
+     * "12 photos of a badly set camera": every flagged row, also those not copied (a plan run only to check the whole
+     * card, filter {@link Filter#SUGGESTED_ZONE}); empty without any.
+     */
     public Optional<String> suggestionSummary() {
-        long count = items.stream().filter(i -> isLeftToCopy(i.getStatus()) && !i.isIgnored()
-                && i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent()).count();
+        long count = items.stream().filter(PlanViewModel::isSuggested).count();
         return count == 0 ? Optional.empty() : Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", count));
+    }
+
+    private static boolean isSuggested(WorkItemExecution item) {
+        return item.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent();
     }
 
     /** A mark drawn in the Target cell. */
@@ -886,6 +901,7 @@ public final class PlanViewModel {
             case SKIPPED -> i.getStatus() == ItemStatus.SKIPPED;
             case ERRORS -> i.getStatus() == ItemStatus.ERROR;
             case CONFLICTS -> isConflict(i);
+            case SUGGESTED_ZONE -> isSuggested(i);
         }).toList();
     }
 
