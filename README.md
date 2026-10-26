@@ -334,8 +334,23 @@ tested on a real Linux yet: extract it anywhere and run `Copybot/bin/Copybot`.
 The video and sound preview needs GStreamer and ffmpeg (libavcodec), and
 updating from the application is Windows only.
 
-**Making a release:** set the version of the application to `X.Y.Z` (drop
-`-SNAPSHOT`) in the poms, commit, tag `vX.Y.Z` and push the tag. The official
+**Making a release:** on `develop`, set the version of the application to
+`X.Y.Z` (drop `-SNAPSHOT`) in the poms, commit and push. Then go through a
+pull request from `develop` to `master` titled `Release X.Y.Z`, merge it, and
+tag the merge commit on `master`:
+
+```sh
+gh pr create --base master --head develop --title "Release X.Y.Z" --body "Copybot X.Y.Z"
+gh pr merge --merge --subject "Release X.Y.Z"
+git fetch origin master
+git tag -a vX.Y.Z -m "Copybot X.Y.Z" origin/master
+git push origin vX.Y.Z
+```
+
+`master` holds the published versions. The pull request is what the generated
+release notes list: whoever opens it is named in the notes and among the
+contributors of the release (commits pushed straight to a branch are not).
+The official
 plugins (`metadata-extractor`, `gps-zone`) have their own version, in their own
 `pom.xml` (`1.0.0`, never `-SNAPSHOT`): change the application version
 without overwriting theirs (only the `<parent>` of a plugin follows the
@@ -345,7 +360,7 @@ of a plugin that changed** (any file of its module, its `catalog.json`
 included) before the release; leave it alone otherwise. The `release` workflow
 checks that the tag matches the pom version, builds the application, the
 installer and the zip, the Linux archive on a Linux runner, and attaches them to a **draft** release. Publish the
-draft once you have read it, then set the poms to the next `-SNAPSHOT`.
+draft once you have read it, then set the poms of `develop` to the next `-SNAPSHOT`.
 
 Every release also carries a `catalogue.json` listing all the official
 plugins, each with the release that hosts its archive
