@@ -58,6 +58,7 @@ public class WriteDateTest {
     private static final String REWRITTEN = "EXIF r\u00e9\u00e9crit : 2026-10-24 17:30 -06:00";
     private static final String UNSUPPORTED = "EXIF non r\u00e9\u00e9crit : format non pris en charge";
     private static final String NO_DATE = "EXIF non r\u00e9\u00e9crit : pas de date EXIF";
+    private static final String UNCHANGED = "inchang\u00e9 : fuseau horaire non corrig\u00e9";
 
     /**
      * A camera JPEG: dates at +02:00 (DateTime a minute later), sub-seconds, make, model, a Sony maker note, an
@@ -414,9 +415,10 @@ public class WriteDateTest {
         new WriteDate().dryRun(undated);
         assertEquals(NO_DATE, note(undated));
 
+        // the plan says so: a step listed for a file it leaves alone must not look like a processing
         WorkItem uncorrected = item(cameraJpeg());
         assertEquals(Optional.of(List.of(uncorrected)), new WriteDate().dryRun(uncorrected));
-        assertNull(note(uncorrected));
+        assertEquals(UNCHANGED, note(uncorrected));
     }
 
     @Test

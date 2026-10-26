@@ -86,7 +86,8 @@ public class WriteDateEngineTest {
             Plan plan = engine.prepare(pipeline, null);
             assertEquals(PipelineStatus.PREPARED, plan.getState().getStatus(), String.valueOf(plan.getState().getFailure()));
             WorkItemExecution photo = plan.getOrderedItems().getFirst();
-            assertNull(plan.detailOf(photo).orElseThrow().steps().getFirst().note(), "not corrected: no verdict");
+            assertEquals("inchang\u00e9 : fuseau horaire non corrig\u00e9",
+                    plan.detailOf(photo).orElseThrow().steps().getFirst().note(), "not corrected: said unchanged");
 
             plan.correctZone(List.of(photo), MEXICO, null, null);
             engine.analyse(plan);

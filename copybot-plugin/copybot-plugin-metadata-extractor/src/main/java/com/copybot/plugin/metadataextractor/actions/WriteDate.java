@@ -61,6 +61,8 @@ public class WriteDate extends AbstractAction implements IProcessAction {
     private static final String NOT_REWRITTEN = "EXIF non r\u00e9\u00e9crit : ";
     private static final String UNSUPPORTED = NOT_REWRITTEN + "format non pris en charge";
     private static final String NO_DATE = NOT_REWRITTEN + "pas de date EXIF";
+    /** In the plan, for an item passed as is: the step is listed for every file, it must not look like a processing. */
+    private static final String UNCHANGED = "inchang\u00e9 : fuseau horaire non corrig\u00e9";
 
     private static final byte[] JPEG_SIGNATURE = {(byte) 0xFF, (byte) 0xD8};
     private static final DateTimeFormatter EXIF_DATE = DateTimeFormatter.ofPattern("uuuu:MM:dd HH:mm:ss");
@@ -128,7 +130,9 @@ public class WriteDate extends AbstractAction implements IProcessAction {
     @Override
     public Optional<List<WorkItem>> dryRun(WorkItem item) {
         Optional<ZoneId> place = item.getMetadatas().getZone(WorkItemMetadata.CAPTURE_ZONE);
-        if (place.isPresent()) {
+        if (place.isEmpty()) {
+            item.getMetadatas().raw().put(WorkItemMetadata.NOTE, UNCHANGED);
+        } else {
             String note;
             try (InputStream content = item.openInputStream()) {
                 note = refusal(item, content).orElseGet(() -> REWRITTEN + NOTE_DATE.format(local(item, place.get())));
