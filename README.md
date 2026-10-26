@@ -105,7 +105,37 @@ libraries.
 - **Command line.** One command runs a pipeline headless, with a dry-run mode
   and exit codes meant for scripts.
 
-<!-- Screenshots: docs/captures/ (home, plan view, editor with the pattern helper, plugins window) -->
+## Screenshots
+
+The plan of a memory card, before anything is written. The September photos
+are already on the NAS, so the plan resumes after the last one it found
+there. Nine photos were taken in Tokyo with the camera still on Paris time:
+their GPS tells, and the plan offers to fix their time zone.
+
+![The plan view: the resume point found on the destination, the photos of a badly set camera, and the files to copy with their target](docs/captures/plan.png)
+
+The same plan once copied: what was copied, what was skipped, and the
+summary of the run.
+
+![The plan view after the copy: 32 copied, 12 skipped](docs/captures/plan-copied.png)
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/captures/home.png" alt="The home screen: the recent pipelines and how their last run went"></td>
+    <td width="50%"><img src="docs/captures/plugins.png" alt="The plugins window: each plugin, its modules, and its actions"></td>
+  </tr>
+  <tr>
+    <td>The home screen lists the recent pipelines and how their last run went.</td>
+    <td>The plugins window shows each plugin, its modules and its actions.</td>
+  </tr>
+</table>
+
+The pipeline editor, on the out step. The pattern helper reads a sample of
+the source and shows the path each file gets.
+
+![The pipeline editor: the output pattern, the paths the sample files get, and the conflict policy](docs/captures/editor.png)
+
+*The screenshots use made-up photos and folders.*
 
 ## How it works
 
