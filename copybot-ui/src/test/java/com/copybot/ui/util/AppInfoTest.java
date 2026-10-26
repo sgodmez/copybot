@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -31,14 +30,6 @@ public class AppInfoTest {
     @Test
     public void theJavaVersionIsShown() {
         assertTrue(AppInfo.javaVersion().startsWith(String.valueOf(Runtime.version().feature())), AppInfo.javaVersion());
-    }
-
-    @Test
-    public void theLogsGoToTheLocalAppDataOnWindowsElseToTheHome() {
-        assertEquals(Path.of("C:/Users/me/AppData/Local", "Copybot", "logs"),
-                AppLogging.logDirectory("C:/Users/me/AppData/Local", "C:/Users/me"));
-        assertEquals(Path.of("/home/me", ".copybot", "logs"), AppLogging.logDirectory(null, "/home/me"));
-        assertEquals(Path.of("/home/me", ".copybot", "logs"), AppLogging.logDirectory(" ", "/home/me"));
     }
 
     @Test

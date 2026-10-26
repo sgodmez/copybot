@@ -1,5 +1,6 @@
 package com.copybot.engine;
 
+import com.copybot.config.AppFolders;
 import com.copybot.config.CopybotConfig;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
@@ -13,6 +14,7 @@ import com.copybot.engine.resume.ResumeContext;
 import com.copybot.engine.resume.ResumeMode;
 import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.exception.CopybotException;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
@@ -47,20 +49,37 @@ public class CopybotEngineTest {
     Path tempDir;
 
     @Test
-    public void thePluginReportNamesTheConfiguredDirectories() {
-        Path devDir = Path.of("does-not-exist-dev");
-        Path otherDevDir = Path.of("does-not-exist-dev-2");
-        CopybotConfig config = new CopybotConfig(null, List.of(devDir, otherDevDir), null, null);
-        try (CopybotEngine engine = new CopybotEngine(config)) {
+    public void thePluginReportNamesTheFoldersOfTheEngine() {
+        AppFolders folders = new AppFolders(tempDir.resolve("app"), tempDir.resolve("data"),
+                tempDir.resolve("data").resolve("config.json"), false);
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null), folders)) {
             PluginReport report = engine.pluginReport();
 
-            assertFalse(report.pluginPathConfigured());
-            assertEquals(Path.of("plugins").toAbsolutePath().normalize(), report.pluginPath());
-            assertEquals(List.of(devDir.toAbsolutePath().normalize(), otherDevDir.toAbsolutePath().normalize()),
-                    report.devPluginPaths());
-            assertTrue(report.warnings().stream().anyMatch(w -> w.contains(devDir.toAbsolutePath().normalize().toString())));
-            assertTrue(report.warnings().stream().anyMatch(w -> w.contains(otherDevDir.toAbsolutePath().normalize().toString())));
+            assertEquals(folders.configFile(), report.configFile());
+            assertEquals(folders.pluginsDir(), report.pluginPath());
+            assertEquals(AppFolders.devPluginPaths(), report.devPluginPaths());
+            assertTrue(report.warnings().stream().anyMatch(w -> w.contains(folders.pluginsDir().toString())));
         }
+    }
+
+    @Test
+    public void aMissingConfigFileInTheDataFolderGivesTheDefaults() {
+        Path configFile = tempDir.resolve("config.json");
+        AppFolders folders = new AppFolders(tempDir, tempDir, configFile, false);
+
+        try (CopybotEngine engine = CopybotEngine.create(folders)) {
+            assertEquals(configFile, engine.configFile());
+            assertFalse(Files.exists(configFile), "starting writes nothing");
+        }
+    }
+
+    @Test
+    public void aChosenConfigFileThatIsMissingIsAnError() {
+        Path absent = tempDir.resolve("absent.json");
+
+        CopybotException e = assertThrows(CopybotException.class, () -> CopybotEngine.create(Optional.of(absent)));
+
+        assertEquals(ResourcesEngine.getString("config.not-found", absent.toAbsolutePath()), e.getMessage());
     }
 
     private Path dir(String name) throws IOException {
@@ -92,7 +111,7 @@ public class CopybotEngineTest {
                   "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{date:yyyy}/{name}" } }
                 }
                 """.formatted(json(in), json(out)));
-        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null, null, null))) {
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null))) {
             assertEquals(List.of(in.toAbsolutePath().normalize(), out.toAbsolutePath().normalize()),
                     engine.pipelinePaths(pipeline), "the step that cannot be resolved is left out");
         }

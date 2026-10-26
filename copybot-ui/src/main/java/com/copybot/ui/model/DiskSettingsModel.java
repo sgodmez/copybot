@@ -219,12 +219,12 @@ public final class DiskSettingsModel {
     public int defaultCapacity(String resource) {
         Map<String, Integer> withoutExact = new LinkedHashMap<>(capacities);
         withoutExact.keySet().removeIf(DiskSettingsModel::diskName);
-        return ResourceSettings.from(new CopybotConfig(null, null, withoutExact, List.of()), disks())
+        return ResourceSettings.from(new CopybotConfig(withoutExact, List.of()), disks())
                 .capacityFor(resource);
     }
 
     private ResourceSettings settings() {
-        return ResourceSettings.from(new CopybotConfig(null, null, capacities, groups), disks());
+        return ResourceSettings.from(new CopybotConfig(capacities, groups), disks());
     }
 
     private ResourceSettings.Disks disks() {

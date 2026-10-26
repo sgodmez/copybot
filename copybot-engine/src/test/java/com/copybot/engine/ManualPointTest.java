@@ -158,7 +158,7 @@ public class ManualPointTest {
     }
 
     static ResourceRegistry registry() {
-        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null, Map.of("disk:*", 1000), null)));
+        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(Map.of("disk:*", 1000), null)));
     }
 
     private ResumeStateStore store() {

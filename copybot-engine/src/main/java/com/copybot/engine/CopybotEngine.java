@@ -1,5 +1,6 @@
 package com.copybot.engine;
 
+import com.copybot.config.AppFolders;
 import com.copybot.config.CopybotConfig;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
@@ -61,14 +62,9 @@ public final class CopybotEngine implements AutoCloseable {
     /** Best-effort grace period given to a cancelled pipeline to release its resources. */
     private static final long SHUTDOWN_AWAIT_SECONDS = 5;
 
-    private static final Path DEFAULT_CONFIG_PATH = Path.of("./config.json");
-
-    /** Used when the config declares no pluginPath; a missing directory simply loads no plugins. */
-    private static final Path DEFAULT_PLUGIN_PATH = Path.of("./plugins");
-
     /** Replaced when the preferences save the disks ({@link #updateResources}); the plugins keep the first one. */
     private volatile CopybotConfig config;
-    private final Path configFile;
+    private final AppFolders folders;
 
     /**
      * Runs the executions. Its virtual threads are <em>daemon</em> threads: {@link #close()} waits for
@@ -92,30 +88,45 @@ public final class CopybotEngine implements AutoCloseable {
 
     // visible for tests: an engine on an in-memory configuration, the plugins left as they are
     CopybotEngine(CopybotConfig config) {
-        this(config, Path.of("config.json"));
+        this(config, workingDirectory());
     }
 
-    private CopybotEngine(CopybotConfig config, Path configFile) {
+    private static AppFolders workingDirectory() {
+        Path here = Path.of("").toAbsolutePath();
+        return new AppFolders(here, here, here.resolve("config.json"), false);
+    }
+
+    // visible for tests
+    CopybotEngine(CopybotConfig config, AppFolders folders) {
         this.config = config;
-        this.configFile = configFile;
+        this.folders = folders;
     }
 
     /**
-     * Reads the configuration (default {@code ./config.json}), makes sure the plugins are loaded (once
-     * per JVM) and creates the engine.
+     * Same as {@link #create(AppFolders)} on the folders resolved from the config file chosen on the command line
+     * (empty: the config file of the data folder).
      *
      * @throws CopybotException config.not-found / config.not-json
      */
     public static CopybotEngine create(Optional<Path> configPath) {
-        Path configFile = configPath.orElse(DEFAULT_CONFIG_PATH);
-        CopybotConfig config = readConfig(configFile);
-        loadPlugins(config);
-        return new CopybotEngine(config, configFile.toAbsolutePath().normalize());
+        return create(AppFolders.resolve(configPath));
     }
 
-    /** The configuration file read at startup, absolute. */
+    /**
+     * Reads the configuration, makes sure the plugins of the app folder are loaded (once per JVM) and creates the
+     * engine. A missing config file is the defaults, and is not written, unless it was chosen on the command line.
+     *
+     * @throws CopybotException config.not-found / config.not-json
+     */
+    public static CopybotEngine create(AppFolders folders) {
+        CopybotConfig config = readConfig(folders);
+        loadPlugins(folders);
+        return new CopybotEngine(config, folders);
+    }
+
+    /** The configuration file, absolute, whether it exists or not. */
     public Path configFile() {
-        return configFile;
+        return folders.configFile();
     }
 
     /**
@@ -123,8 +134,7 @@ public final class CopybotEngine implements AutoCloseable {
      * started, without a restart (each one builds its resource registry from them). A run under way keeps its own.
      */
     public void updateResources(Map<String, Integer> resources, List<List<String>> resourceGroups) {
-        CopybotConfig current = config;
-        config = new CopybotConfig(current.pluginPath(), current.devPluginPaths(), resources, resourceGroups);
+        config = new CopybotConfig(resources, resourceGroups);
     }
 
     /**
@@ -168,9 +178,8 @@ public final class CopybotEngine implements AutoCloseable {
 
     /** How the plugins of this JVM were loaded (spec plugins-view §1). */
     public PluginReport pluginReport() {
-        Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
-        List<Path> devPluginPaths = config.devPluginPaths() != null ? config.devPluginPaths() : List.of();
-        return PluginReports.of(configFile, pluginPath, config.pluginPath() != null, devPluginPaths, PluginEngine.getAllPlugins());
+        return PluginReports.of(folders.configFile(), folders.pluginsDir(), AppFolders.devPluginPaths(),
+                PluginEngine.getAllPlugins());
     }
 
     /**
@@ -488,8 +497,12 @@ public final class CopybotEngine implements AutoCloseable {
 
     // ---- reading ----
 
-    private static CopybotConfig readConfig(Path configPath) {
+    private static CopybotConfig readConfig(AppFolders folders) {
+        Path configPath = folders.configFile();
         if (!configPath.toFile().canRead()) {
+            if (!folders.configChosen() && Files.notExists(configPath)) {
+                return new CopybotConfig(null, null); // nothing written yet: the defaults
+            }
             throw CopybotException.ofResource("config.not-found", configPath.toAbsolutePath());
         }
         CopybotConfig config;
@@ -504,14 +517,11 @@ public final class CopybotEngine implements AutoCloseable {
         return config;
     }
 
-    private static void loadPlugins(CopybotConfig config) {
-        Path pluginPath = config.pluginPath() != null ? config.pluginPath() : DEFAULT_PLUGIN_PATH;
-        // a configured-but-missing dev directory must not break startup: dev paths reach
-        // ModuleFinder directly, which throws on nonexistent paths (the main pluginPath is
-        // directory-listed first and tolerates absence)
-        List<Path> devPluginPaths = config.devPluginPaths() == null ? List.of()
-                : config.devPluginPaths().stream().filter(Files::isDirectory).toList();
-        PluginEngine.load(pluginPath, devPluginPaths); // idempotent: only the first load of the JVM counts
+    private static void loadPlugins(AppFolders folders) {
+        // a missing dev directory must not break startup: dev paths reach ModuleFinder directly, which throws on
+        // nonexistent paths (the plugins folder is directory-listed first and tolerates absence)
+        List<Path> devPluginPaths = AppFolders.devPluginPaths().stream().filter(Files::isDirectory).toList();
+        PluginEngine.load(folders.pluginsDir(), devPluginPaths); // idempotent: only the first load of the JVM counts
     }
 
     private ResourceRegistry newRegistry() {

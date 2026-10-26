@@ -164,8 +164,8 @@ when several versions are installed.
 ## Plugins
 
 A plugin is a **JPMS module** that `provides com.copybot.plugin.api.definition.IPlugin`.
-You drop it, with its dependencies, into a sub-folder of the plugin directory
-(`./plugins` by default). Each plugin is loaded in a **module layer of its
+You drop it, with its dependencies, into a sub-folder of the `plugins` folder
+of the application folder. Each plugin is loaded in a **module layer of its
 own**, so two plugins can use different versions of the same library. A
 plugin can also depend on another plugin. When two copies of a plugin are
 installed, the newer revision of a version wins, and different minor versions
@@ -225,6 +225,13 @@ It produces:
 - `copybot-plugin/copybot-plugin-metadata-extractor/target/` — the metadata plugin. Copy its jar and its `lib/` folder into `plugins/metadata-extractor/` next to the application.
 - `copybot-plugin/copybot-plugin-gps-zone/target/` — the optional GPS time zone check. Copy its jar and its `lib/` folder (about 36 MB, mostly the time zone boundaries) into `plugins/gps-zone/` next to the application. It loads the boundaries at the first photo whose GPS can tell (about 1 s and 200 MB of memory), never for an import without GPS. Its data is under the ODbL: see [NOTICE](NOTICE).
 
+**Where Copybot keeps its files:** the code (the application and its
+`plugins` folder) lives in the application folder. The data (`config.json`,
+`prefs.json` for the UI preferences, and `logs`) lives beside it when that
+folder is writable, else in `%APPDATA%\Copybot` (`~/.copybot` without
+`APPDATA`). `--config-file=<file>` puts the data in the folder of that file.
+Unzip the application outside `Program Files` to get a self-contained folder.
+
 To run a pipeline from the command line with the jlink image:
 
 ```sh
@@ -249,12 +256,11 @@ library also prints a JVM warning about a terminally deprecated
 | `2` | The configuration or the pipeline is invalid, or a plugin could not be loaded |
 | `130` | Cancelled (Ctrl+C) |
 
-`config.json` is optional. It sets the plugin directory and the resource
-capacities:
+`config.json` is optional (without it, the defaults apply). It sets the
+resource capacities:
 
 ```json
 {
-  "pluginPath": "./plugins",
   "resources": { "disk:D:\\": 1, "gpu": 1 },
   "resourceGroups": [["disk:D:\\", "disk:\\\\nas\\photos\\"]]
 }
@@ -284,10 +290,12 @@ the share itself (`Z:\` and `\\nas\photos\`) are one resource.
 **Development:** run `com.copybot.ui.CopybotMainUi` with the argument
 `--config-file=./copybot-ui/src/dev/config.json` and the repository root as
 working directory (the shared IntelliJ run configuration `CopybotMainUiDev`
-does that). This config file
-loads the metadata and gps-zone plugins straight from their `target/` folders
-(`devPluginPaths`: a list of folders, or a single one as a string), so package
-these plugins once first.
+does that). That run configuration loads the metadata and gps-zone plugins
+straight from their `target/` folders through the `copybot.devPluginPaths`
+system property (folders separated by the platform path separator, `;` on
+Windows; ignored in the packaged application), so package these plugins once
+first. The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
+`logs/` are written (git-ignored).
 
 ## Why Copybot?
 

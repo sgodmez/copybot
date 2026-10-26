@@ -24,8 +24,8 @@ public final class PluginReports {
     private PluginReports() {
     }
 
-    public static PluginReport of(Path configFile, Path pluginPath, boolean pluginPathConfigured,
-                                  List<Path> devPluginPaths, List<PluginDefinition> definitions) {
+    public static PluginReport of(Path configFile, Path pluginPath, List<Path> devPluginPaths,
+                                  List<PluginDefinition> definitions) {
         Path plugins = absolute(pluginPath);
         List<Path> devs = devPluginPaths.stream().map(PluginReports::absolute).toList();
         List<String> warnings = new ArrayList<>();
@@ -43,7 +43,7 @@ public final class PluginReports {
                         .thenComparing(PluginEntry::name)
                         .thenComparing(PluginEntry::version, Comparator.nullsLast(VersionUtil.VERSION_ORDER.reversed())))
                 .toList();
-        return new PluginReport(absolute(configFile), plugins, pluginPathConfigured, devs, warnings, entries);
+        return new PluginReport(absolute(configFile), plugins, devs, warnings, entries);
     }
 
     private static Path absolute(Path path) {

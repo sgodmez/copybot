@@ -37,3 +37,5 @@ build/
 ### Mac OS ###
 .DS_Store
 .superpowers/
+copybot-ui/src/dev/prefs.json
+copybot-ui/src/dev/logs/

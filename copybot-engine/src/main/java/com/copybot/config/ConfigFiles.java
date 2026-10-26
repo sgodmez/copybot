@@ -17,13 +17,11 @@ import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.function.Consumer;
 
 /** Reads and rewrites single keys of the configuration file, the other keys left as they are. */
 public final class ConfigFiles {
 
-    private static final String PLUGIN_PATH = "pluginPath";
     private static final String RESOURCES = "resources";
     private static final String RESOURCE_GROUPS = "resourceGroups";
 
@@ -33,46 +31,27 @@ public final class ConfigFiles {
     private ConfigFiles() {
     }
 
-    /** The pluginPath written in the file, empty when there is none. */
-    public static Optional<Path> readPluginPath(Path configFile) {
-        JsonElement value = read(configFile).get(PLUGIN_PATH);
-        if (value == null || value.isJsonNull()) {
-            return Optional.empty();
-        }
-        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
-            throw CopybotException.ofResource("config.plugin-path.not-string", configFile);
-        }
-        return Optional.of(Path.of(value.getAsString()));
-    }
-
     /**
-     * True when {@link #writePluginPath} would lose something of the file: it is not strict JSON (comments,
-     * single quotes...) or repeats a key (only the last one is kept).
+     * True when {@link #writeResources} would lose something of the file: it is not strict JSON (comments,
+     * single quotes...) or repeats a key (only the last one is kept). A missing file loses nothing.
      */
     public static boolean rewriteLosesContent(Path configFile) {
+        if (Files.notExists(configFile)) {
+            return false;
+        }
         String text = readText(configFile);
         return !JsonTexts.isStrictJson(text) || !JsonTexts.duplicateKeys(text).isEmpty();
-    }
-
-    /**
-     * Writes pluginPath (removes it when null), through a temporary file renamed over the configuration, with
-     * the line endings of the original file. On failure the file is left as it was.
-     */
-    public static void writePluginPath(Path configFile, Path pluginPath) {
-        rewrite(configFile, json -> {
-            if (pluginPath == null) {
-                json.remove(PLUGIN_PATH);
-            } else {
-                json.addProperty(PLUGIN_PATH, pluginPath.toString());
-            }
-        });
     }
 
     /** The resource capacities and groups written in the file (empty when there are none). */
     public record Resources(Map<String, Integer> capacities, List<List<String>> groups) {
     }
 
+    /** A missing file holds no resources. */
     public static Resources readResources(Path configFile) {
+        if (Files.notExists(configFile)) {
+            return new Resources(Map.of(), List.of());
+        }
         CopybotConfig config;
         try {
             config = GsonUtil.getGson().fromJson(readText(configFile), CopybotConfig.class);
@@ -88,8 +67,9 @@ public final class ConfigFiles {
     }
 
     /**
-     * Writes resources and resourceGroups (each one removed when empty) the way {@link #writePluginPath} writes
-     * its key, the other keys left as they are.
+     * Writes resources and resourceGroups (each one removed when empty) through a temporary file renamed over the
+     * configuration, with the line endings of the original file, the other keys left as they are. A missing file is
+     * created (with its folder), holding only the non-empty keys. On failure the file is left as it was.
      */
     public static void writeResources(Path configFile, Resources resources) {
         rewrite(configFile, json -> {
@@ -107,7 +87,8 @@ public final class ConfigFiles {
     }
 
     private static void rewrite(Path configFile, Consumer<JsonObject> change) {
-        String original = readText(configFile);
+        boolean exists = Files.exists(configFile);
+        String original = exists ? readText(configFile) : "{}";
         JsonObject json = parse(configFile, original);
         change.accept(json);
         String text = WRITER.toJson(json);
@@ -115,17 +96,17 @@ public final class ConfigFiles {
             text = text.replace("\r\n", "\n").replace("\n", "\r\n");
         }
         try {
-            if (!Files.isWritable(configFile)) {
+            if (exists && !Files.isWritable(configFile)) {
                 throw new IOException(configFile + " is read-only");
+            }
+            Path folder = configFile.toAbsolutePath().getParent();
+            if (folder != null) {
+                Files.createDirectories(folder);
             }
             AtomicFiles.write(configFile, text); // flushed to the disk, then moved over the configuration
         } catch (IOException e) {
             throw CopybotException.ofResource(e, "config.write-failed", configFile, e.getMessage());
         }
-    }
-
-    private static JsonObject read(Path configFile) {
-        return parse(configFile, readText(configFile));
     }
 
     private static String readText(Path configFile) {

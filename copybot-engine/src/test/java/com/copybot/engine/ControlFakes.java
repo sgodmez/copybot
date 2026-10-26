@@ -144,11 +144,11 @@ final class ControlFakes {
 
     /** A configuration without plugins, every disk wide open. */
     static CopybotConfig config() {
-        return new CopybotConfig(null, null, Map.of("disk:*", 1000), null);
+        return new CopybotConfig(Map.of("disk:*", 1000), null);
     }
 
     static ResourceRegistry registry(Map<String, Integer> capacities) {
-        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null, capacities, null)));
+        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(capacities, null)));
     }
 
     static PipelineStepConfig emptyConfig() {

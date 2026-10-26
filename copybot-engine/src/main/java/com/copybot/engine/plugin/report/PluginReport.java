@@ -9,13 +9,12 @@ import java.util.List;
  * The plugins of this JVM as they were loaded, for diagnosis (spec plugins-view §1).
  *
  * @param configFile           the configuration file read at startup
- * @param pluginPath           the plugin directory of the load, absolute
- * @param pluginPathConfigured false when the configuration declares none (default ./plugins)
- * @param devPluginPaths       the configured development directories, absolute, existing or not
+ * @param pluginPath           the plugins folder of the app folder, absolute
+ * @param devPluginPaths       the development directories (copybot.devPluginPaths), absolute, existing or not
  * @param warnings             translated header warnings (a directory that does not exist)
  * @param plugins              errors first, then actions failed, ignored, loaded; then by name, most recent first
  */
-public record PluginReport(Path configFile, Path pluginPath, boolean pluginPathConfigured, List<Path> devPluginPaths,
+public record PluginReport(Path configFile, Path pluginPath, List<Path> devPluginPaths,
                            List<String> warnings, List<PluginEntry> plugins) {
 
     public PluginReport {
@@ -29,7 +28,7 @@ public record PluginReport(Path configFile, Path pluginPath, boolean pluginPathC
         StringBuilder out = new StringBuilder();
         String nl = System.lineSeparator();
         out.append(ResourcesEngine.getString("plugin.report.text.config", configFile)).append(nl);
-        out.append(ResourcesEngine.getString(pluginPathConfigured ? "plugin.report.text.plugin-path" : "plugin.report.text.plugin-path-default", pluginPath)).append(nl);
+        out.append(ResourcesEngine.getString("plugin.report.text.plugin-path", pluginPath)).append(nl);
         for (Path dev : devPluginPaths) {
             out.append(ResourcesEngine.getString("plugin.report.text.dev-path", dev)).append(nl);
         }

@@ -1,5 +1,6 @@
 package com.copybot.ui;
 
+import com.copybot.config.AppFolders;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.util.AppLogging;
@@ -48,16 +49,18 @@ public class CopybotMainUi extends Application {
 
     @Override
     public void start(Stage stage) {
-        AppLogging.install();
         HOST_SERVICES = getHostServices();
         var params = getParameters();
         Optional<Path> pathArg = Optional.ofNullable(params.getNamed().get("config-file")).map(Path::of);
 
         try {
+            AppFolders folders = AppFolders.resolve(pathArg);
+            AppLogging.install(folders.logsDir());
+            UiPreferences.use(folders.prefsFile());
             ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
             ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
             UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
-            ENGINE = CopybotEngine.create(pathArg);
+            ENGINE = CopybotEngine.create(folders);
         } catch (Exception e) {
             PopinUtil.showError(e);
             System.exit(1);

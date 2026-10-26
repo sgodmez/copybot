@@ -1,33 +1,62 @@
 package com.copybot.ui.util;
 
 import com.copybot.ui.model.RecentPipelines;
+import com.copybot.utils.AtomicFiles;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParseException;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.function.Consumer;
-import java.util.prefs.Preferences;
 
-/** User preferences persisted between launches (backed by the OS user store, e.g. the registry on Windows). */
+/**
+ * User preferences persisted between launches, as a flat JSON object in the prefs.json of the data folder
+ * ({@code {"language": "fr", "resourcesLayout": "SIDE_PANEL", "recentPipelines": {...}}}); a missing key is the
+ * default. Until {@link #use(Path)} is called (the tests) the preferences stay in memory and nothing is written.
+ */
 public final class UiPreferences {
 
+    private static final System.Logger LOG = System.getLogger(UiPreferences.class.getName());
+
     private static final String LANGUAGE_KEY = "language";
+    private static final String RESOURCES_LAYOUT_KEY = "resourcesLayout";
     static final String RECENTS_KEY = "recentPipelines";
+
+    /** The prefs.json in use; null until {@link #use(Path)}. */
+    private static volatile Path file;
+    /** What is kept while there is no file. */
+    private static JsonObject memory = new JsonObject();
 
     private UiPreferences() {
     }
 
-    /** The real user node, resolved on first use only (tests inject their own node and never reach it). */
-    private static final class Real {
-        private static final Preferences NODE = Preferences.userNodeForPackage(UiPreferences.class);
+    /** Stores the preferences in that file from now on; called once, at startup. */
+    public static void use(Path prefsFile) {
+        file = prefsFile;
+        resourcesLayout = null;
     }
 
     public static Optional<Locale> savedLanguage() {
-        String tag = Real.NODE.get(LANGUAGE_KEY, null);
-        return tag == null ? Optional.empty() : Optional.of(Locale.forLanguageTag(tag));
+        return savedLanguage(file);
     }
 
     public static void saveLanguage(Locale locale) {
-        Real.NODE.put(LANGUAGE_KEY, locale.toLanguageTag());
+        saveLanguage(file, locale);
+    }
+
+    static Optional<Locale> savedLanguage(Path prefsFile) {
+        return string(read(prefsFile), LANGUAGE_KEY).map(Locale::forLanguageTag);
+    }
+
+    static void saveLanguage(Path prefsFile, Locale locale) {
+        write(prefsFile, LANGUAGE_KEY, new JsonPrimitive(locale.toLanguageTag()));
     }
 
     /** Where the plan view shows the resources while a plan runs. */
@@ -38,55 +67,116 @@ public final class UiPreferences {
         SIDE_PANEL
     }
 
-    private static final String RESOURCES_LAYOUT_KEY = "resourcesLayout";
-    /** Read every second by the plan view: kept here rather than read from the OS store each time. */
+    /** Read every second by the plan view: kept here rather than read from the file each time. */
     private static volatile ResourcesLayout resourcesLayout;
 
     public static ResourcesLayout resourcesLayout() {
         ResourcesLayout layout = resourcesLayout;
         if (layout == null) {
-            layout = resourcesLayout(Real.NODE);
+            layout = resourcesLayout(file);
             resourcesLayout = layout;
         }
         return layout;
     }
 
     public static void saveResourcesLayout(ResourcesLayout layout) {
-        Real.NODE.put(RESOURCES_LAYOUT_KEY, layout.name());
+        saveResourcesLayout(file, layout);
         resourcesLayout = layout;
     }
 
-    static ResourcesLayout resourcesLayout(Preferences node) {
+    static ResourcesLayout resourcesLayout(Path prefsFile) {
         try {
-            return ResourcesLayout.valueOf(node.get(RESOURCES_LAYOUT_KEY, ResourcesLayout.PROGRESS_LINE.name()));
+            return string(read(prefsFile), RESOURCES_LAYOUT_KEY).map(ResourcesLayout::valueOf)
+                    .orElse(ResourcesLayout.PROGRESS_LINE);
         } catch (IllegalArgumentException e) {
             return ResourcesLayout.PROGRESS_LINE; // a value of another version
         }
     }
 
+    static void saveResourcesLayout(Path prefsFile, ResourcesLayout layout) {
+        write(prefsFile, RESOURCES_LAYOUT_KEY, new JsonPrimitive(layout.name()));
+    }
+
     /** The recent pipelines and their last run (spec desktop-ui section 6); empty when none or unreadable. */
     public static RecentPipelines recents() {
-        return recents(Real.NODE);
+        return recents(file);
     }
 
     /**
      * Reads the recent pipelines, applies the change and saves them (the oldest dropped if too long).
      *
-     * @return what was persisted (without the entries dropped to fit)
+     * @return what was persisted
      */
     public static RecentPipelines updateRecents(Consumer<RecentPipelines> change) {
-        return updateRecents(Real.NODE, change);
+        return updateRecents(file, change);
     }
 
-    static RecentPipelines recents(Preferences node) {
-        return RecentPipelines.fromJson(node.get(RECENTS_KEY, null));
+    static RecentPipelines recents(Path prefsFile) {
+        JsonElement value = read(prefsFile).get(RECENTS_KEY);
+        return RecentPipelines.fromJson(value == null ? null : value.toString());
     }
 
-    static RecentPipelines updateRecents(Preferences node, Consumer<RecentPipelines> change) {
-        RecentPipelines recents = recents(node);
+    static RecentPipelines updateRecents(Path prefsFile, Consumer<RecentPipelines> change) {
+        RecentPipelines recents = recents(prefsFile);
         change.accept(recents);
-        String json = recents.toJsonWithin(Preferences.MAX_VALUE_LENGTH);
-        node.put(RECENTS_KEY, json);
+        String json = recents.toJson();
+        write(prefsFile, RECENTS_KEY, JsonParser.parseString(json));
         return RecentPipelines.fromJson(json);
+    }
+
+    private static Optional<String> string(JsonObject preferences, String key) {
+        JsonElement value = preferences.get(key);
+        return value != null && value.isJsonPrimitive() ? Optional.of(value.getAsString()) : Optional.empty();
+    }
+
+    /** The preferences of the file; empty when it is missing or invalid (the invalid one is logged, never touched). */
+    private static synchronized JsonObject read(Path prefsFile) {
+        JsonObject preferences = load(prefsFile);
+        return preferences == null ? new JsonObject() : preferences;
+    }
+
+    /** Like {@link #read(Path)}, but null when the file exists and cannot be read (an I/O failure, not a parse error). */
+    private static JsonObject load(Path prefsFile) {
+        if (prefsFile == null) {
+            return memory.deepCopy();
+        }
+        try {
+            JsonElement parsed = JsonParser.parseString(Files.readString(prefsFile));
+            if (parsed.isJsonObject()) {
+                return parsed.getAsJsonObject();
+            }
+            LOG.log(System.Logger.Level.WARNING, "preferences ignored, not a JSON object: " + prefsFile);
+        } catch (NoSuchFileException e) {
+            // the first launch: the defaults
+        } catch (JsonParseException e) {
+            LOG.log(System.Logger.Level.WARNING, "preferences ignored, unreadable: " + prefsFile, e);
+        } catch (IOException e) {
+            LOG.log(System.Logger.Level.WARNING, "preferences ignored, unreadable: " + prefsFile, e);
+            return null;
+        }
+        return new JsonObject();
+    }
+
+    /**
+     * Reads the file again, changes the key and writes everything: what another writer changed meanwhile is kept.
+     * A file that cannot be read is left alone, a save would drop the other preferences.
+     */
+    private static synchronized void write(Path prefsFile, String key, JsonElement value) {
+        JsonObject preferences = load(prefsFile);
+        if (preferences == null) {
+            LOG.log(System.Logger.Level.WARNING, "preferences not saved, the file cannot be read: " + prefsFile);
+            return;
+        }
+        preferences.add(key, value);
+        if (prefsFile == null) {
+            memory = preferences;
+            return;
+        }
+        try {
+            Files.createDirectories(prefsFile.toAbsolutePath().getParent());
+            AtomicFiles.write(prefsFile, preferences.toString());
+        } catch (IOException | RuntimeException e) {
+            LOG.log(System.Logger.Level.WARNING, "preferences not saved in " + prefsFile, e);
+        }
     }
 }

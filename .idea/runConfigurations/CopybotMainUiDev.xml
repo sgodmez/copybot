@@ -3,7 +3,7 @@
     <option name="MAIN_CLASS_NAME" value="com.copybot.ui.CopybotMainUi" />
     <option name="PROGRAM_PARAMETERS" value="--config-file=./copybot-ui/src/dev/config.json" />
     <module name="copybot-ui" />
-    <option name="VM_PARAMETERS" value="--enable-native-access=com.copybot.engine,javafx.graphics" />
+    <option name="VM_PARAMETERS" value="--enable-native-access=com.copybot.engine,javafx.graphics -Dcopybot.devPluginPaths=copybot-plugin/copybot-plugin-metadata-extractor/target;copybot-plugin/copybot-plugin-gps-zone/target" />
     <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
     <extension name="coverage">
       <pattern>

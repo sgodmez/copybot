@@ -96,7 +96,7 @@ public class MainExecutorResumeTest {
     }
 
     static ResourceRegistry registry() {
-        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null, Map.of("disk:*", 1000), null)));
+        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(Map.of("disk:*", 1000), null)));
     }
 
     private ResumeStateStore store() {
@@ -767,7 +767,7 @@ public class MainExecutorResumeTest {
         MainExecutor exec = executor(2, new RecordingAnalyze(), new RecordingOut(null), ResumeMode.STATE);
         exec.prepare();
 
-        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null, Map.of(), null))) {
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(Map.of(), null))) {
             IllegalStateException refused = assertThrows(IllegalStateException.class, () -> engine.execute(new Plan(exec), null));
             assertFalse(refused.getMessage().startsWith("%"), "a message read from the bundles: " + refused.getMessage());
             assertEquals(ResourcesEngine.getString("engine.not-prepared", PipelineStatus.ERROR), refused.getMessage());

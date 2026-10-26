@@ -1,8 +1,6 @@
 package com.copybot.ui.util;
 
-import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.ui.model.RecentPipelines;
-import com.copybot.ui.model.RecentPipelines.LastRun;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,11 +9,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
-import java.util.prefs.Preferences;
+import java.util.Locale;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The recents preference, on an in-memory node: the user's real preferences are never touched. */
+/** The preferences in a prefs.json of a temporary folder: the user's real preferences are never touched. */
 public class UiPreferencesTest {
 
     @TempDir
@@ -24,66 +23,84 @@ public class UiPreferencesTest {
     private static final Instant T0 = Instant.parse("2026-09-28T17:42:00Z");
 
     @Test
-    public void theTestsNeverReachTheRealUserRoot() {
-        // surefire installs GuardedPreferencesFactory: any Preferences.userRoot()/userNodeForPackage fails there
-        assertEquals(GuardedPreferencesFactory.class.getName(), System.getProperty("java.util.prefs.PreferencesFactory"));
-        AssertionError reached = assertThrows(AssertionError.class, Preferences::userRoot);
-        assertTrue(reached.getMessage().contains("real user preferences"), reached.getMessage());
-        assertThrows(AssertionError.class, Preferences::systemRoot);
-    }
-
-    @Test
-    public void updateSavesAndReadsBack() throws IOException {
-        Preferences node = new MemoryPreferences();
+    public void theRecentPipelinesSurviveARestart() throws IOException {
+        Path file = tempDir.resolve("data").resolve("prefs.json");
         Path a = Files.writeString(tempDir.resolve("a.json"), "{}");
 
-        RecentPipelines saved = UiPreferences.updateRecents(node, r -> r.touch(a, T0));
+        RecentPipelines saved = UiPreferences.updateRecents(file, r -> r.touch(a, T0));
 
         assertEquals(1, saved.entries().size());
-        assertEquals(saved.entries(), UiPreferences.recents(node).entries());
+        assertEquals(saved.entries(), UiPreferences.recents(file).entries());
     }
 
     @Test
-    public void anEmptyOrGarbledNodeGivesNoRecents() {
-        Preferences node = new MemoryPreferences();
-        assertEquals(List.of(), UiPreferences.recents(node).entries());
+    public void aMissingPrefsFileGivesTheDefaults() {
+        Path file = tempDir.resolve("prefs.json");
 
-        node.put(UiPreferences.RECENTS_KEY, "garbage {");
-        assertEquals(List.of(), UiPreferences.recents(node).entries());
+        assertEquals(Optional.empty(), UiPreferences.savedLanguage(file));
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(file));
+        assertEquals(List.of(), UiPreferences.recents(file).entries());
+        assertFalse(Files.exists(file), "reading never creates the file");
     }
 
     @Test
-    public void theSavedValueFitsThePreferenceLimit() throws IOException {
-        Preferences node = new MemoryPreferences();
-        String longName = "x".repeat(1000); // ten entries of more than 1000 characters: beyond the limit
-        RecentPipelines saved = UiPreferences.updateRecents(node, r -> {
-            for (int i = 0; i < RecentPipelines.MAX; i++) {
+    public void aCorruptPrefsFileGivesTheDefaults() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("prefs.json"), "garbage {");
+
+        assertEquals(Optional.empty(), UiPreferences.savedLanguage(file));
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(file));
+        assertEquals(List.of(), UiPreferences.recents(file).entries());
+        assertEquals("garbage {", Files.readString(file), "reading leaves the file as it is");
+    }
+
+    @Test
+    public void aFileThatCannotBeReadIsNeverReplacedByASave() throws IOException {
+        // a directory at that path: reading fails on I/O, not as a missing file nor as a parse error
+        Path file = Files.createDirectory(tempDir.resolve("prefs.json"));
+
+        UiPreferences.saveLanguage(file, Locale.FRENCH);
+
+        assertTrue(Files.isDirectory(file), "the save did not replace what it could not read");
+        assertEquals(Optional.empty(), UiPreferences.savedLanguage(file));
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(file));
+    }
+
+    @Test
+    public void savingOnePreferenceKeepsTheOthers() throws IOException {
+        Path file = tempDir.resolve("prefs.json");
+        UiPreferences.saveLanguage(file, Locale.FRENCH);
+        UiPreferences.saveResourcesLayout(file, UiPreferences.ResourcesLayout.SIDE_PANEL);
+
+        assertEquals(Optional.of(Locale.FRENCH), UiPreferences.savedLanguage(file));
+        assertEquals(UiPreferences.ResourcesLayout.SIDE_PANEL, UiPreferences.resourcesLayout(file));
+
+        // another writer changes the language by hand: the next save keeps that change
+        Files.writeString(file, Files.readString(file).replace("\"fr\"", "\"it\""));
+        UiPreferences.saveResourcesLayout(file, UiPreferences.ResourcesLayout.PROGRESS_LINE);
+
+        assertEquals(Optional.of(Locale.ITALIAN), UiPreferences.savedLanguage(file));
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(file));
+    }
+
+    @Test
+    public void anUnknownLayoutGivesTheDefault() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("prefs.json"), "{\"resourcesLayout\": \"OLD\"}");
+
+        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(file));
+    }
+
+    @Test
+    public void theRecentsKeepTheMaximumWithoutASizeLimit() {
+        Path file = tempDir.resolve("prefs.json");
+        String longName = "x".repeat(1000);
+
+        RecentPipelines saved = UiPreferences.updateRecents(file, r -> {
+            for (int i = 0; i < RecentPipelines.MAX + 2; i++) {
                 r.touch(tempDir.resolve(longName + i + ".json"), T0.plusSeconds(i));
-                r.recordRun(tempDir.resolve(longName + i + ".json"), new LastRun(T0, PipelineStatus.SUCCESS, 1, 2, 3));
             }
         });
 
-        String value = node.get(UiPreferences.RECENTS_KEY, null);
-        assertNotNull(value);
-        assertTrue(value.length() <= Preferences.MAX_VALUE_LENGTH);
-        int kept = saved.entries().size();
-        assertTrue(kept > 0 && kept < RecentPipelines.MAX, "the cut is forced: " + kept);
-        assertEquals(UiPreferences.recents(node).entries(), saved.entries(), "the result is what was persisted");
-        for (int i = 0; i < kept; i++) {
-            assertEquals(longName + (RecentPipelines.MAX - 1 - i), saved.entries().get(i).displayName(),
-                    "the most recent are kept, in order");
-        }
-    }
-
-    @Test
-    public void theResourcesAreOnTheProgressLineUnlessChosenOtherwise() {
-        Preferences node = new MemoryPreferences();
-        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(node));
-
-        node.put("resourcesLayout", "SIDE_PANEL");
-        assertEquals(UiPreferences.ResourcesLayout.SIDE_PANEL, UiPreferences.resourcesLayout(node));
-
-        node.put("resourcesLayout", "FLOATING"); // written by another version
-        assertEquals(UiPreferences.ResourcesLayout.PROGRESS_LINE, UiPreferences.resourcesLayout(node));
+        assertEquals(RecentPipelines.MAX, saved.entries().size());
+        assertEquals(saved.entries(), UiPreferences.recents(file).entries());
     }
 }

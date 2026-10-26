@@ -1,6 +1,5 @@
 package com.copybot.ui;
 
-import com.copybot.config.ConfigFiles;
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.util.AppInfo;
@@ -24,7 +23,6 @@ import javafx.stage.Stage;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Locale;
-import java.util.Optional;
 
 /** The main window: the menu, and the home screen or the plan view of one pipeline in the center. */
 public class MainController {
@@ -136,42 +134,26 @@ public class MainController {
         }
     }
 
-    /** What the plugins window shows. */
-    private record PluginsInfo(PluginReport report, Optional<Path> next) {
-    }
-
-    /** Opens the plugins window, or refreshes it when open (the folder may have changed in the preferences). */
+    /** Opens the plugins window, or refreshes it when open. */
     @FXML
     protected void onPluginsClick() {
         if (pluginsWindow != null && pluginsWindow.isShowing()) {
             pluginsWindow.toFront();
         }
-        // the report checks directories and the configuration file is read: off the JavaFX thread
-        Background.run(() -> new PluginsInfo(CopybotMainUi.ENGINE.pluginReport(), nextPluginPath()),
-                info -> showPlugins(info.report(), info.next()),
+        // the report checks directories: off the JavaFX thread
+        Background.run(CopybotMainUi.ENGINE::pluginReport,
+                this::showPlugins,
                 PopinUtil::showError); // an Error too: the click must not be lost silently
     }
 
-    /** The directory the next start would load, empty when the configuration file cannot be read now. */
-    private static Optional<Path> nextPluginPath() {
-        try {
-            // a relative path (and the default ./plugins) resolves against the working directory
-            return Optional.of(ConfigFiles.readPluginPath(CopybotMainUi.ENGINE.configFile())
-                    .map(p -> p.toAbsolutePath().normalize())
-                    .orElse(Path.of("plugins").toAbsolutePath().normalize()));
-        } catch (RuntimeException e) {
-            return Optional.empty(); // the file changed under us since startup: unknown, no banner
-        }
-    }
-
-    private void showPlugins(PluginReport report, Optional<Path> next) {
+    private void showPlugins(PluginReport report) {
         if (pluginsWindow != null && pluginsWindow.isShowing()) {
-            pluginsController.init(report, next);
+            pluginsController.init(report);
             return;
         }
         try {
             Views.Loaded<PluginsController> plugins = Views.load("plugins-view.fxml");
-            plugins.controller().init(report, next);
+            plugins.controller().init(report);
             Stage window = new Stage();
             window.setTitle(ResourcesEngine.getString("plugins.title"));
             window.getIcons().setAll(CopybotMainUi.STAGE.getIcons());

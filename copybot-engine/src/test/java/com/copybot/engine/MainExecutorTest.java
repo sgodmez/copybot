@@ -94,7 +94,7 @@ public class MainExecutorTest {
     }
 
     static ResourceRegistry registry(Map<String, Integer> capacities) {
-        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null, capacities, null)));
+        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(capacities, null)));
     }
 
     static MainExecutor executor(List<PipelineStep<IInAction>> inSteps, List<PipelineStep<?>> itemSteps,

@@ -94,17 +94,13 @@ public class PluginsController {
         pluginList.getSelectionModel().selectedItemProperty().addListener((obs, old, entry) -> showDetail(entry));
     }
 
-    /** @param nextPluginPath the absolute, normalized directory the next start would load, empty when unknown (no restart banner) */
-    public void init(PluginReport report, Optional<Path> nextPluginPath) {
+    public void init(PluginReport report) {
         this.report = report;
         configFileLabel.setText(report.configFile().toString());
-        pluginPathLabel.setText(report.pluginPath() + (report.pluginPathConfigured() ? "" : " " + ResourcesEngine.getString("plugins.default")));
+        pluginPathLabel.setText(report.pluginPath().toString());
         warningsBox.getChildren().clear();
         for (String warning : report.warnings()) {
             warningsBox.getChildren().add(banner(warning, "#fff3e0", "#e65100"));
-        }
-        if (nextPluginPath.isPresent() && !nextPluginPath.get().equals(report.pluginPath())) {
-            warningsBox.getChildren().add(banner(ResourcesEngine.getString("plugins.restart-needed", nextPluginPath.get()), "#e3f2fd", "#0d47a1"));
         }
         PluginEntry selected = pluginList.getSelectionModel().getSelectedItem(); // a refresh keeps the selection
         pluginList.getItems().setAll(report.plugins());

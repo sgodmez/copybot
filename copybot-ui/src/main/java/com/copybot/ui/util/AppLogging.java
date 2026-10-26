@@ -12,7 +12,7 @@ import java.util.logging.SimpleFormatter;
 
 /**
  * The log of the application: System.Logger writes through java.util.logging, which here also writes to a rotating
- * file in the user's folder (the packaged application has no console). The uncaught failures are logged, and shown
+ * file in the logs folder of the data folder (the packaged application has no console). The uncaught failures are logged, and shown
  * when they happen on the JavaFX thread.
  */
 public final class AppLogging {
@@ -26,23 +26,12 @@ public final class AppLogging {
     private AppLogging() {
     }
 
-    /** {@code %LOCALAPPDATA%\Copybot\logs} on Windows, {@code ~/.copybot/logs} elsewhere. */
-    public static Path logDirectory() {
-        return logDirectory(System.getenv("LOCALAPPDATA"), System.getProperty("user.home"));
-    }
-
-    static Path logDirectory(String localAppData, String userHome) {
-        return localAppData != null && !localAppData.isBlank()
-                ? Path.of(localAppData, "Copybot", "logs")
-                : Path.of(userHome, ".copybot", "logs");
-    }
-
     /**
-     * Adds the log file (copybot0.log, the most recent) to the root logger and handles the uncaught failures of
-     * every thread; call it once, on the JavaFX thread. A folder that cannot be written leaves the console only.
+     * Adds the log file (copybot0.log, the most recent) in the folder to the root logger and handles the uncaught
+     * failures of every thread; call it once, on the JavaFX thread. A folder that cannot be written leaves the
+     * console only.
      */
-    public static void install() {
-        Path directory = logDirectory();
+    public static void install(Path directory) {
         try {
             Files.createDirectories(directory);
             FileHandler file = new FileHandler(directory.resolve("copybot%g.log").toString(), FILE_LIMIT, FILE_COUNT, true);

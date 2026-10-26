@@ -35,7 +35,7 @@ public class ResourceSettingsTest {
 
     @Test
     public void exactCapacityWinsOverPrefix() {
-        CopybotConfig config = new CopybotConfig(null, null,
+        CopybotConfig config = new CopybotConfig(
                 Map.of("disk:*", 4, "disk:C:\\", 1), null);
         ResourceSettings settings = ResourceSettings.from(config, ResourceSettings.Disks.AS_WRITTEN);
         assertEquals(1, settings.capacityFor("disk:C:\\"));
@@ -53,7 +53,7 @@ public class ResourceSettingsTest {
 
     @Test
     public void groupMembersShareOneCanonicalName() {
-        CopybotConfig config = new CopybotConfig(null, null, null,
+        CopybotConfig config = new CopybotConfig(null,
                 List.of(List.of("disk:D:\\", "disk:E:\\")));
         ResourceSettings settings = ResourceSettings.from(config, ResourceSettings.Disks.AS_WRITTEN);
         assertEquals("disk:D:\\", settings.canonical("disk:D:\\"));
@@ -74,21 +74,21 @@ public class ResourceSettingsTest {
 
     @Test
     public void aCapacityGivenToAVolumeAppliesToItsDisk() {
-        CopybotConfig config = new CopybotConfig(null, null, Map.of("disk:D:\\", 3), null);
+        CopybotConfig config = new CopybotConfig(Map.of("disk:D:\\", 3), null);
         ResourceSettings settings = ResourceSettings.from(config, TWO_VOLUMES_ONE_DISK);
         assertEquals(3, settings.capacityFor("disk:PhysicalDrive1"));
     }
 
     @Test
     public void twoVolumesOfOneDiskKeepTheSmallerCapacity() {
-        CopybotConfig config = new CopybotConfig(null, null, Map.of("disk:D:\\", 3, "disk:E:\\", 1), null);
+        CopybotConfig config = new CopybotConfig(Map.of("disk:D:\\", 3, "disk:E:\\", 1), null);
         ResourceSettings settings = ResourceSettings.from(config, TWO_VOLUMES_ONE_DISK);
         assertEquals(1, settings.capacityFor("disk:PhysicalDrive1"));
     }
 
     @Test
     public void aGroupOfVolumesJoinsTheirDisks() {
-        CopybotConfig config = new CopybotConfig(null, null, null,
+        CopybotConfig config = new CopybotConfig(null,
                 List.of(List.of("disk:D:\\", "disk:F:\\")));
         ResourceSettings settings = ResourceSettings.from(config, TWO_VOLUMES_ONE_DISK);
         assertEquals("disk:PhysicalDrive1", settings.canonical("disk:PhysicalDrive2"));
@@ -107,7 +107,7 @@ public class ResourceSettingsTest {
 
     @Test
     public void aConfiguredPrefixWinsOverTheKind() {
-        CopybotConfig config = new CopybotConfig(null, null, Map.of("disk:*", 1), null);
+        CopybotConfig config = new CopybotConfig(Map.of("disk:*", 1), null);
         ResourceSettings settings = ResourceSettings.from(config, TWO_VOLUMES_ONE_DISK);
         assertEquals(1, settings.capacityFor("disk:PhysicalDrive1"));
     }

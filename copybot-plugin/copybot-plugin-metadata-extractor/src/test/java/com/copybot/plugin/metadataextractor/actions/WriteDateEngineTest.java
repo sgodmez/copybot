@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 /**
  * write-date through the engine (spec exif-date-rewrite §5): a real pipeline (file.read, extract, write-date,
  * file.write) whose plan is prepared, corrected to another time zone, analysed again, then executed. The plugin is
- * loaded by the engine as in a run, from this module's build directory (devPluginPaths).
+ * loaded by the engine as in a run, from this module's build directory (the copybot.devPluginPaths property).
  */
 public class WriteDateEngineTest {
 
@@ -69,8 +69,9 @@ public class WriteDateEngineTest {
         Path nas = tempDir.resolve("nas");
         // shot at 01:30 on the 25th at +02:00 (the camera clock): 17:30 on the 24th in Mexico
         Path source = Files.write(card.resolve("DSC00001.JPG"), jpegWithDateOriginal("2026:10:25 01:30:00", "+02:00"));
-        Path config = Files.writeString(tempDir.resolve("config.json"),
-                "{ \"devPluginPaths\": \"" + json(devPlugin()) + "\" }");
+        Path config = Files.writeString(tempDir.resolve("config.json"), "{}");
+        // before the first engine of the JVM: the plugins load once
+        System.setProperty("copybot.devPluginPaths", devPlugin().toString());
         Path pipeline = Files.writeString(tempDir.resolve("photos.json"), """
                 {
                   "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],

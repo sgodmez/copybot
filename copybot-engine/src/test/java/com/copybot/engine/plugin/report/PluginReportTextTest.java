@@ -21,7 +21,7 @@ public class PluginReportTextTest {
                 List.of(new ActionEntry(StepType.ANALYZE, "scan", "Scan")));
         PluginEntry ko = new PluginEntry("broken", null, PluginSource.PLUGIN_PATH, Path.of("/plugins/broken").toAbsolutePath(),
                 PluginStatus.ERROR, "Missing dependencies: x:1", List.of(), List.of(), List.of("x:1"), List.of());
-        PluginReport report = new PluginReport(config, Path.of("/plugins").toAbsolutePath(), false,
+        PluginReport report = new PluginReport(config, Path.of("/plugins").toAbsolutePath(),
                 List.of(Path.of("/dev/ok").toAbsolutePath()), List.of("a warning"), List.of(ko, ok));
 
         String text = report.toText();

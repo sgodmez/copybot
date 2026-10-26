@@ -43,7 +43,7 @@ public class PluginReportsTest {
         Path pluginPath = Files.createDirectories(tempDir.resolve("plugins"));
         TestPluginJar.plugin("fixture.alpha").version("1.0.0").writeTo(pluginPath.resolve("alpha"));
 
-        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, true, List.of(), load(pluginPath, List.of()));
+        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, List.of(), load(pluginPath, List.of()));
 
         PluginEntry alpha = entry(report, "fixture.alpha");
         assertEquals(PluginStatus.LOADED, alpha.status());
@@ -63,7 +63,7 @@ public class PluginReportsTest {
         TestPluginJar.plugin("fixture.mute").version("1.0.0").failingActions().writeTo(pluginPath.resolve("d-noactions"));
         Files.createDirectories(pluginPath.resolve("e-empty")); // no module: ERROR
 
-        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, true, List.of(), load(pluginPath, List.of()));
+        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, List.of(), load(pluginPath, List.of()));
 
         assertEquals(PluginStatus.ERROR, entry(report, "e-empty").status());
         PluginEntry mute = entry(report, "fixture.mute");
@@ -83,11 +83,10 @@ public class PluginReportsTest {
         Path pluginPath = Files.createDirectories(tempDir.resolve("plugins"));
         Path dev = TestPluginJar.plugin("fixture.devplug").version("2.0.0").writeDevDir(tempDir.resolve("dev-target"));
 
-        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, false, List.of(dev), load(pluginPath, List.of(dev)));
+        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, List.of(dev), load(pluginPath, List.of(dev)));
 
         assertEquals(PluginSource.DEV, entry(report, "fixture.devplug").source());
         assertEquals(List.of(), report.warnings());
-        assertFalse(report.pluginPathConfigured());
     }
 
     @Test
@@ -95,7 +94,7 @@ public class PluginReportsTest {
         Path pluginPath = tempDir.resolve("no-plugins");
         Path dev = tempDir.resolve("no-dev");
 
-        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, true, List.of(dev), load(tempDir, List.of()));
+        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), pluginPath, List.of(dev), load(tempDir, List.of()));
 
         assertEquals(2, report.warnings().size(), report.warnings().toString());
         assertTrue(report.warnings().get(0).contains(pluginPath.toAbsolutePath().normalize().toString()));
@@ -105,7 +104,7 @@ public class PluginReportsTest {
 
     @Test
     public void theEmbeddedPluginIsInTheReport() {
-        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), tempDir, false, List.of(), load(tempDir, List.of()));
+        PluginReport report = PluginReports.of(tempDir.resolve("config.json"), tempDir, List.of(), load(tempDir, List.of()));
 
         PluginEntry embedded = report.plugins().stream().filter(p -> p.source() == PluginSource.EMBEDDED).findFirst().orElseThrow();
         assertEquals(PluginStatus.LOADED, embedded.status());

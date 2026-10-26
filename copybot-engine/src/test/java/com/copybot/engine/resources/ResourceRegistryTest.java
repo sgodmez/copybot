@@ -45,7 +45,7 @@ public class ResourceRegistryTest {
     }
 
     static ResourceRegistry registry(Map<String, Integer> capacities) {
-        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null, capacities, null)));
+        return new ResourceRegistry(ResourceSettings.from(new CopybotConfig(capacities, null)));
     }
 
     static void awaitTrue(BooleanSupplier condition) throws InterruptedException {
@@ -103,7 +103,7 @@ public class ResourceRegistryTest {
 
     @Test
     public void groupAliasCountsAsOneResource() throws Exception {
-        ResourceRegistry reg = new ResourceRegistry(ResourceSettings.from(new CopybotConfig(null, null,
+        ResourceRegistry reg = new ResourceRegistry(ResourceSettings.from(new CopybotConfig(
                 Map.of("disk:D", 1), java.util.List.of(java.util.List.of("disk:D", "disk:E")))));
         Acquirer onD = new Acquirer(reg, Set.of("disk:D"));
         assertTrue(onD.acquired.await(5, TimeUnit.SECONDS));
@@ -433,7 +433,7 @@ public class ResourceRegistryTest {
     public void thePauseDoesNotCountAsWaitingTimeForTheAntiStarvation() throws Exception {
         AtomicLong now = new AtomicLong(1_000_000);
         ResourceRegistry reg = new ResourceRegistry(
-                ResourceSettings.from(new CopybotConfig(null, null, Map.of("a", 1, "b", 1), null)), now::get);
+                ResourceSettings.from(new CopybotConfig(Map.of("a", 1, "b", 1), null)), now::get);
         Acquirer holderOfB = new Acquirer(reg, Set.of("b"));
         assertTrue(holderOfB.acquired.await(5, TimeUnit.SECONDS));
         Acquirer big = new Acquirer(reg, Set.of("a", "b")); // cannot fit while b is held
