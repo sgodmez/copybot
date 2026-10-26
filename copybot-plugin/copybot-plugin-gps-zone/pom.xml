@@ -33,6 +33,17 @@
             </exclusions>
         </dependency>
         <dependency>
+            <!--
+                timeshape logs through slf4j 1.7: this binding of the same version sends it to java.util.logging,
+                hence to the application's logs (without one, slf4j warns on the console and drops everything).
+                Inside the plugin only: the application does not provide slf4j to the plugins.
+            -->
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-jdk14</artifactId>
+            <version>1.7.30</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
             <version>${junit.version}</version>

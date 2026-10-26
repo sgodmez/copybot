@@ -17,6 +17,10 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.logging.Handler;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -64,8 +68,31 @@ public class GpsZonePluginIT {
         raw.put(WorkItemMetadata.GPS_VALID, true);
         raw.put(WorkItemMetadata.GPS_TIME, shot.toInstant().minus(Duration.ofMinutes(2)));
 
-        action.doAnalyze(photo);
+        List<LogRecord> logged = new CopyOnWriteArrayList<>();
+        Handler handler = new Handler() {
+            @Override
+            public void publish(LogRecord record) {
+                logged.add(record);
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        Logger timeshape = Logger.getLogger("net.iakovlev.timeshape");
+        timeshape.addHandler(handler);
+        try {
+            action.doAnalyze(photo);
+        } finally {
+            timeshape.removeHandler(handler);
+        }
 
         assertEquals(ZoneId.of("Europe/Paris"), raw.get(WorkItemMetadata.SUGGESTED_ZONE));
+        assertTrue(logged.stream().anyMatch(r -> r.getLoggerName().startsWith("net.iakovlev.timeshape")),
+                "timeshape logs through slf4j-jdk14 into java.util.logging, hence into the application's logs: " + logged);
     }
 }
