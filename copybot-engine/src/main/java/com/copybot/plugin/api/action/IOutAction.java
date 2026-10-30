@@ -56,4 +56,12 @@ public interface IOutAction extends IAction {
     default Optional<String> defaultOutPattern() {
         return Optional.empty();
     }
+
+    /**
+     * Whether {@link #write} writes the COPY companions of the item ({@link WorkItem#getCompanions()}) itself,
+     * after the main item and from its final target. False (the default): this action does not write companions.
+     */
+    default boolean writesCompanions() {
+        return false;
+    }
 }

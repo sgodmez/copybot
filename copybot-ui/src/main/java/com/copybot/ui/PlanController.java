@@ -60,6 +60,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 import java.util.function.Function;
@@ -96,12 +97,14 @@ public class PlanController implements PlanOperations.View {
     /** The files to copy whose target already exists (spec conflict-check §5). */
     @FXML private Label conflictLabel;
     @FXML private Label suggestionLabel;
+    @FXML private Label archivesLabel;
     @FXML private Hyperlink changeResumeLink;
     @FXML private ComboBox<Filter> filterCombo;
     @FXML private TableView<WorkItemExecution> itemsTable;
     @FXML private TableColumn<WorkItemExecution, String> nameColumn;
     @FXML private TableColumn<WorkItemExecution, WorkItemExecution> dateColumn;
     @FXML private TableColumn<WorkItemExecution, String> targetColumn;
+    @FXML private TableColumn<WorkItemExecution, WorkItemExecution> companionsColumn;
     @FXML private TableColumn<WorkItemExecution, WorkItemExecution> sizeColumn;
     @FXML private TableColumn<WorkItemExecution, String> statusColumn;
     @FXML private HBox progressBox;
@@ -204,6 +207,18 @@ public class PlanController implements PlanOperations.View {
                 setTooltip(marks.tooltip() == null ? null : new Tooltip(marks.tooltip()));
             }
         });
+        companionsColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
+        companionsColumn.setCellFactory(column -> new TableCell<>() {
+            @Override
+            protected void updateItem(WorkItemExecution item, boolean empty) {
+                super.updateItem(item, empty);
+                setText(empty || item == null ? null : PlanViewModel.companionsText(item));
+                String tooltip = empty || item == null ? null : PlanViewModel.companionsTooltip(item);
+                setTooltip(tooltip == null ? null : new Tooltip(tooltip));
+            }
+        });
+        companionsColumn.setComparator(Comparator.comparingInt(
+                (WorkItemExecution item) -> item.getWorkItem().getCompanions().size()));
         sizeColumn.setCellValueFactory(c -> new ReadOnlyObjectWrapper<>(c.getValue()));
         sizeColumn.setCellFactory(column -> textCell(PlanViewModel::sizeText));
         sizeColumn.setComparator(PlanViewModel.SIZE_ORDER);
@@ -989,6 +1004,9 @@ public class PlanController implements PlanOperations.View {
         Optional<String> suggestions = model.suggestionSummary();
         suggestionLabel.setText(suggestions.map(s -> "⚠ " + s).orElse(""));
         show(suggestionLabel, suggestions.isPresent());
+        Optional<String> archives = model.archivesText();
+        archivesLabel.setText(archives.orElse(""));
+        show(archivesLabel, archives.isPresent());
         List<Filter> filters = model.filters();
         if (!filters.equals(filterCombo.getItems())) {
             filterCombo.getItems().setAll(filters); // the GPS filter comes with the first flagged row

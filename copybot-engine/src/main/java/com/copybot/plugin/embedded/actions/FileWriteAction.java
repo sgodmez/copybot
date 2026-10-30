@@ -2,6 +2,7 @@ package com.copybot.plugin.embedded.actions;
 
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractActionWithConfig;
+import com.copybot.plugin.api.action.Companion;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.ItemProgress;
 import com.copybot.plugin.api.action.TargetCheck;
@@ -52,6 +53,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     private volatile FileWriteSettings settings;
     private volatile ConflictResolver conflicts;
     private volatile SafeFileWriter writer;
+    private volatile GroupWriter group;
 
     @Override
     protected Class<FileWriteConfig> getConfigClass() {
@@ -65,6 +67,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         FileWriteSettings loaded = FileWriteSettings.of(getConfig());
         conflicts = new ConflictResolver(loaded);
         writer = new SafeFileWriter(loaded); // knows deleteSource: forces the data to disk before closing
+        group = new GroupWriter(loaded, conflicts, writer);
         settings = loaded;
     }
 
@@ -83,6 +86,12 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     private OutPattern pattern(WorkItem item) {
         return item.getOutPattern().map(text -> ownPatterns.computeIfAbsent(text, OutPattern::parse))
                 .orElseGet(() -> settings.outPattern());
+    }
+
+    /** The COPY companions are written next to the main file (see {@link GroupWriter}). */
+    @Override
+    public boolean writesCompanions() {
+        return true;
     }
 
     @Override
@@ -178,7 +187,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     }
 
     /** The resolved target was taken (by another process) between its resolution and its write. */
-    private static final class TargetTaken extends IOException {
+    static final class TargetTaken extends IOException {
         TargetTaken(FileAlreadyExistsException cause) {
             super(cause);
         }
@@ -219,6 +228,10 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         }
         Path target = Path.of(resolution.text());
         try {
+            List<Companion> copies = GroupWriter.copies(workItem);
+            if (!copies.isEmpty()) {
+                return group.check(workItem, copies, target, compareContent);
+            }
             BasicFileAttributes existing;
             try {
                 existing = Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
@@ -228,14 +241,14 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             if (ConflictResolver.isSource(workItem, target)) {
                 return new TargetCheck(Kind.IDENTICAL, target, ResourcesEngine.getString("write.check.same-file"), true);
             }
-            return compareContent ? fullCheck(workItem, target, existing) : quickCheck(workItem, target, existing);
+            return compareContent ? fullCheck(workItem, target, existing) : quickCheck(settings, workItem, target, existing);
         } catch (IOException | RuntimeException e) {
             return TargetCheck.UNKNOWN; // the copy meets it again, and reports it
         }
     }
 
-    private TargetCheck quickCheck(WorkItem workItem, Path target, BasicFileAttributes existing) throws IOException {
-        FileWriteSettings current = settings;
+    static TargetCheck quickCheck(FileWriteSettings current, WorkItem workItem, Path target, BasicFileAttributes existing)
+            throws IOException {
         if (!existing.isDirectory() && existing.size() == FileComparison.sourceSize(workItem)) {
             return new TargetCheck(Kind.SAME_SIZE, target, ResourcesEngine.getString("write.check.same-size",
                     target, current.compare().jsonName(), policyText(current.ifIdentical()), policyText(current.ifDifferent())));
@@ -266,7 +279,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
                 skipped);
     }
 
-    private static String policyText(FileWriteSettings.Policy policy) {
+    static String policyText(FileWriteSettings.Policy policy) {
         return ResourcesEngine.getString("write.check.policy." + policy.name());
     }
 
@@ -292,6 +305,10 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     }
 
     private WriteResult doWrite(WorkItem workItem, Path target, WriteContext context) throws IOException {
+        List<Companion> copies = GroupWriter.copies(workItem);
+        if (!copies.isEmpty()) {
+            return group.write(workItem, copies, target, context);
+        }
         ItemProgress progress = context.progress();
         progress.report(new WorkStatus("Copy file " + workItem.getSourceLocationDisplay(), -1));
 
@@ -300,7 +317,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             // only a full comparison proves the destination holds the whole content (spec safe-write §5);
             // a destination that is the source itself is the only copy: never deleted
             if (!decision.sameFile() && decision.identical() && settings.compare() == Compare.FULL_HASH) {
-                deleteSource(workItem, decision.target());
+                deleteSource(settings, workItem, decision.target());
             }
             return WriteResult.skipped(decision.target(), decision.skipReason());
         }
@@ -316,19 +333,32 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             throw e;
         }
         workItem.getMetadatas().raw().put(WorkItemMetadata.SHA256, written.sha256());
-        deleteSource(workItem, decision.target());
+        deleteSource(settings, workItem, decision.target());
         return WriteResult.written(decision.target());
     }
 
     /**
      * deleteSource: once written and verified, or already at the destination and compared with fullHash.
-     * Local sources only: a URL source (or its temporary copy) is kept, without error.
+     * A local source is deleted; another one through its source deleter (e.g. an entry of an archive); a URL
+     * source without deleter (or its temporary copy) is kept, without error.
      *
      * @throws CopybotException write.delete-source.failed
      */
-    private void deleteSource(WorkItem workItem, Path target) {
-        if (!settings.deleteSource() || workItem.isDeleted() || !workItem.isLocal()) {
-            return; // nothing asked, already gone, or not an original local file Copybot could delete
+    static void deleteSource(FileWriteSettings settings, WorkItem workItem, Path target) {
+        if (!settings.deleteSource() || workItem.isDeleted()) {
+            return; // nothing asked, or already gone
+        }
+        if (!workItem.isLocal()) {
+            if (workItem.getSourceDeleter().isPresent()) {
+                try {
+                    workItem.getSourceDeleter().get().delete();
+                } catch (IOException e) {
+                    throw CopybotException.ofResource(e, "write.delete-source.failed",
+                            workItem.getSourceLocationDisplay(), target);
+                }
+                workItem.setDeleted(true);
+            }
+            return; // without deleter: not an original source Copybot could delete
         }
         Path source = workItem.getLocalLocation();
         try {
@@ -344,7 +374,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
         }
     }
 
-    private static boolean isFile(FileAlreadyExistsException e, Path target) {
+    static boolean isFile(FileAlreadyExistsException e, Path target) {
         if (e.getFile() == null) {
             return false;
         }

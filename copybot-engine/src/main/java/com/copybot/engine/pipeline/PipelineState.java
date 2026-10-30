@@ -8,6 +8,8 @@ import com.copybot.engine.resume.ResumeProposal;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class PipelineState {
@@ -27,6 +29,11 @@ public class PipelineState {
     private volatile List<String> warnings = List.of();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private volatile boolean preparationFailed;
+
+    // written by listing threads, read by watchers/UI on other threads
+    private final AtomicInteger archivesUnfolded = new AtomicInteger();
+    private final AtomicInteger archivesToDownload = new AtomicInteger();
+    private final AtomicLong bytesToDownload = new AtomicLong();
 
     public PipelineState() {
         status = PipelineStatus.NEW;
@@ -137,5 +144,29 @@ public class PipelineState {
 
     public void setPreparationFailed(boolean preparationFailed) {
         this.preparationFailed = preparationFailed;
+    }
+
+    /** The archives unfolded at the listing so far (spec grouping/archives). */
+    public int getArchivesUnfolded() {
+        return archivesUnfolded.get();
+    }
+
+    public void addArchiveUnfolded() {
+        archivesUnfolded.incrementAndGet();
+    }
+
+    /** The archives that are not local files, copied locally to be unfolded ("archives to download: N, X GB"). */
+    public int getArchivesToDownload() {
+        return archivesToDownload.get();
+    }
+
+    /** The size of the {@link #getArchivesToDownload()} archives. */
+    public long getBytesToDownload() {
+        return bytesToDownload.get();
+    }
+
+    public void addArchiveToDownload(long bytes) {
+        archivesToDownload.incrementAndGet();
+        bytesToDownload.addAndGet(bytes);
     }
 }

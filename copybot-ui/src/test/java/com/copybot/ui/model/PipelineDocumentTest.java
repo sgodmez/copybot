@@ -166,6 +166,145 @@ public class PipelineDocumentTest {
         assertFalse(tree(document.toJson()).has("postProcess"), "no program removes the block");
     }
 
+    private static JsonObject rule(String json) {
+        return tree(json);
+    }
+
+    @Test
+    public void groupingRulesAreAddedRemovedAndMovedAndTheEmptyBlockGoes() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertEquals(List.of(), document.groupingRules());
+
+        document.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
+        document.addGroupingRule(rule("{\"type\":\"doubleExtension\",\"companions\":{\"xmp\":\"copy\"}}"));
+        document.addGroupingRule(rule("{\"preset\":\"takeout\"}"));
+        assertTrue(document.isModified());
+        assertEquals(3, document.groupingRules().size());
+
+        document.moveGroupingRule(2, 0);
+        assertEquals(List.of("takeout", "iphone"), document.groupingRules().stream()
+                .limit(2).map(r -> r.get("preset").getAsString()).toList());
+        document.moveGroupingRule(0, 9);
+        assertEquals("takeout", document.groupingRules().getFirst().get("preset").getAsString(), "out of range");
+
+        document.removeGroupingRule(0);
+        document.removeGroupingRule(1);
+        assertEquals(1, tree(document.toJson()).getAsJsonObject("grouping").getAsJsonArray("rules").size());
+        document.removeGroupingRule(0);
+        assertFalse(tree(document.toJson()).has("grouping"), "no rule removes the block");
+    }
+
+    @Test
+    public void archivesRoundTripAndTheBlockGoesWhenNotUnfolded() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        assertFalse(document.archives().isUnfold());
+
+        document.setArchives(new com.copybot.engine.pipeline.ArchivesConfig(true, true, false,
+                List.of("**/*.jpg", " "), null));
+        assertEquals(tree("{\"unfold\":true,\"nested\":true,\"mergeFolder\":false,\"include\":[\"**/*.jpg\"]}"),
+                tree(document.toJson()).getAsJsonObject("archives"));
+        com.copybot.engine.pipeline.ArchivesConfig read = PipelineDocument.parse(document.toJson()).archives();
+        assertTrue(read.isUnfold() && read.isNested() && !read.isMergeFolder());
+        assertEquals(List.of("**/*.jpg"), read.include());
+
+        document.setArchives(new com.copybot.engine.pipeline.ArchivesConfig(false, true, true, null, null));
+        assertFalse(tree(document.toJson()).has("archives"));
+    }
+
+    private static PipelineDocument withFileRead(String actionConfig, String... rules) {
+        PipelineDocument document = PipelineDocument.parse("{\"inSteps\":[{\"action\":\"file.read\","
+                + "\"actionConfig\":" + actionConfig + "}]}");
+        for (String rule : rules) {
+            document.addGroupingRule(rule(rule));
+        }
+        return document;
+    }
+
+    @Test
+    public void companionExtensionsLeftOutByFileReadAreFoundAndAllowed() {
+        PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\"]}",
+                "{\"type\":\"sameBase\",\"main\":[\"jpg\"],\"companions\":{\"xmp\":\"copy\"}}");
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
+
+        document.allowCompanionExtensions();
+        assertEquals("[\"*.jpg\",\"**/*.xmp\"]", tree(document.toJson()).getAsJsonArray("inSteps").get(0)
+                .getAsJsonObject().getAsJsonObject("actionConfig").get("include").toString());
+        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead());
+
+        PipelineDocument excluded = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"**/*.XMP\",\"*.tmp\"]}",
+                "{\"preset\":\"raw-jpeg-xmp\"}");
+        assertEquals(List.of("xmp"), excluded.companionExtensionsExcludedByFileRead());
+        excluded.allowCompanionExtensions();
+        assertEquals(List.of(), excluded.companionExtensionsExcludedByFileRead());
+        assertEquals("[\"*.tmp\"]", tree(excluded.toJson()).getAsJsonArray("inSteps").get(0).getAsJsonObject()
+                .getAsJsonObject("actionConfig").get("exclude").toString());
+
+        assertEquals(List.of(), withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"iphone\"}")
+                .companionExtensionsExcludedByFileRead(), "no filter: nothing left out");
+    }
+
+    private static String actionConfigMember(PipelineDocument document, String name) {
+        return String.valueOf(tree(document.toJson()).getAsJsonArray("inSteps").get(0).getAsJsonObject()
+                .getAsJsonObject("actionConfig").get(name));
+    }
+
+    private static final String XMP_RULE = "{\"type\":\"sameBase\",\"main\":[\"jpg\"],\"companions\":{\"xmp\":\"copy\"}}";
+
+    @Test
+    public void theAllowedExtensionGoesIntoFoldersToo() {
+        PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"**/*.jpg\"]}", XMP_RULE);
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
+        document.allowCompanionExtensions();
+        assertEquals("[\"**/*.jpg\",\"**/*.xmp\"]", actionConfigMember(document, "include"));
+        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead());
+
+        PipelineDocument shallow = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\",\"*.xmp\"]}", XMP_RULE);
+        assertEquals(List.of("xmp"), shallow.companionExtensionsExcludedByFileRead(),
+                "\"*.xmp\" does not match in sub-folders: the engine would drop them");
+
+        PipelineDocument noInclude = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"*.xmp\"]}", XMP_RULE);
+        noInclude.allowCompanionExtensions();
+        assertEquals("null", actionConfigMember(noInclude, "include"), "an empty include stays empty");
+        assertEquals("null", actionConfigMember(noInclude, "exclude"));
+    }
+
+    @Test
+    public void onlyTheExcludesOfExactlyTheExtensionAreRemoved() {
+        PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"*.XMP\",\"**/*.xmp\",\"*.tmp\","
+                + "\"folder/**\",\"*.{xmp,thm}\"]}", XMP_RULE);
+        document.allowCompanionExtensions();
+        assertEquals("[\"*.tmp\",\"folder/**\",\"*.{xmp,thm}\"]", actionConfigMember(document, "exclude"));
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(), "the warning stays");
+    }
+
+    @Test
+    public void anUnreadableRuleIsSkippedByTheWarnings() {
+        PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\"]}", XMP_RULE,
+                "{\"type\":\"sameBase\",\"companions\":[]}");
+        assertEquals(2, document.groupingRules().size());
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
+        assertFalse(document.folderRuleWithNonRecursiveFileRead());
+        assertFalse(document.streamingMayWaitForInputs());
+    }
+
+    @Test
+    public void theGroupingWarningsFollowTheInputsAndTheExecution() {
+        PipelineDocument folder = withFileRead("{\"path\":\"D:/p\",\"recursive\":false}", "{\"preset\":\"web-page\"}");
+        assertTrue(folder.folderRuleWithNonRecursiveFileRead());
+        assertFalse(withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"web-page\"}").folderRuleWithNonRecursiveFileRead());
+        assertFalse(withFileRead("{\"path\":\"D:/p\",\"recursive\":false}", "{\"preset\":\"iphone\"}")
+                .folderRuleWithNonRecursiveFileRead());
+
+        PipelineDocument plugin = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
+                + "{\"plugin\":\"com.x\",\"action\":\"ftp.read\",\"actionConfig\":{}}]}");
+        assertFalse(plugin.streamingMayWaitForInputs(), "no rule: nothing to wait for");
+        plugin.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
+        assertTrue(plugin.streamingMayWaitForInputs());
+        PipelineDocument builtIn = withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"iphone\"}");
+        builtIn.setExecutionMode(ExecutionMode.STREAMING);
+        assertFalse(builtIn.streamingMayWaitForInputs(), "file.read signals its folders");
+    }
+
     @Test
     public void theConflictCheckIsWrittenOnlyWhenNotQuick() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);

@@ -81,7 +81,7 @@ public class EditorController {
 
     private static final System.Logger LOG = System.getLogger(EditorController.class.getName());
 
-    enum Kind { PIPELINE, SECTION, STEP, POST_PROCESS }
+    enum Kind { PIPELINE, SECTION, STEP, POST_PROCESS, GROUPING, ARCHIVES }
 
     /** A node of the tree: the pipeline, a section, the step at index of a section, or the program launched after the copy. */
     record EditorNode(Kind kind, Section section, int index) {
@@ -89,6 +89,8 @@ public class EditorController {
 
     private static final EditorNode PIPELINE_NODE = new EditorNode(Kind.PIPELINE, null, -1);
     private static final EditorNode POST_PROCESS_NODE = new EditorNode(Kind.POST_PROCESS, null, -1);
+    private static final EditorNode GROUPING_NODE = new EditorNode(Kind.GROUPING, null, -1);
+    private static final EditorNode ARCHIVES_NODE = new EditorNode(Kind.ARCHIVES, null, -1);
 
     @FXML private TreeView<EditorNode> tree;
     @FXML private Button addButton;
@@ -345,6 +347,15 @@ public class EditorController {
                 sectionItem.getChildren().add(stepItem);
             }
             root.getChildren().add(sectionItem);
+            if (section == Section.IN) { // grouping and archives work on the listing, right after the inputs
+                for (EditorNode node : List.of(GROUPING_NODE, ARCHIVES_NODE)) {
+                    TreeItem<EditorNode> item = new TreeItem<>(node);
+                    if (node.equals(select)) {
+                        selected = item;
+                    }
+                    root.getChildren().add(item);
+                }
+            }
         }
         TreeItem<EditorNode> postProcessItem = new TreeItem<>(POST_PROCESS_NODE); // after the out step, like the run
         if (POST_PROCESS_NODE.equals(select)) {
@@ -359,6 +370,8 @@ public class EditorController {
         return switch (node.kind()) {
             case PIPELINE -> ResourcesEngine.getString("editor.section.PIPELINE");
             case POST_PROCESS -> ResourcesEngine.getString("editor.post-process");
+            case GROUPING -> ResourcesEngine.getString("editor.grouping");
+            case ARCHIVES -> ResourcesEngine.getString("editor.archives");
             case SECTION -> ResourcesEngine.getString("editor.section." + node.section().name());
             case STEP -> {
                 JsonObject step = step(node);
@@ -469,6 +482,10 @@ public class EditorController {
             pipelineForm();
         } else if (node.kind() == Kind.POST_PROCESS) {
             formBox.getChildren().add(postProcessForm());
+        } else if (node.kind() == Kind.GROUPING) {
+            formBox.getChildren().add(GroupingForms.groupingForm(document, stage, () -> showForm(node)));
+        } else if (node.kind() == Kind.ARCHIVES) {
+            formBox.getChildren().add(GroupingForms.archivesForm(document));
         } else {
             stepForm(node);
         }
@@ -496,6 +513,7 @@ public class EditorController {
         Label executionWarning = new Label("⚠ " + ResourcesEngine.getString("editor.execution.streaming-last-found"));
         executionWarning.setWrapText(true);
         executionWarning.setStyle("-fx-text-fill: #c87f0a;");
+        Label groupingWarning = GroupingForms.streamingWarning(); // grouping waits for the folders of the inputs
 
         ComboBox<String> destinationCheck = optionBox("editor.destination-check.", PipelineDocument.DESTINATION_CHECKS);
         ComboBox<String> destinationMatch = optionBox("editor.destination-match.", PipelineDocument.DESTINATION_MATCHES);
@@ -527,6 +545,8 @@ public class EditorController {
                     && PipelineDocument.DESTINATION_CHECKS.getFirst().equals(document.destinationCheck());
             executionWarning.setVisible(warn);
             executionWarning.setManaged(warn);
+            groupingWarning.setVisible(document.streamingMayWaitForInputs());
+            groupingWarning.setManaged(document.streamingMayWaitForInputs());
         };
         sync.run();
         execution.valueProperty().addListener((obs, old, mode) -> {
@@ -568,7 +588,7 @@ public class EditorController {
                 document.setConflictCheck(check == null ? ConflictCheck.QUICK : check));
 
         formBox.getChildren().addAll(title(ResourcesEngine.getString("editor.section.PIPELINE")),
-                new VBox(3, new Label(ResourcesEngine.getString("editor.execution")), execution, executionWarning),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.execution")), execution, executionWarning, groupingWarning),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.conflict-check")), conflictCheck),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.resume-mode")), resumeMode),
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-check")), destinationCheck),

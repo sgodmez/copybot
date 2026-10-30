@@ -13,6 +13,8 @@ import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.Companion;
+import com.copybot.plugin.api.action.CompanionRole;
 import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
@@ -168,6 +170,10 @@ public final class PlanViewModel {
     private ResumePoint chosenPoint;
     /** The last preparation listed every input to its end (a stopped one then offers its rows). */
     private boolean listingComplete;
+    /** The archives unfolded at the listing, those copied locally to be, and their size (the engine's counters). */
+    private int archivesUnfolded;
+    private int archivesToDownload;
+    private long bytesToDownload;
 
     /** The "execution" of the pipeline (spec execution-mode §5): what the button does. */
     private ExecutionMode executionMode = ExecutionMode.PLAN;
@@ -284,6 +290,9 @@ public final class PlanViewModel {
         selectedAtStart = Set.of();
         analysing = List.of();
         sortedFrom = null;
+        archivesUnfolded = 0;
+        archivesToDownload = 0;
+        bytesToDownload = 0;
         invalidate();
     }
 
@@ -303,6 +312,9 @@ public final class PlanViewModel {
         status = state.getStatus();
         listing = state.isListingInProgress();
         listingComplete = state.isListingComplete();
+        archivesUnfolded = state.getArchivesUnfolded();
+        archivesToDownload = state.getArchivesToDownload();
+        bytesToDownload = state.getBytesToDownload();
         proposal = state.getResumeProposal();
         failure = state.getFailure();
         preparationFailed = state.isPreparationFailed();
@@ -930,6 +942,13 @@ public final class PlanViewModel {
                 same + different, same, different));
     }
 
+    /** "Archives unfolded: 2 - to download: 1 (2 KB)": once an archive was unfolded; empty before. */
+    public Optional<String> archivesText() {
+        return archivesUnfolded == 0 ? Optional.empty()
+                : Optional.of(ResourcesEngine.getString("plan.archives", archivesUnfolded, archivesToDownload,
+                displaySize(bytesToDownload, 1)));
+    }
+
     public Plan.Counts counts() {
         return derived().counts();
     }
@@ -1052,6 +1071,46 @@ public final class PlanViewModel {
                 ? t.directories().stream().map(Path::toString).collect(Collectors.joining("\n")) : null;
     }
 
+    /** The "Companions" column: how many files go with the item, empty when none. */
+    public static String companionsText(WorkItemExecution item) {
+        int count = item.getWorkItem().getCompanions().size();
+        return count == 0 ? "" : String.valueOf(count);
+    }
+
+    /** The companions, one per line with their role ("IMG_1.xmp (copy)"); null when none. */
+    public static String companionsTooltip(WorkItemExecution item) {
+        List<Companion> companions = item.getWorkItem().getCompanions();
+        return companions.isEmpty() ? null : companions.stream()
+                .map(c -> c.item().getNameDisplay() + " (" + roleText(c.role()) + ")")
+                .collect(Collectors.joining("\n"));
+    }
+
+    private static String roleText(CompanionRole role) {
+        return ResourcesEngine.getString("plan.companion.role." + role.name());
+    }
+
+    /**
+     * The companions in the detail, each with its role and, when copied, its target: the directory of the main target
+     * and the companion name derived from the main target file name; a read one has none.
+     */
+    private static List<String> companionLines(WorkItem source, ItemDetail detail) {
+        Path mainTarget = detail.targets().isEmpty() ? null : detail.targets().getFirst();
+        List<String> lines = new ArrayList<>();
+        for (Companion c : source.getCompanions()) {
+            String name = c.item().getNameDisplay();
+            String role = roleText(c.role());
+            if (c.role() == CompanionRole.READ) {
+                lines.add("   " + ResourcesEngine.getString("plan.detail.companion.read", name, role));
+            } else if (mainTarget != null && mainTarget.getFileName() != null) {
+                Path target = mainTarget.resolveSibling(c.targetName(mainTarget.getFileName().toString()));
+                lines.add("   " + ResourcesEngine.getString("plan.detail.companion", name, role, target));
+            } else {
+                lines.add("   " + name + " (" + role + ")"); // no target to derive from
+            }
+        }
+        return lines;
+    }
+
     /**
      * The planned processing of an item ("Planned processing…" of the row menu): the source, its status, each
      * process step and what it produced, then every file the out step would write, or why the dry run stopped.
@@ -1090,6 +1149,7 @@ public final class PlanViewModel {
             case TargetProjection.Failed f -> lines.add("⚠ " + f.message());
             case TargetProjection.None n -> lines.add("💾 " + ResourcesEngine.getString("plan.detail.no-target"));
         }
+        lines.addAll(companionLines(source, detail));
         return String.join("\n", lines);
     }
 

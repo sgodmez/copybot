@@ -1,7 +1,11 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.listing.GroupingPresets;
+import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.GroupingConfig;
+import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PostProcessConfig;
 import com.copybot.engine.pipeline.StepType;
@@ -28,6 +32,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
@@ -36,6 +41,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
@@ -489,6 +495,280 @@ public final class PipelineDocument {
         modified = true;
     }
 
+    // ---- grouping and archives (spec grouping-archives) ----
+
+    /** The rules of the "grouping" block (each a preset or an own rule), live: empty when absent. */
+    public List<JsonObject> groupingRules() {
+        JsonArray rules = rulesArray();
+        List<JsonObject> list = new ArrayList<>();
+        if (rules != null) {
+            rules.forEach(rule -> {
+                if (rule.isJsonObject()) {
+                    list.add(rule.getAsJsonObject());
+                }
+            });
+        }
+        return list;
+    }
+
+    private JsonArray rulesArray() {
+        JsonElement block = root.get("grouping");
+        JsonElement rules = block != null && block.isJsonObject() ? block.getAsJsonObject().get("rules") : null;
+        return rules != null && rules.isJsonArray() ? rules.getAsJsonArray() : null;
+    }
+
+    /** Appends a rule, creating the block when absent. */
+    public void addGroupingRule(JsonObject rule) {
+        JsonArray rules = rulesArray();
+        if (rules == null) {
+            JsonObject block = new JsonObject();
+            rules = new JsonArray();
+            block.add("rules", rules);
+            root.add("grouping", block);
+        }
+        rules.add(rule);
+        modified = true;
+    }
+
+    /** Removes the rule at the index; the block goes with the last rule. */
+    public void removeGroupingRule(int index) {
+        JsonArray rules = rulesArray();
+        if (rules == null || index < 0 || index >= rules.size()) {
+            return;
+        }
+        rules.remove(index);
+        if (rules.isEmpty()) {
+            root.remove("grouping");
+        }
+        modified = true;
+    }
+
+    /** Moves the rule at {@code from} to the index {@code to} (the rules apply in order); out of range: nothing. */
+    public void moveGroupingRule(int from, int to) {
+        List<JsonElement> rules = new ArrayList<>();
+        JsonArray array = rulesArray();
+        if (array != null) {
+            array.forEach(rules::add);
+        }
+        if (from == to || from < 0 || to < 0 || from >= rules.size() || to >= rules.size()) {
+            return;
+        }
+        rules.add(to, rules.remove(from));
+        JsonArray moved = new JsonArray();
+        rules.forEach(moved::add);
+        root.getAsJsonObject("grouping").add("rules", moved);
+        modified = true;
+    }
+
+    /** The "archives" block; absent: nothing unfolded. */
+    public ArchivesConfig archives() {
+        JsonElement block = root.get("archives");
+        if (block != null && block.isJsonObject()) {
+            try {
+                ArchivesConfig config = GsonUtil.getGson().fromJson(block, ArchivesConfig.class);
+                if (config != null) {
+                    return config;
+                }
+            } catch (JsonParseException | IllegalStateException e) {
+                // a block the editor cannot read counts as absent
+            }
+        }
+        return new ArchivesConfig(null, null, null, null, null);
+    }
+
+    /** Writes the block, or removes it when the archives are not unfolded; empty patterns are not written. */
+    public void setArchives(ArchivesConfig archives) {
+        if (archives == null || !archives.isUnfold()) {
+            if (root.remove("archives") != null) {
+                modified = true;
+            }
+            return;
+        }
+        JsonObject block = new JsonObject();
+        block.addProperty("unfold", true);
+        block.addProperty("nested", archives.isNested());
+        block.addProperty("mergeFolder", archives.isMergeFolder());
+        addPatterns(block, "include", archives.include());
+        addPatterns(block, "exclude", archives.exclude());
+        if (!block.equals(root.get("archives"))) {
+            root.add("archives", block);
+            modified = true;
+        }
+    }
+
+    private static void addPatterns(JsonObject block, String name, List<String> patterns) {
+        List<String> kept = patterns == null ? List.of()
+                : patterns.stream().map(String::strip).filter(pattern -> !pattern.isEmpty()).toList();
+        if (!kept.isEmpty()) {
+            JsonArray array = new JsonArray();
+            kept.forEach(array::add);
+            block.add(name, array);
+        }
+    }
+
+    /** The extensions the rules (the presets expanded) attach as companions, lower case, in order. */
+    private List<String> companionExtensions() {
+        Set<String> extensions = new LinkedHashSet<>();
+        for (GroupingRuleConfig rule : expandedRules()) {
+            if (rule.companions() != null) {
+                rule.companions().keySet().forEach(ext -> extensions.add(ext.toLowerCase(Locale.ROOT)));
+            }
+        }
+        return List.copyOf(extensions);
+    }
+
+    private List<GroupingRuleConfig> expandedRules() {
+        List<GroupingRuleConfig> rules = new ArrayList<>();
+        for (JsonObject rule : groupingRules()) {
+            try {
+                rules.add(GsonUtil.getGson().fromJson(rule, GroupingRuleConfig.class));
+            } catch (JsonParseException | IllegalStateException e) {
+                // a hand-edited rule the editor cannot read: skipped, so the user can still open the form and fix it
+            }
+        }
+        return GroupingPresets.expand(new GroupingConfig(rules));
+    }
+
+    /**
+     * The companion extensions of the rules that the include / exclude globs of a built-in file.read input step leave
+     * out: the listing would never see those files, so they could not be attached.
+     */
+    public List<String> companionExtensionsExcludedByFileRead() {
+        Set<String> excluded = new LinkedHashSet<>();
+        for (JsonObject step : steps(Section.IN)) {
+            if (isFileRead(step)) {
+                for (String extension : companionExtensions()) {
+                    if (!letsThrough(step, extension)) {
+                        excluded.add(extension);
+                    }
+                }
+            }
+        }
+        return List.copyOf(excluded);
+    }
+
+    /**
+     * Lets the companion extensions through: adds them to the non-empty "include" of the file.read steps that leave
+     * them out, and removes the "exclude" globs that target them.
+     */
+    public void allowCompanionExtensions() {
+        for (JsonObject step : steps(Section.IN)) {
+            JsonElement config = step.get("actionConfig");
+            if (!isFileRead(step) || config == null || !config.isJsonObject()) {
+                continue;
+            }
+            for (String extension : companionExtensions()) {
+                if (!letsThrough(step, extension)) {
+                    allow(config.getAsJsonObject(), extension);
+                    modified = true;
+                }
+            }
+        }
+    }
+
+    private static void allow(JsonObject config, String extension) {
+        List<String> include = stringList(config.get("include"));
+        if (!include.isEmpty() && !selected(include, List.of(), extension)) {
+            // "**/" also matches at the first level (the engine adds that matcher); "*." would not go into folders
+            config.getAsJsonArray("include").add("**/*." + extension);
+        }
+        JsonElement exclude = config.get("exclude");
+        if (exclude != null && exclude.isJsonArray()) {
+            JsonArray kept = new JsonArray();
+            String own = "*." + extension;
+            exclude.getAsJsonArray().forEach(glob -> {
+                // only the globs that target exactly this extension go; any other one that happens to match stays
+                String text = glob.isJsonPrimitive() ? glob.getAsString().toLowerCase(Locale.ROOT) : "";
+                if (!text.equals(own) && !text.equals("**/" + own)) {
+                    kept.add(glob);
+                }
+            });
+            if (kept.isEmpty()) {
+                config.remove("exclude");
+            } else {
+                config.add("exclude", kept);
+            }
+        }
+    }
+
+    /** Whether the include / exclude of the step let a file of this extension through. */
+    private static boolean letsThrough(JsonObject step, String extension) {
+        JsonElement config = step.get("actionConfig");
+        if (config == null || !config.isJsonObject()) {
+            return true;
+        }
+        return selected(stringList(config.getAsJsonObject().get("include")),
+                stringList(config.getAsJsonObject().get("exclude")), extension);
+    }
+
+    /** The engine's selection of a file of this extension at the first level and in a folder (both must pass). */
+    private static boolean selected(List<String> include, List<String> exclude, String extension) {
+        for (Path probe : List.of(Path.of("file." + extension), Path.of("folder", "file." + extension))) {
+            if (!include.isEmpty() && !matchesAny(include, probe) || matchesAny(exclude, probe)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Like the engine: case-insensitive globs on the relative path, "**&#47;x" also matching x at the first level. */
+    private static boolean matchesAny(List<String> globs, Path probe) {
+        for (String glob : globs) {
+            String pattern = glob.toLowerCase(Locale.ROOT);
+            try {
+                if (FileSystems.getDefault().getPathMatcher("glob:" + pattern).matches(probe)
+                        || pattern.startsWith("**/")
+                        && FileSystems.getDefault().getPathMatcher("glob:" + pattern.substring(3)).matches(probe)) {
+                    return true;
+                }
+            } catch (IllegalArgumentException e) {
+                // a glob the listing refuses: it matches nothing here
+            }
+        }
+        return false;
+    }
+
+    private static List<String> stringList(JsonElement element) {
+        List<String> list = new ArrayList<>();
+        if (element != null && element.isJsonArray()) {
+            element.getAsJsonArray().forEach(item -> {
+                if (item.isJsonPrimitive()) {
+                    list.add(item.getAsString());
+                }
+            });
+        }
+        return list;
+    }
+
+    /** Whether a rule (a preset's included) is of the folder type while a file.read input does not go into folders. */
+    public boolean folderRuleWithNonRecursiveFileRead() {
+        return expandedRules().stream().anyMatch(rule -> "folder".equals(rule.type()))
+                && steps(Section.IN).stream().anyMatch(step -> isFileRead(step) && isNonRecursive(step));
+    }
+
+    private static boolean isNonRecursive(JsonObject step) {
+        JsonElement recursive = get(step, List.of("actionConfig", "recursive"));
+        return recursive != null && recursive.isJsonPrimitive() && recursive.getAsJsonPrimitive().isBoolean()
+                && !recursive.getAsBoolean();
+    }
+
+    /**
+     * Streaming with grouping rules and an input that is not the built-in file.read (which signals its folders): a
+     * plugin input may make the streaming wait for the end of its listing.
+     */
+    public boolean streamingMayWaitForInputs() {
+        return executionMode() == ExecutionMode.STREAMING && !groupingRules().isEmpty()
+                && steps(Section.IN).stream().anyMatch(step -> !isFileRead(step));
+    }
+
+    private static boolean isFileRead(JsonObject step) {
+        JsonElement action = step.get("action");
+        JsonElement plugin = step.get("plugin");
+        boolean embedded = plugin == null || plugin.isJsonNull()
+                || plugin.isJsonPrimitive() && (plugin.getAsString().isBlank() || CatalogAction.EMBEDDED_PLUGIN.equals(plugin.getAsString()));
+        return embedded && action != null && action.isJsonPrimitive() && FILE_READ.equals(action.getAsString());
+    }
+
     // ---- sampling (spec pattern-helper §5) ----
 
     /** The JSON of the input steps, "" when absent: the sample is listed again when it changes. */
@@ -679,13 +959,8 @@ public final class PipelineDocument {
 
     /** The file relative to the "path" of this step when it is a file.read step that lists it, empty otherwise. */
     private static Optional<Path> listedBy(JsonObject step, Path file) {
-        JsonElement action = step.get("action");
-        JsonElement plugin = step.get("plugin");
-        boolean embedded = plugin == null || plugin.isJsonNull()
-                || plugin.isJsonPrimitive() && (plugin.getAsString().isBlank() || CatalogAction.EMBEDDED_PLUGIN.equals(plugin.getAsString()));
         JsonElement path = get(step, List.of("actionConfig", "path"));
-        if (!embedded || action == null || !action.isJsonPrimitive() || !FILE_READ.equals(action.getAsString())
-                || path == null || !path.isJsonPrimitive() || path.getAsString().isBlank()) {
+        if (!isFileRead(step) || path == null || !path.isJsonPrimitive() || path.getAsString().isBlank()) {
             return Optional.empty();
         }
         Path root;

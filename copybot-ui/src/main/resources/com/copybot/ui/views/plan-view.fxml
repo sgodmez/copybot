@@ -82,6 +82,8 @@
       <Label fx:id="conflictLabel" managed="false" maxWidth="Infinity" style="-fx-background-color: #fdecd2; -fx-text-fill: #7a4100; -fx-padding: 6;" visible="false" wrapText="true" />
       <!-- the photos whose time zone the GPS suggests (optional gps-zone plugin) -->
       <Label fx:id="suggestionLabel" managed="false" maxWidth="Infinity" style="-fx-background-color: #fdecd2; -fx-text-fill: #7a4100; -fx-padding: 6;" visible="false" wrapText="true" />
+      <!-- the archives unfolded at the listing and those to download -->
+      <Label fx:id="archivesLabel" managed="false" maxWidth="Infinity" visible="false" wrapText="true" />
       <HBox alignment="CENTER_LEFT" spacing="6.0">
          <children>
             <ComboBox fx:id="filterCombo" />
@@ -95,6 +97,7 @@
             <TableColumn fx:id="nameColumn" maxWidth="380.0" minWidth="120.0" prefWidth="220.0" text="%table.name" />
             <TableColumn fx:id="dateColumn" maxWidth="130.0" minWidth="130.0" prefWidth="130.0" text="%plan.column.date" />
             <TableColumn fx:id="targetColumn" minWidth="160.0" prefWidth="360.0" text="%plan.column.target" />
+            <TableColumn fx:id="companionsColumn" maxWidth="100.0" minWidth="80.0" prefWidth="90.0" style="-fx-alignment: CENTER;" text="%plan.column.companions" />
             <TableColumn fx:id="sizeColumn" maxWidth="90.0" minWidth="90.0" prefWidth="90.0" style="-fx-alignment: CENTER-RIGHT;" text="%table.size" />
             <TableColumn fx:id="statusColumn" minWidth="120.0" prefWidth="240.0" text="%table.status" />
          </columns>

@@ -1,10 +1,15 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.engine.listing.GroupingPresets;
 import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.resources.ResourcesEngine;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 /**
  * What a pipeline needs to be prepared (an input step: nothing to list otherwise) and to be executed
@@ -48,6 +53,124 @@ public final class PipelineChecks {
         executionRefusal(config).ifPresent(message -> {
             throw CopybotException.of(message);
         });
+    }
+
+    private static final Set<String> RULE_TYPES = Set.of("sameBase", "doubleExtension", "folder", "regex");
+    private static final Set<String> ROLES = Set.of("copy", "read", "ignore");
+    private static final Set<String> LINKS = Set.of("base", "name");
+
+    /**
+     * The reason why the grouping rules cannot be used, empty when they can (or when there are none): an invalid rule
+     * (unknown preset, type, role or link, a regex that does not compile, a folder that does not start with
+     * {base}), or COPY companions with an output that does not write them. No output action: no refusal.
+     * The COPY companions are looked for after the presets are expanded.
+     */
+    public static Optional<String> groupingRefusal(PipelineConfig config, IOutAction out) {
+        GroupingConfig grouping = config.grouping();
+        if (grouping == null || grouping.rules() == null) {
+            return Optional.empty();
+        }
+        int index = 0;
+        for (GroupingRuleConfig rule : grouping.rules()) {
+            index++;
+            Optional<String> invalid = invalidRule(rule, index);
+            if (invalid.isPresent()) {
+                return invalid;
+            }
+        }
+        if (out == null || out.writesCompanions()) {
+            return Optional.empty();
+        }
+        return GroupingPresets.expand(grouping).stream().anyMatch(PipelineChecks::copiesCompanions)
+                ? Optional.of(ResourcesEngine.getString("grouping.companions-unsupported", outName(config, out)))
+                : Optional.empty();
+    }
+
+    private static Optional<String> invalidRule(GroupingRuleConfig rule, int index) {
+        if (rule == null) {
+            return Optional.of(ResourcesEngine.getString("grouping.rule.type-unknown", index, null));
+        }
+        if (rule.preset() != null) {
+            return GroupingPresets.isKnown(rule.preset()) ? Optional.empty()
+                    : Optional.of(ResourcesEngine.getString("grouping.preset.unknown", index, rule.preset()));
+        }
+        if (rule.type() == null || !RULE_TYPES.contains(rule.type())) {
+            return Optional.of(ResourcesEngine.getString("grouping.rule.type-unknown", index, rule.type()));
+        }
+        if (isUnknown(ROLES, rule.role())) {
+            return Optional.of(ResourcesEngine.getString("grouping.rule.value-unknown", index, "role", rule.role()));
+        }
+        if (isUnknown(LINKS, rule.link())) {
+            return Optional.of(ResourcesEngine.getString("grouping.rule.value-unknown", index, "link", rule.link()));
+        }
+        if (rule.companions() != null) {
+            for (String role : rule.companions().values()) {
+                if (role == null || isUnknown(ROLES, role)) {
+                    return Optional.of(ResourcesEngine.getString("grouping.rule.value-unknown", index, "companions",
+                            role));
+                }
+            }
+        }
+        if ("folder".equals(rule.type())
+                && (rule.folder() == null || !rule.folder().startsWith("{base}"))) {
+            return Optional.of(ResourcesEngine.getString("grouping.rule.folder-invalid", index, rule.folder(),
+                    "{base}"));
+        }
+        if ("regex".equals(rule.type())) {
+            String main = rule.main() == null || rule.main().size() != 1 ? null : rule.main().get(0);
+            int groups;
+            try {
+                groups = Pattern.compile(main).matcher("").groupCount();
+            } catch (PatternSyntaxException | NullPointerException e) {
+                return Optional.of(ResourcesEngine.getString("grouping.rule.regex-invalid", index, main));
+            }
+            if (!isValidCompanion(rule.companion(), groups)) {
+                return Optional.of(ResourcesEngine.getString("grouping.rule.regex-invalid", index, rule.companion()));
+            }
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * A companion expression is given, refers only to groups of the main expression, and compiles once its
+     * references are replaced (as the listing does, with an empty text here).
+     */
+    private static boolean isValidCompanion(String template, int groups) {
+        if (template == null || template.isEmpty()) {
+            return false;
+        }
+        boolean[] missingGroup = {false};
+        String regex = GroupingRuleConfig.companionRegex(template, group -> {
+            missingGroup[0] |= group > groups;
+            return "";
+        });
+        if (missingGroup[0]) {
+            return false;
+        }
+        try {
+            Pattern.compile(regex);
+            return true;
+        } catch (PatternSyntaxException e) {
+            return false;
+        }
+    }
+
+    /** A given value must be one of the allowed ones (an absent value is the default). */
+    private static boolean isUnknown(Set<String> allowed, String value) {
+        return value != null && !allowed.contains(value);
+    }
+
+    /** Whether the (expanded) rule writes its companions next to the main file. */
+    private static boolean copiesCompanions(GroupingRuleConfig rule) {
+        return switch (rule.type()) {
+            case "sameBase", "doubleExtension" -> rule.companions() != null
+                    && rule.companions().containsValue("copy");
+            default -> rule.role() == null || "copy".equals(rule.role());
+        };
+    }
+
+    private static String outName(PipelineConfig config, IOutAction out) {
+        return config.outStep() == null ? out.getClass().getSimpleName() : config.outStep().getDisplayName();
     }
 
     private static boolean isEmpty(List<?> steps) {

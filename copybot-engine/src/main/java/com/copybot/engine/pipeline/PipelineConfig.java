@@ -30,9 +30,26 @@ public record PipelineConfig(
         /**
          * The program launched at the end of a copy (spec post-process). Absent: none.
          */
-        PostProcessConfig postProcess
+        PostProcessConfig postProcess,
+
+        /**
+         * The rules that attach companion files to a main file at the listing. Absent: no grouping.
+         */
+        GroupingConfig grouping,
+
+        /**
+         * The unfolding of the archives at the listing. Absent: no unfolding.
+         */
+        ArchivesConfig archives
 
         ) {
+
+    /** Without grouping nor archives. */
+    public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
+                          List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
+                          ResumeConfig resume, ConflictCheck conflictCheck, PostProcessConfig postProcess) {
+        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, conflictCheck, postProcess, null, null);
+    }
 
     /** Without conflictCheck (quick). */
     public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,

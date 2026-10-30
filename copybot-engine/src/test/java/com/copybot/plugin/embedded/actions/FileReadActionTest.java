@@ -1,6 +1,7 @@
 package com.copybot.plugin.embedded.actions;
 
 import com.copybot.exception.CopybotException;
+import com.copybot.plugin.api.action.ListingSink;
 import com.copybot.plugin.api.action.WorkItem;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.BeforeEach;
@@ -140,7 +141,7 @@ public class FileReadActionTest {
 
     @Test
     public void aFolderExcludedWithSlashStarStarIsNotWalkedNorFailsWhenUnreadable() throws IOException {
-        SimpleFileVisitor<Path> visitor = action(",\"exclude\":[\"SUB/deep/**\",\"**/cache/**\"]").visitor(card, false, item -> { });
+        SimpleFileVisitor<Path> visitor = action(",\"exclude\":[\"SUB/deep/**\",\"**/cache/**\"]").visitor(card, false, NO_SINK);
         Path deep = card.resolve("sub/deep");
         Path cache = Files.createDirectories(card.resolve("sub/Cache"));
         IOException denied = new AccessDeniedException("denied");
@@ -178,7 +179,7 @@ public class FileReadActionTest {
 
     @Test
     public void anUnreadableHiddenEntryIsSkippedWhenHiddenFilesAreExcluded() {
-        SimpleFileVisitor<Path> visitor = action("").visitor(card, false, item -> { });
+        SimpleFileVisitor<Path> visitor = action("").visitor(card, false, NO_SINK);
         IOException denied = new AccessDeniedException("denied");
 
         for (String name : List.of(".private", "._a.jpg", "System Volume Information", "$RECYCLE.BIN", "system volume information")) {
@@ -188,7 +189,7 @@ public class FileReadActionTest {
 
     @Test
     public void anUnreadableVisibleEntryStillFails() {
-        SimpleFileVisitor<Path> visitor = action("").visitor(card, false, item -> { });
+        SimpleFileVisitor<Path> visitor = action("").visitor(card, false, NO_SINK);
         IOException denied = new AccessDeniedException("denied");
 
         assertSame(denied, assertThrows(IOException.class, () -> visitor.visitFileFailed(card.resolve("photos"), denied)));
@@ -198,7 +199,7 @@ public class FileReadActionTest {
 
     @Test
     public void anUnreadableHiddenEntryFailsWhenHiddenFilesAreIncluded() {
-        SimpleFileVisitor<Path> visitor = action("").visitor(card, true, item -> { });
+        SimpleFileVisitor<Path> visitor = action("").visitor(card, true, NO_SINK);
         IOException denied = new AccessDeniedException("denied");
 
         assertSame(denied, assertThrows(IOException.class, () -> visitor.visitFileFailed(card.resolve(".private"), denied)));
@@ -217,6 +218,74 @@ public class FileReadActionTest {
 
         assertThrows(CopybotException.class, () -> action.loadConfig(JsonParser.parseString("{\"recursive\":true}")));
         assertThrows(CopybotException.class, () -> action.loadConfig(JsonParser.parseString("{\"path\":\" \"}")));
+    }
+
+    private static final ListingSink NO_SINK = new ListingSink() {
+        @Override
+        public void item(WorkItem item) {
+        }
+
+        @Override
+        public void folderDone(String folder) {
+        }
+    };
+
+    /** Lists the card with this extra actionConfig: the events in order, "item:relative" and "done:relative" ("done:" for the root). */
+    private List<String> events(String extra) {
+        List<String> events = new ArrayList<>();
+        action(extra).listFiles(new ListingSink() {
+            @Override
+            public void item(WorkItem item) {
+                events.add("item:" + card.relativize(item.getLocalLocation()).toString().replace('\\', '/'));
+            }
+
+            @Override
+            public void folderDone(String folder) {
+                events.add("done:" + card.relativize(Path.of(folder)).toString().replace('\\', '/'));
+            }
+        });
+        return events;
+    }
+
+    @Test
+    public void signalsEachFolderAfterItsSubfolders() {
+        assertTrue(action("").signalsFolders());
+        List<String> events = events("");
+
+        assertTrue(events.indexOf("done:sub/deep") < events.indexOf("done:sub"));
+        assertTrue(events.indexOf("done:sub") < events.indexOf("done:"));
+        assertEquals(3, events.stream().filter(e -> e.startsWith("done:")).count());
+        for (String event : events.stream().filter(e -> e.startsWith("item:")).toList()) {
+            Path folder = Path.of(event.substring(5)).getParent();
+            for (Path ancestor = folder; ; ancestor = ancestor == null || ancestor.getParent() == null ? null : ancestor.getParent()) {
+                String done = "done:" + (ancestor == null ? "" : ancestor.toString().replace('\\', '/'));
+                assertTrue(events.indexOf(event) < events.indexOf(done), event + " before " + done);
+                if (ancestor == null) {
+                    break;
+                }
+            }
+        }
+    }
+
+    @Test
+    public void nonRecursiveSignalsRootOnlyAtTheEnd() {
+        List<String> events = events(",\"recursive\":false");
+
+        assertEquals(List.of("done:"), events.stream().filter(e -> e.startsWith("done:")).toList());
+        assertEquals("done:", events.getLast());
+        assertEquals(4, events.size());
+    }
+
+    @Test
+    public void skippedSubtreeSignalsNothing() throws IOException {
+        file(".hidden/x.jpg");
+        file("cache/y.jpg");
+
+        List<String> events = events(",\"exclude\":[\"cache/**\"]");
+
+        assertFalse(events.contains("done:.hidden"));
+        assertFalse(events.contains("done:cache"));
+        assertTrue(events.contains("done:sub"));
     }
 
     @Test

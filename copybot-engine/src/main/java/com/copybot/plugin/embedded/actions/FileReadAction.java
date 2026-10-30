@@ -3,6 +3,7 @@ package com.copybot.plugin.embedded.actions;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractActionWithConfig;
 import com.copybot.plugin.api.action.IInAction;
+import com.copybot.plugin.api.action.ListingSink;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.google.gson.JsonElement;
@@ -58,18 +59,38 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
     }
 
     @Override
+    public boolean signalsFolders() {
+        return true;
+    }
+
+    @Override
     public void listFiles(Consumer<WorkItem> workItemConsumer) {
+        listFiles(new ListingSink() {
+            @Override
+            public void item(WorkItem item) {
+                workItemConsumer.accept(item);
+            }
+
+            @Override
+            public void folderDone(String folder) {
+                // a plain consumer has no use for the end of a folder
+            }
+        });
+    }
+
+    @Override
+    public void listFiles(ListingSink sink) {
         FileReadConfig config = getConfig();
         Path root = Path.of(config.path());
         try {
             Files.walkFileTree(root, EnumSet.noneOf(FileVisitOption.class),
-                    config.isRecursive() ? Integer.MAX_VALUE : 1, visitor(root, config.isIncludeHidden(), workItemConsumer));
+                    config.isRecursive() ? Integer.MAX_VALUE : 1, visitor(root, config.isIncludeHidden(), sink));
         } catch (IOException | UncheckedIOException e) {
             throw CopybotException.ofResource(e, "plugin.embedded.file.read.error.io", e.getLocalizedMessage());
         }
     }
 
-    SimpleFileVisitor<Path> visitor(Path root, boolean includeHidden, Consumer<WorkItem> workItemConsumer) {
+    SimpleFileVisitor<Path> visitor(Path root, boolean includeHidden, ListingSink sink) {
         return new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
@@ -84,9 +105,16 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
                 // with recursive=false the sub-directories arrive here: not regular files
                 if (attrs.isRegularFile() && (includeHidden || !isHidden(file, attrs))
                         && selected(root.relativize(file))) {
-                    workItemConsumer.accept(workItemOf(file));
+                    sink.item(workItemOf(file));
                 }
                 return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path dir, IOException exc) throws IOException {
+                FileVisitResult result = super.postVisitDirectory(dir, exc);
+                sink.folderDone(dir.toString());
+                return result;
             }
 
             /**

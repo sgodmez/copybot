@@ -12,6 +12,9 @@ import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.engine.resume.ResumeProposal;
 import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.Companion;
+import com.copybot.plugin.api.action.CompanionLink;
+import com.copybot.plugin.api.action.CompanionRole;
 import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.TargetCheck.Kind;
 import com.copybot.plugin.api.action.WorkItem;
@@ -1894,5 +1897,63 @@ public class PlanViewModelTest {
         a.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2025-01-01T10:00:00Z"));
         model.update(state(PipelineStatus.RUNNING, a, b), List.of());
         assertEquals(List.of(b, a), model.items(), "the same listing, its order no longer holds");
+    }
+
+    private WorkItemExecution grouped(String main, Companion... companions) throws IOException {
+        WorkItem wi = new WorkItem(tempDir.resolve(main));
+        wi.getMetadatas().setSize(10L);
+        wi.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, SHOT);
+        return new WorkItemExecution(wi.withCompanions(List.of(companions)), List.of());
+    }
+
+    private Companion companion(String name, CompanionRole role, CompanionLink link, String suffix) throws IOException {
+        return new Companion(new WorkItem(tempDir.resolve(name)), role, link, suffix);
+    }
+
+    @Test
+    public void theCompanionsColumnCountsThemAndItsTooltipNamesThem() throws IOException {
+        WorkItemExecution group = grouped("IMG_1.JPG",
+                companion("IMG_1.xmp", CompanionRole.COPY, CompanionLink.BASE, ".xmp"),
+                companion("IMG_1.wav", CompanionRole.READ, CompanionLink.BASE, ".wav"));
+
+        assertEquals("2", PlanViewModel.companionsText(group));
+        assertEquals("IMG_1.xmp (" + ResourcesEngine.getString("plan.companion.role.COPY") + ")\nIMG_1.wav ("
+                + ResourcesEngine.getString("plan.companion.role.READ") + ")", PlanViewModel.companionsTooltip(group));
+        WorkItemExecution alone = item("b.jpg", 1);
+        assertEquals("", PlanViewModel.companionsText(alone));
+        assertNull(PlanViewModel.companionsTooltip(alone));
+    }
+
+    @Test
+    public void theDetailListsTheCompanionsWithRoleAndTarget() throws IOException {
+        WorkItemExecution group = grouped("IMG_1.JPG",
+                companion("IMG_1.xmp", CompanionRole.COPY, CompanionLink.BASE, ".xmp"),
+                companion("IMG_1.wav", CompanionRole.READ, CompanionLink.BASE, ".wav"));
+        ItemDetail detail = new ItemDetail(List.of(), new TargetProjection.Targets(List.of(Path.of("/nas"))),
+                List.of(Path.of("/nas/2026/IMG_9.JPG")));
+
+        List<String> lines = PlanViewModel.detailText(group, detail).lines().toList();
+
+        assertTrue(lines.contains("   " + ResourcesEngine.getString("plan.detail.companion", "IMG_1.xmp",
+                ResourcesEngine.getString("plan.companion.role.COPY"),
+                Path.of("/nas/2026").resolve("IMG_9.xmp"))), lines.toString());
+        assertTrue(lines.contains("   " + ResourcesEngine.getString("plan.detail.companion.read", "IMG_1.wav",
+                ResourcesEngine.getString("plan.companion.role.READ"))), lines.toString());
+    }
+
+    @Test
+    public void theArchiveCounterTellsUnfoldedAndToDownloadOnlyWhenArchivesWereUnfolded() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.RUNNING, item("a.jpg", 1));
+        model.update(state, List.of());
+        assertEquals(Optional.empty(), model.archivesText());
+
+        state.addArchiveUnfolded();
+        state.addArchiveUnfolded();
+        state.addArchiveToDownload(2048);
+        model.update(state, List.of());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.archives", 2, 1,
+                FileUtil.toAutoUnitSize(2048, 1, Locale.getDefault()))), model.archivesText());
     }
 }

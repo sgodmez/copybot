@@ -7,6 +7,8 @@ import java.io.InputStream;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -23,6 +25,10 @@ public class WorkItem {
     private String outPattern; // the item's own out pattern (spec own-out-pattern §1), null: the pipeline's
     /** The local copy the content is read from (or made from), null: the source itself. */
     private Path contentPath;
+    /** The folder the item was listed in, as the listing tells it (the parent of a local file). */
+    private String listedFolder;
+    private SourceDeleter sourceDeleter; // deletes a source that is not a local file, null: none
+    private List<Companion> companions = List.of();
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
@@ -44,6 +50,9 @@ public class WorkItem {
         copy.isDeleted = isDeleted;
         copy.outPattern = outPattern;
         copy.contentPath = contentPath;
+        copy.listedFolder = listedFolder;
+        copy.sourceDeleter = sourceDeleter;
+        copy.companions = companions;
         copy.metadatas.raw().putAll(metadatas.raw());
         copy.metadatas.display().putAll(metadatas.display());
         return copy;
@@ -94,15 +103,68 @@ public class WorkItem {
         isLocal = false;
     }
 
+    /**
+     * An item that is not a local file (e.g. an entry of an archive): its content comes from {@code content}, the
+     * name and the key metadata (size, {@link WorkItemMetadata#LAST_MODIFIED}) are set as for a file.
+     *
+     * @param listedFolder  the folder it is listed in (see {@link #getListedFolder()})
+     * @param sourceDisplay where it comes from, as {@link #getSourceLocationDisplay()} shows it
+     * @param deleter       deletes the source once copied, null: the source cannot be deleted
+     */
+    public static WorkItem remote(String name, String listedFolder, String sourceDisplay, long size,
+                                  Instant lastModified, Supplier<InputStream> content, SourceDeleter deleter) {
+        WorkItem item = new WorkItem();
+        item.nameDisplay = name;
+        item.sourceLocationDisplay = sourceDisplay;
+        item.listedFolder = listedFolder;
+        item.inputStreamSupplier = content;
+        item.sourceDeleter = deleter;
+        item.isLocal = false;
+        item.metadatas.display().put("name", name);
+        item.metadatas.setSize(size);
+        item.metadatas.setTime(WorkItemMetadata.LAST_MODIFIED, lastModified);
+        return item;
+    }
+
     public WorkItem(Path path) throws IOException {
         this.sourceLocationPath = path;
         this.sourceLocationDisplay = path.getParent().toString();
+        this.listedFolder = sourceLocationDisplay;
         this.nameDisplay = path.getFileName().toString();
         isLocal = true; // TODO : => ajouter l'info si local/file ou pas en metadata ?
     }
 
     public String getSourceLocationDisplay() {
         return sourceLocationDisplay;
+    }
+
+    /** The folder the item was listed in: the parent of a local file, what the action gives for a remote item. */
+    public String getListedFolder() {
+        return listedFolder;
+    }
+
+    /** Deletes the source of an item that is not a local file; empty for a file or a source that cannot be deleted. */
+    public Optional<SourceDeleter> getSourceDeleter() {
+        return Optional.ofNullable(sourceDeleter);
+    }
+
+    /** The files grouped with this item at the listing; unmodifiable, empty by default. */
+    public List<Companion> getCompanions() {
+        return companions;
+    }
+
+    /** A copy of this item (as {@link #copyForDryRun()}) with these companions; this item is unchanged. */
+    public WorkItem withCompanions(List<Companion> companions) {
+        WorkItem copy = copyForDryRun();
+        copy.companions = List.copyOf(companions);
+        return copy;
+    }
+
+    /** A copy of this item (as {@link #copyForDryRun()}) without companions; this item is unchanged. */
+    public WorkItem withoutCompanions() {
+        WorkItem copy = copyForDryRun();
+        copy.companions = List.of();
+        return copy;
     }
 
     public String getNameDisplay() {

@@ -70,6 +70,11 @@ libraries.
   `System Volume Information` and `$RECYCLE.BIN`. In the plan you can ignore
   a file for this copy only, or always ignore it: that adds an exclude to the
   pipeline.
+- **Companion files and archives.** Rules attach an `.xmp`, a `.AAE`, a
+  `_files` folder or a Takeout JSON to their main file, which then travels,
+  is sorted and is written with them, as one plan row. A ZIP, even split in
+  parts, can be unfolded at the listing and its files treated like any other.
+  See *Companion files and archives* below.
 - **Parallel, but polite to your disks.** Each file is processed on a virtual
   thread. Named resources (`cpu`, `gpu`, `disk:<disk>` and your own) cap how
   many actions run at once. Resources are acquired all at once or not at all,
@@ -190,6 +195,116 @@ when several versions are installed.
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
 | `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
 | `check` | `com.copybot.plugin.gpszone` (optional) | analyze | Goes after `extract`. Flags a photo whose camera was badly set: from its GPS position, the time zone of the place (offline boundaries of [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder) through [timeshape](https://github.com/RomanIakovlev/timeshape)) gives another offset than the recorded one, the GPS time confirming the capture date. Nothing near a time zone boundary, at sea, or for a video. The plan suggests the zone; you apply it |
+
+### Companion files and archives
+
+Two optional blocks of the pipeline work right after the listing, on every
+source. Without them nothing changes, and an older Copybot ignores them.
+
+```json
+"grouping": {
+  "rules": [
+    { "preset": "raw-jpeg-xmp" },
+    { "type": "sameBase", "main": ["cr3", "nef", "jpg"], "companions": { "xmp": "copy", "thm": "copy" } },
+    { "type": "doubleExtension", "companions": { "xmp": "copy" } },
+    { "type": "folder", "main": ["html", "htm"], "folder": "{base}_files", "role": "copy" },
+    { "type": "regex", "main": "(.+\\.(?:jpe?g|heic|mp4))",
+      "companion": "\\1(?:\\.supplemental-metadata)?\\.json", "role": "read", "link": "name" }
+  ]
+},
+"archives": { "unfold": true, "nested": false, "mergeFolder": false,
+              "include": ["Takeout/**"], "exclude": ["**/*.html"] }
+```
+
+**Grouping.** A rule attaches companion files to a main file, which carries
+them through the pipeline: analysis, processing and the write see the main
+file, and the plan has one row per group, with a *Companions* column (count,
+and names and roles in the tooltip). Names and extensions are compared without
+case; a file whose target would be its main file's own (`IMG_1.JPG` next to
+`IMG_1.jpg`) is not attached, and a group whose members would share a target
+fails before anything is written. Rules apply in order, a file already attached is no longer a candidate,
+and a companion without a main file is an ordinary file. A group has one
+level.
+
+| Rule | Attaches | Main file |
+|---|---|---|
+| `sameBase` | same folder, same name without extension (`IMG_1.CR3`, `IMG_1.xmp`) | the first present in `main` (priority) |
+| `doubleExtension` | `IMG_1.CR3.xmp` to `IMG_1.CR3` | the file whose name is the companion's without its last extension |
+| `folder` | everything under `<base>_files/`, recursively, to `<base>.html` | the file in `main` |
+| `regex` | the `companion` expression, with references to the groups of the main one | the file the `main` expression matches; `link` is `name` (default) or `base` |
+
+A role says what happens to a companion: `copy` (written next to the main
+file, under its final name, also after a rename or a conversion), `read` (the
+analysis can read it, it is never written) or `ignore` (left out: no copy, no
+plan row). On `folder` and `regex` rules `role` defaults to `copy` when
+absent; `sameBase` and `doubleExtension` companions take their roles from the
+`companions` map. Presets, expanded by the core:
+
+| Preset | Main file | Companions |
+|---|---|---|
+| `raw-jpeg-xmp` | RAW (CR3, CR2, NEF, ARW, RAF, ORF, RW2, DNG, PEF, SRW), then JPG, JPEG, HEIC | JPG, JPEG, HEIC and XMP copied; `IMG_1.CR3.xmp` copied too |
+| `iphone` | HEIC, JPG, JPEG | AAE and MOV (Live Photo) copied |
+| `action-cam` | MP4 | LRV and THM copied |
+| `sony-xml` | MP4 | `<base>M01.XML` read |
+| `web-page` | HTML, HTM | `<base>_files/` copied |
+| `takeout` | JPG, JPEG, HEIC, PNG, GIF, MP4, MOV | `<name>.json` or `<name>.supplemental-metadata.json` read; also turns on `mergeFolder` |
+
+A group is **solidary** for conflicts. Each `copy` member is compared with its
+target and the group takes the most severe result. The pipeline's rules apply
+to the whole group: skip skips all of it, overwrite overwrites all, error
+fails the group, and rename takes the first `(n)` that is free for every
+member (`IMG_1 (1).CR3` and `IMG_1 (1).xmp`). The plan says which member
+causes the conflict. A companion that is missing at the destination is always
+written, even if the main file is skipped as identical, so a companion that
+failed on a previous run is caught up. In move mode no source of the group is
+deleted before the main file and all its `copy` companions are written and
+verified, or the whole group is already at the destination and proven
+identical with `fullHash`; a group in error deletes nothing, and `read`
+companions are never deleted. The output action must write companions: `file.write` does, and a
+pipeline whose output cannot is refused when validated.
+
+The input filters apply before grouping: an `include` of `*.jpg` drops the
+`.xmp` files, which can no longer be attached. For `file.read` the editor
+warns when a rule aims at an extension its filters exclude, and a button adds
+the companions' extensions. A `folder` rule needs a recursive listing.
+Grouping works by folder and waits for the end of each folder. A source that
+does not signal the end of its folders makes grouping wait for the end of its
+whole listing; in streaming mode nothing is copied until then, and the editor
+says so. `file.read` signals its folders.
+
+**Archives.** With `unfold`, a listed ZIP is replaced by the files it
+contains, which are then grouped, analysed, planned and checked like any other
+file; the plan shows their location (`a.zip!/DCIM`). The input filters must
+let `*.zip` through. `include` and `exclude` are globs on the path inside the
+archive.
+
+- `nested` unfolds archives found inside archives, to a depth of 5 (the listed
+  archive is 1); deeper ones are copied as they are, with a warning. Off by
+  default, nested ZIPs are ordinary files.
+- `mergeFolder` makes the archives of one folder a single tree, so that a
+  photo in `takeout-001.zip` and its JSON in `takeout-002.zip` meet. Split
+  Takeout exports need it, and the `takeout` preset implies it.
+- A ZIP that is not a local file (a remote source, or inside an archive) is
+  first copied once into a workspace of the run (`copybot-archives` in the
+  temporary folder), after a free space check; the preparation shows how many
+  archives will be downloaded and their size. The workspace is deleted at the
+  end of the copy, on cancellation, or when the plan is abandoned, and the
+  folders a crash left behind are removed at the next start.
+- Guards against zip bombs: entries whose data overlap refuse the archive, and
+  an entry above 1 MB whose compression ratio goes over 100 is in error,
+  checked on the bytes actually read. There is no limit on the number or the
+  size of files, so large videos and Takeout exports pass. Names stored in
+  CP437 are read as such when the archive does not say UTF-8.
+- In move mode an archive is deleted only when **every** one of its entries was
+  written, or found identical at the destination, during this run. If an entry
+  was not copied (excluded, `read` or `ignore`, filtered, skipped by the resume
+  point, in error), the archive is kept and the run gets an *archive kept*
+  warning. A resumed run deletes an archive only if it copied all of it.
+
+Known limits: the links inside a saved HTML page are not rewritten when its
+main file is renamed (the `_files` folder follows); Takeout names truncated to
+46 characters are not all matched by the `takeout` preset; only ZIP is
+supported (no 7z or tar.gz yet).
 
 ## Plugins
 

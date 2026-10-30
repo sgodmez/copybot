@@ -83,6 +83,12 @@ public final class CopybotEngine implements AutoCloseable {
      * left on it is not lifted on close. Guarded by lock.
      */
     private MainExecutor preparedPlan;
+    /**
+     * The last plan prepared, whatever its outcome: the work folder of its archives lives until it is executed, or
+     * abandoned (the next preparation or run replaces it, the engine is closed: spec grouping/archives). Guarded by
+     * lock.
+     */
+    private MainExecutor lastPlan;
     /** Guarded by lock. */
     private boolean closed;
 
@@ -326,6 +332,7 @@ public final class CopybotEngine implements AutoCloseable {
             MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
             mainExecutor.setOutPatternStore(ResumeStateStore.forPipeline(pipelinePath)); // whatever the resume mode
             mainExecutor.chooseResumePoint(chosen);
+            replacePlan(null); // the plan, if any, is abandoned
             return start(mainExecutor, pipelineConfig.executionMode() == ExecutionMode.STREAMING
                     ? mainExecutor::stream : mainExecutor::run);
         });
@@ -377,6 +384,7 @@ public final class CopybotEngine implements AutoCloseable {
         } catch (InterruptedException e) {
             interrupted = true;
         }
+        replacePlan(null); // a plan never executed: its archive work folder is removed
         if (interrupted) {
             Thread.currentThread().interrupt();
         }
@@ -443,6 +451,7 @@ public final class CopybotEngine implements AutoCloseable {
     private Plan prepareBegun(MainExecutor mainExecutor, Consumer<Plan> started) {
         try {
             track(mainExecutor);
+            replacePlan(mainExecutor);
             Plan plan = new Plan(mainExecutor);
             if (started != null) {
                 started.accept(plan);
@@ -463,6 +472,21 @@ public final class CopybotEngine implements AutoCloseable {
             return plan;
         } finally {
             end();
+        }
+    }
+
+    /**
+     * The plan prepared before {@code next} is abandoned: the work folder of its archives is removed (an executed
+     * plan already removed it).
+     */
+    private void replacePlan(MainExecutor next) {
+        MainExecutor previous;
+        synchronized (lock) {
+            previous = lastPlan;
+            lastPlan = next;
+        }
+        if (previous != null && previous != next) {
+            previous.releaseArchives();
         }
     }
 
