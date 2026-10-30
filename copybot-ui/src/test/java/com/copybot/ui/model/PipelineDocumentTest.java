@@ -2,15 +2,19 @@ package com.copybot.ui.model;
 
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.SecondaryOutputConfig.OnError;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.PipelineDocument.BranchProblem;
 import com.copybot.ui.model.PipelineDocument.Gap;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
+import com.copybot.ui.model.PipelineDocument.StepAddress;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
@@ -31,6 +35,7 @@ import static com.copybot.ui.model.TestCatalog.EXIF_2;
 import static com.copybot.ui.model.TestCatalog.LAUNCH;
 import static com.copybot.ui.model.TestCatalog.MAIL;
 import static com.copybot.ui.model.TestCatalog.READ;
+import static com.copybot.ui.model.TestCatalog.THUMB;
 import static com.copybot.ui.model.TestCatalog.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -1209,5 +1214,264 @@ public class PipelineDocumentTest {
         for (Gap gap : Gap.values()) {
             assertFalse(gap.message().startsWith("%"), gap.name());
         }
+    }
+
+    // ---- secondary outputs (spec secondary-outputs §2, §8) ----
+
+    static final String BRANCHES = """
+            {
+              "inSteps": [ { "action": "file.read", "actionConfig": { "path": "D:/DCIM" } } ],
+              "outStep": { "action": "file.write", "actionConfig": { "outPattern": "nas/{name}" } },
+              "secondaryOutputs": [
+                { "name": "Miniatures", "onError": "warn", "future": { "x": 1 },
+                  "actionSteps": [ { "plugin": "com.acme.thumbs", "action": "thumb.make",
+                                     "actionConfig": { "size": 256 } } ],
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "thumbs/{name}" } } },
+                { "name": "Original",
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "orig/{name}" } } }
+              ]
+            }
+            """;
+
+    private static final StepCatalog BRANCH_CATALOG = TestCatalog.catalog(READ, WRITE, THUMB);
+
+    private static StepAddress branchStep(int branch, Section section, int index) {
+        return StepAddress.branch(branch, section, index);
+    }
+
+    private static List<String> kinds(PipelineDocument document) {
+        return document.branchProblems().stream().map(p -> p.branch() + ":" + p.kind()).toList();
+    }
+
+    private static JsonObject branchJson(PipelineDocument document, int branch) {
+        return tree(document.toJson()).getAsJsonArray("secondaryOutputs").get(branch).getAsJsonObject();
+    }
+
+    @Test
+    public void theSecondaryOutputsAreReadAndSavedWithoutLoss() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("p.json"), BRANCHES);
+        PipelineDocument document = PipelineDocument.load(file);
+
+        assertEquals(2, document.branchCount());
+        assertEquals("Miniatures", document.branchName(0));
+        assertEquals(OnError.WARN, document.onError(0));
+        assertEquals(OnError.FAIL, document.onError(1), "absent: fail");
+        assertEquals(1, document.steps(0, Section.PROCESS).size());
+        assertEquals(List.of(), document.steps(1, Section.PROCESS));
+        assertEquals("orig/{name}", document.steps(1, Section.OUT).getFirst()
+                .getAsJsonObject("actionConfig").get("outPattern").getAsString());
+        assertSame(document.steps(0, Section.OUT).getFirst(), document.step(branchStep(0, Section.OUT, 0)));
+        assertSame(document.steps(Section.OUT).getFirst(), document.step(StepAddress.main(Section.OUT, 0)));
+        document.save(file);
+        assertEquals(tree(BRANCHES), tree(Files.readString(file)), "the unknown members of a branch are kept");
+        assertEquals(0, PipelineDocument.empty().branchCount());
+    }
+
+    @Test
+    public void aMalformedSecondaryOutputIsRefused() {
+        assertThrows(IllegalArgumentException.class, () -> PipelineDocument.parse("{\"secondaryOutputs\": {}}"));
+        assertThrows(IllegalArgumentException.class, () -> PipelineDocument.parse("{\"secondaryOutputs\": [1]}"));
+        IllegalArgumentException steps = assertThrows(IllegalArgumentException.class,
+                () -> PipelineDocument.parse("{\"secondaryOutputs\": [{\"name\": \"a\", \"actionSteps\": [2]}]}"));
+        assertTrue(steps.getMessage().contains("secondaryOutputs[0].actionSteps"), steps.getMessage());
+        assertThrows(IllegalArgumentException.class,
+                () -> PipelineDocument.parse("{\"secondaryOutputs\": [{\"name\": \"a\", \"outStep\": []}]}"));
+        assertEquals(1, PipelineDocument.parse("{\"secondaryOutputs\": [{\"outStep\": null}]}").branchCount());
+    }
+
+    @Test
+    public void anAddressInABranchIsAProcessStepOrItsOutStep() {
+        assertThrows(IllegalArgumentException.class, () -> branchStep(0, Section.IN, 0));
+        assertThrows(IllegalArgumentException.class, () -> branchStep(0, Section.RUN_END, 0));
+        assertThrows(IllegalArgumentException.class, () -> branchStep(-2, Section.OUT, 0));
+        assertTrue(branchStep(0, Section.OUT, 0).inBranch());
+        assertFalse(StepAddress.main(Section.IN, 0).inBranch());
+        assertEquals(new Problem(Section.OUT, 0, "outPattern"),
+                new Problem(StepAddress.main(Section.OUT, 0), "outPattern"));
+        assertEquals(Section.PROCESS, new Problem(branchStep(1, Section.PROCESS, 2), "size").section());
+        assertEquals(2, new Problem(branchStep(1, Section.PROCESS, 2), "size").index());
+    }
+
+    @Test
+    public void branchesAreAddedRenamedMovedAndRemoved() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+
+        assertEquals(0, document.addBranch(" Miniatures "));
+        assertEquals(1, document.addBranch("Original"));
+        assertTrue(document.isModified());
+        assertEquals(List.of("Miniatures", "Original"), List.of(document.branchName(0), document.branchName(1)));
+        assertEquals(tree("{\"name\": \"Miniatures\"}"), branchJson(document, 0));
+
+        document.setBranchName(1, "  Originals ");
+        assertEquals("Originals", document.branchName(1));
+        document.setBranchName(1, "");
+        assertEquals("", document.branchName(1));
+        assertFalse(branchJson(document, 1).has("name"));
+        document.setBranchName(1, "Originals");
+
+        assertFalse(document.canMoveBranch(0, -1));
+        assertTrue(document.canMoveBranch(0, 1));
+        assertFalse(document.canMoveBranch(1, 1));
+        document.moveBranch(0, 1);
+        assertEquals(List.of("Originals", "Miniatures"), List.of(document.branchName(0), document.branchName(1)));
+
+        document.removeBranch(0);
+        assertEquals(1, document.branchCount());
+        assertEquals("Miniatures", document.branchName(0));
+        document.removeBranch(0);
+        assertEquals(tree(PIPELINE), tree(document.toJson()), "the member goes with the last branch");
+        assertThrows(IndexOutOfBoundsException.class, () -> document.removeBranch(0));
+    }
+
+    @Test
+    public void aSameNameRewritesNothing() {
+        PipelineDocument document = PipelineDocument.parse(BRANCHES);
+
+        document.setBranchName(0, " Miniatures ");
+
+        assertFalse(document.isModified());
+    }
+
+    @Test
+    public void theNumberOfBranchesIsCapped() {
+        PipelineDocument document = PipelineDocument.empty();
+        for (int i = 0; i < PipelineChecks.MAX_SECONDARY_OUTPUTS; i++) {
+            assertTrue(document.canAddBranch());
+            document.addBranch("b" + i);
+        }
+
+        assertFalse(document.canAddBranch());
+        assertThrows(IllegalStateException.class, () -> document.addBranch("one more"));
+    }
+
+    @Test
+    public void onErrorIsFailByDefaultAndWarnIsWritten() {
+        PipelineDocument document = PipelineDocument.parse(BRANCHES);
+
+        document.setOnError(0, OnError.WARN);
+        document.setOnError(1, OnError.FAIL);
+        assertFalse(document.isModified(), "the same values: nothing rewritten");
+
+        document.setOnError(1, OnError.WARN);
+        assertTrue(document.isModified());
+        assertEquals("warn", branchJson(document, 1).get("onError").getAsString());
+        document.setOnError(0, OnError.FAIL);
+        assertFalse(branchJson(document, 0).has("onError"), "fail, the default, is not written");
+        assertEquals(OnError.FAIL, document.onError(0));
+    }
+
+    @Test
+    public void theStepsOfABranchAreAddedMovedAndRemoved() {
+        PipelineDocument document = PipelineDocument.parse(PIPELINE);
+        document.addBranch("Miniatures");
+
+        JsonObject first = document.addStep(0, Section.PROCESS, THUMB);
+        JsonObject second = document.addStep(0, Section.PROCESS, THUMB);
+        assertTrue(document.canAdd(0, Section.OUT));
+        JsonObject out = document.addStep(0, Section.OUT, WRITE);
+        assertFalse(document.canAdd(0, Section.OUT));
+        assertThrows(IllegalStateException.class, () -> document.addStep(0, Section.OUT, WRITE));
+        assertThrows(IllegalArgumentException.class, () -> document.addStep(0, Section.ANALYZE, EXIF_2));
+        assertEquals(List.of(first, second), document.steps(0, Section.PROCESS));
+        assertEquals(List.of(out), document.steps(0, Section.OUT));
+        assertEquals(tree("{\"plugin\": \"com.acme.thumbs\", \"action\": \"thumb.make\", \"actionConfig\": {}}"),
+                first);
+        assertEquals(1, document.steps(Section.OUT).size(), "the main output is another one");
+        assertEquals(List.of(), document.steps(Section.PROCESS));
+
+        first.getAsJsonObject("actionConfig").addProperty("size", 1);
+        assertTrue(document.canMove(branchStep(0, Section.PROCESS, 0), 1));
+        assertFalse(document.canMove(branchStep(0, Section.PROCESS, 0), -1));
+        assertFalse(document.canMove(branchStep(0, Section.OUT, 0), 1));
+        document.moveStep(branchStep(0, Section.PROCESS, 0), 1);
+        assertEquals(1, document.steps(0, Section.PROCESS).get(1).getAsJsonObject("actionConfig")
+                .get("size").getAsInt());
+
+        document.removeStep(branchStep(0, Section.OUT, 0));
+        assertEquals(List.of(), document.steps(0, Section.OUT));
+        assertFalse(branchJson(document, 0).has("outStep"));
+        document.removeStep(branchStep(0, Section.PROCESS, 0));
+        document.removeStep(branchStep(0, Section.PROCESS, 0));
+        assertEquals(List.of(), document.steps(0, Section.PROCESS));
+        assertThrows(IndexOutOfBoundsException.class, () -> document.removeStep(branchStep(0, Section.PROCESS, 0)));
+        assertThrows(IndexOutOfBoundsException.class, () -> document.steps(1, Section.PROCESS));
+        assertEquals(tree("{\"name\": \"Miniatures\", \"actionSteps\": []}"), branchJson(document, 0),
+                "an emptied list stays, like in the main pipeline");
+    }
+
+    @Test
+    public void theStepsOfABranchHaveTheSameProblemsAsTheMainOnes() {
+        PipelineDocument document = PipelineDocument.parse(BRANCHES);
+        document.steps(0, Section.PROCESS).getFirst().getAsJsonObject("actionConfig").remove("size");
+        document.steps(1, Section.OUT).getFirst().remove("action");
+
+        assertEquals(List.of(new Problem(branchStep(0, Section.PROCESS, 0), "size"),
+                        new Problem(branchStep(1, Section.OUT, 0), "action")),
+                document.validate(BRANCH_CATALOG));
+        assertEquals(PipelineDocument.ADVANCED_FIELDS, PipelineDocument.advancedFields(branchStep(0, Section.OUT, 0)));
+    }
+
+    @Test
+    public void theUnknownSecretsOfABranchAreFound() {
+        PipelineDocument document = PipelineDocument.parse(BRANCHES);
+        document.steps(0, Section.PROCESS).getFirst().getAsJsonObject("actionConfig")
+                .addProperty("token", "${secret:thumbs}");
+
+        assertEquals(List.of(new PipelineDocument.UnknownSecret(branchStep(0, Section.PROCESS, 0), "thumbs")),
+                document.unknownSecrets(List.of()));
+        assertEquals(Section.PROCESS, document.unknownSecrets(List.of()).getFirst().section());
+    }
+
+    @Test
+    public void aBranchNeedsAUniqueNameAKnownOnErrorAndAnOutput() {
+        com.copybot.resources.ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+        PipelineDocument document = PipelineDocument.parse("""
+                { "secondaryOutputs": [
+                    { "name": " ", "outStep": { "action": "file.write" } },
+                    { "name": "Thumbs", "outStep": { "action": "file.write" } },
+                    { "name": " thumbs ", "onError": "ignore", "outStep": { "action": "file.write" } },
+                    { "name": "Original" },
+                    { "outStep": { "action": "file.write" } } ] }
+                """);
+
+        assertEquals(List.of("0:NAME_MISSING", "2:NAME_DUPLICATE", "2:ON_ERROR_UNKNOWN", "3:OUT_MISSING",
+                "4:NAME_MISSING"), kinds(document));
+        assertTrue(document.branchProblems().stream().allMatch(p -> p.kind().blocking()));
+        assertTrue(document.branchProblems().stream()
+                .noneMatch(p -> p.message().isBlank() || p.message().startsWith("%")));
+        assertEquals(List.of(), document.validate(TestCatalog.catalog()), "a branch problem is not a step problem");
+        assertEquals(List.of(), PipelineDocument.parse(BRANCHES).branchProblems());
+    }
+
+    @Test
+    public void moreThanEightBranchesIsAProblem() {
+        StringBuilder json = new StringBuilder("{ \"secondaryOutputs\": [");
+        for (int i = 0; i <= PipelineChecks.MAX_SECONDARY_OUTPUTS; i++) {
+            json.append(i == 0 ? "" : ",")
+                    .append("{\"name\": \"b").append(i).append("\", \"outStep\": {\"action\": \"file.write\"}}");
+        }
+        PipelineDocument document = PipelineDocument.parse(json.append("] }").toString());
+
+        assertEquals(List.of(PipelineChecks.MAX_SECONDARY_OUTPUTS + ":TOO_MANY"), kinds(document));
+    }
+
+    @Test
+    public void aSecondaryFileWriteThatDeletesTheSourceIsOnlyAWarning() {
+        com.copybot.resources.ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+        PipelineDocument document = PipelineDocument.parse("""
+                { "outStep": { "action": "file.write", "actionConfig": { "deleteSource": true } },
+                  "secondaryOutputs": [
+                    { "name": "Thumbs",
+                      "outStep": { "action": "file.write", "actionConfig": { "deleteSource": true } } },
+                    { "name": "b", "outStep": { "action": "file.write", "actionConfig": { "deleteSource": false } } },
+                    { "name": "c", "outStep": { "plugin": "com.acme", "action": "file.write",
+                                               "actionConfig": { "deleteSource": true } } } ] }
+                """);
+
+        assertEquals(List.of("0:SOURCE_KEPT"), kinds(document), "the main output may delete the source");
+        BranchProblem warning = document.branchProblems().getFirst();
+        assertFalse(warning.kind().blocking());
+        assertFalse(warning.message().startsWith("%"), warning.message());
+        assertTrue(warning.message().contains("Thumbs"), warning.message());
     }
 }

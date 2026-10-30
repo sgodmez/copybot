@@ -1154,7 +1154,42 @@ public final class PlanViewModel {
             case TargetProjection.None n -> lines.add("💾 " + ResourcesEngine.getString("plan.detail.no-target"));
         }
         lines.addAll(companionLines(source, detail));
+        if (!detail.branches().isEmpty()) {
+            lines.add("");
+            lines.add("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+            detail.branches().forEach(branch -> lines.addAll(branchLines(branch)));
+        }
         return String.join("\n", lines);
+    }
+
+    /**
+     * A secondary output in the detail (spec secondary-outputs §6): what it did once the item is copied (its outcome,
+     * its error, the files it wrote), else where it would write (the directories of its dry run) or why it cannot tell.
+     */
+    private static List<String> branchLines(ItemDetail.BranchDetail branch) {
+        String head = "   " + ResourcesEngine.getString("editor.secondary.quoted", branch.name()) + " → ";
+        List<String> lines = new ArrayList<>();
+        WorkItemExecution.BranchResult result = branch.result();
+        if (result != null) {
+            String message = result.message() == null || result.message().isEmpty() ? "" : " — " + result.message();
+            lines.add(head + ResourcesEngine.getString("plan.detail.branch." + result.outcome().name()) + message);
+            result.targets().forEach(target -> lines.add("      💾 " + target));
+            return lines;
+        }
+        switch (branch.projection()) {
+            case TargetProjection.Targets t when !branch.targets().isEmpty() -> {
+                lines.add(head + branch.targets().getFirst());
+                branch.targets().stream().skip(1).forEach(file -> lines.add("      " + file));
+            }
+            case TargetProjection.Targets t when !t.directories().isEmpty() -> {
+                lines.add(head + t.directories().getFirst());
+                t.directories().stream().skip(1).forEach(directory -> lines.add("      " + directory));
+            }
+            case TargetProjection.Targets t -> lines.add(head + ResourcesEngine.getString("plan.detail.branch.unknown"));
+            case TargetProjection.None n -> lines.add(head + ResourcesEngine.getString("plan.detail.branch.unknown"));
+            default -> lines.add(head + targetText(branch.projection()));
+        }
+        return lines;
     }
 
     /** The "Size" column: the item's size for the display, "?" when unknown. */

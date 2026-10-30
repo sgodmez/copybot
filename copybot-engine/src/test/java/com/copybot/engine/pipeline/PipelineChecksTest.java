@@ -64,6 +64,47 @@ public class PipelineChecksTest {
     }
 
     @Test
+    public void secondaryOutputsAreCheckedByNameAndRank() {
+        SecondaryOutputConfig ok = new SecondaryOutputConfig("Thumbs", null, null, STEP);
+        assertTrue(PipelineChecks.secondaryOutputsRefusal(config(null, null, null, null)).isEmpty());
+        assertTrue(PipelineChecks.secondaryOutputsRefusal(withBranches(ok, new SecondaryOutputConfig("Copy", null, null, STEP))).isEmpty());
+
+        String noName = PipelineChecks.secondaryOutputsRefusal(withBranches(ok, new SecondaryOutputConfig(" ", null, null, STEP))).orElseThrow();
+        assertEquals(ResourcesEngine.getString("secondary.name.missing", 2), noName);
+        assertEquals(ResourcesEngine.getString("secondary.name.duplicate", 2, "thumbs"),
+                PipelineChecks.secondaryOutputsRefusal(withBranches(ok, new SecondaryOutputConfig("thumbs", null, null, STEP))).orElseThrow());
+        assertEquals(ResourcesEngine.getString("secondary.out.missing", "Lonely"),
+                PipelineChecks.secondaryOutputsRefusal(withBranches(new SecondaryOutputConfig("Lonely", null, null, null))).orElseThrow());
+
+        SecondaryOutputConfig[] nine = new SecondaryOutputConfig[9];
+        for (int i = 0; i < nine.length; i++) {
+            nine[i] = new SecondaryOutputConfig("b" + i, null, null, STEP);
+        }
+        assertEquals(ResourcesEngine.getString("secondary.too-many", 8, 9),
+                PipelineChecks.secondaryOutputsRefusal(withBranches(nine)).orElseThrow());
+        assertTrue(PipelineChecks.secondaryOutputsRefusal(withBranches(java.util.Arrays.copyOf(nine, 8))).isEmpty());
+    }
+
+    @Test
+    public void aBranchAloneDoesNotMakeThePipelineDoSomething() {
+        PipelineConfig onlyBranch = withBranches(new SecondaryOutputConfig("Thumbs", null, null, STEP));
+        assertTrue(PipelineChecks.doesNothing(onlyBranch).isPresent());
+    }
+
+    private static PipelineConfig withBranches(SecondaryOutputConfig... branches) {
+        return new PipelineConfig(List.of(STEP), null, null, null, null, null, null, null, null, null,
+                List.of(branches));
+    }
+
+    @Test
+    public void theSecondaryOutputMessagesAreTranslated() {
+        for (String key : List.of("secondary.too-many", "secondary.name.missing", "secondary.name.duplicate",
+                "secondary.out.missing", "secondary.on-error.unknown", "secondary.step.failed")) {
+            assertFalse(ResourcesEngine.getString(key, "1", "2").startsWith("%"), key);
+        }
+    }
+
+    @Test
     public void theMessagesAreTranslated() {
         assertFalse(ResourcesEngine.getString("pipeline.no-input").startsWith("%"));
         assertFalse(ResourcesEngine.getString("pipeline.does-nothing").startsWith("%"));

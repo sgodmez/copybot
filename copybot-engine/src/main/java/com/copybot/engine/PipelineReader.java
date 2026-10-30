@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.RunEndMigration;
 import com.copybot.exception.CopybotException;
 import com.copybot.utils.GsonUtil;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
@@ -40,6 +41,7 @@ public final class PipelineReader {
         checkEnumType(tree, "conflictCheck", "conflict-check.unknown");
         checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
         checkEnumType(resume, "destinationMatch", "resume.destination-match.unknown");
+        checkSecondaryOnError(tree);
         if (tree.isJsonObject()) {
             RunEndMigration.migrate(tree.getAsJsonObject());
         }
@@ -65,7 +67,40 @@ public final class PipelineReader {
         PipelineChecks.runEndRefusal(pipelineConfig).ifPresent(message -> {
             throw CopybotException.of(message);
         });
+        PipelineChecks.secondaryOutputsRefusal(pipelineConfig).ifPresent(message -> {
+            throw CopybotException.of(message);
+        });
         return pipelineConfig;
+    }
+
+    /**
+     * The "onError" of a secondary output that is neither "fail" nor "warn": Gson would read it as null, which means
+     * "fail", silently. Before Gson, like the other enum members.
+     */
+    private static void checkSecondaryOnError(JsonElement tree) {
+        if (!tree.isJsonObject() || !(tree.getAsJsonObject().get("secondaryOutputs") instanceof JsonArray array)) {
+            return;
+        }
+        int index = 0;
+        for (JsonElement branch : array) {
+            index++;
+            if (!branch.isJsonObject()) {
+                continue;
+            }
+            JsonElement value = branch.getAsJsonObject().get("onError");
+            if (value == null || value.isJsonNull()) {
+                continue;
+            }
+            boolean known = value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                    && ("fail".equals(value.getAsString()) || "warn".equals(value.getAsString()));
+            if (!known) {
+                JsonElement name = branch.getAsJsonObject().get("name");
+                String label = name != null && name.isJsonPrimitive() && !name.getAsString().isBlank()
+                        ? "\"" + name.getAsString() + "\"" : "#" + index;
+                throw CopybotException.ofResource("secondary.on-error.unknown", label,
+                        value.isJsonPrimitive() ? value.getAsString() : value.toString());
+            }
+        }
     }
 
     /** Before Gson, like the resume mode: a present, non-null member that is not a string is an unknown name. */

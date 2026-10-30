@@ -72,6 +72,12 @@ public class UiBundleTest {
             "editor.lenient", "editor.overwrite", "home.state-file", "editor.incomplete", "editor.save-anyway",
             "plan.menu.detail", "plan.menu.details", "plan.menu.analyse", "plan.detail.title", "plan.detail.position", "plan.detail.status", "plan.detail.filtered",
             "plan.detail.unsupported", "plan.detail.no-target", "editor.value.true", "editor.value.false",
+            "editor.secondary", "editor.secondary.help", "editor.secondary.empty", "editor.secondary.new-name",
+            "editor.secondary.name", "editor.secondary.on-error", "editor.secondary.on-error.FAIL",
+            "editor.secondary.on-error.WARN", "editor.secondary.quoted", "editor.secondary.remove-confirm",
+            "editor.secondary.source-kept", "plan.secondary-outputs", "plan.detail.branches", "plan.detail.branch.unknown",
+            "plan.detail.branch.WRITTEN", "plan.detail.branch.SKIPPED", "plan.detail.branch.FILTERED",
+            "plan.detail.branch.ERROR", "plan.detail.branch.WARNING",
             "error.title", "error.unexpected", "exit.title", "exit.running", "exit.stop", "exit.stopping",
             "about.title", "about.java", "about.javafx", "about.plugin-api", "about.license",
             "pipeline.document.not-object", "pipeline.document.not-steps",
@@ -113,7 +119,7 @@ public class UiBundleTest {
             "editor.secret.plain", "editor.secret.to-store", "editor.unknown-secrets");
 
     /** The keys formatted with a number. */
-    private static final List<String> NUMBER_KEYS = List.of("plugins.pending",
+    private static final List<String> NUMBER_KEYS = List.of("plugins.pending", "plan.secondary-outputs",
             "updates.summary.plugins", "updates.summary.app-and-plugins", "updates.summary.size");
 
     static final List<String> BUNDLES = List.of("uiBundle.properties", "uiBundle_fr.properties", "uiBundle_it.properties");

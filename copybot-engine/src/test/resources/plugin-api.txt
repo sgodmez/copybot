@@ -179,10 +179,12 @@ com.copybot.plugin.api.action.WorkItem constructor public <init>(java.net.URL,ja
 com.copybot.plugin.api.action.WorkItem constructor public <init>(java.nio.file.Path) throws java.io.IOException
 com.copybot.plugin.api.action.WorkItem method public boolean isDeleted()
 com.copybot.plugin.api.action.WorkItem method public boolean isLocal()
+com.copybot.plugin.api.action.WorkItem method public boolean isSourceKept()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem copyForDryRun()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withCompanions(java.util.List<com.copybot.plugin.api.action.Companion>)
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withContent(java.util.function.Supplier<java.io.InputStream>,long)
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withContentFile(java.nio.file.Path)
+com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withSourceKept()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItem withoutCompanions()
 com.copybot.plugin.api.action.WorkItem method public com.copybot.plugin.api.action.WorkItemMetadata getMetadatas()
 com.copybot.plugin.api.action.WorkItem method public java.io.InputStream openInputStream() throws java.io.IOException

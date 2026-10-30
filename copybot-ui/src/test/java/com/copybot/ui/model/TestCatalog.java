@@ -37,6 +37,9 @@ final class TestCatalog {
     record MailConfig(@Required String host, @Secret String password) {
     }
 
+    record ThumbConfig(@Required Integer size, @Secret String token) {
+    }
+
     static final CatalogAction READ = action(CatalogAction.EMBEDDED_PLUGIN, null, "file.read", StepType.IN, ReadConfig.class);
     static final CatalogAction WRITE = action(CatalogAction.EMBEDDED_PLUGIN, null, "file.write", StepType.OUT, WriteConfig.class);
     static final CatalogAction EXIF_2 = action("com.acme.exif", "2.1.0", "exif.read", StepType.ANALYZE, ExifConfig.class);
@@ -44,6 +47,9 @@ final class TestCatalog {
     static final CatalogAction LAUNCH = action(CatalogAction.EMBEDDED_PLUGIN, null, "post.process", StepType.RUN_END,
             LaunchConfig.class);
     static final CatalogAction MAIL = action("notify-email", "1.0.0", "email.send", StepType.RUN_END, MailConfig.class);
+    /** A process action, for the steps of a secondary output; not in {@link #CATALOG}. */
+    static final CatalogAction THUMB = action("com.acme.thumbs", "1.0.0", "thumb.make", StepType.PROCESS,
+            ThumbConfig.class);
 
     /** In PluginEngine order: plugin name, most recent version first. */
     static final StepCatalog CATALOG = catalog(EXIF_2, EXIF_1, READ, WRITE, LAUNCH, MAIL);

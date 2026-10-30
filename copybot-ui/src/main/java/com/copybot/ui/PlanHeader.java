@@ -86,6 +86,9 @@ final class PlanHeader {
             first = false;
             stepsFlow.getChildren().add(chip(step));
         }
+        if (summary.secondaryOutputs() > 0) {
+            stepsFlow.getChildren().add(mutedLabel(summary.secondaryOutputsText()));
+        }
     }
 
     /** "Details": opens or closes them. */

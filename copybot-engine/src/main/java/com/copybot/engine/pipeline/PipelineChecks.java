@@ -5,7 +5,9 @@ import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.resources.ResourcesEngine;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -78,6 +80,37 @@ public final class PipelineChecks {
                     return Optional.of(ResourcesEngine.getString("run-end.when.unknown", index, entry.action(),
                             value));
                 }
+            }
+        }
+        return Optional.empty();
+    }
+
+    /** The most secondary outputs a pipeline can have (spec secondary-outputs §2). */
+    public static final int MAX_SECONDARY_OUTPUTS = 8;
+
+    /**
+     * The reason why the secondary outputs cannot be used, empty when they can (or when there are none): more than
+     * {@link #MAX_SECONDARY_OUTPUTS}, a missing or empty name, a name used twice (case ignored), a branch without out
+     * step. A branch is told by its name, by its rank when it has none. The steps are resolved later, with the
+     * expected types ({@link com.copybot.engine.StepResolver#secondary}).
+     */
+    public static Optional<String> secondaryOutputsRefusal(PipelineConfig config) {
+        List<SecondaryOutputConfig> branches = config.secondaryOutputs();
+        if (branches.size() > MAX_SECONDARY_OUTPUTS) {
+            return Optional.of(ResourcesEngine.getString("secondary.too-many", MAX_SECONDARY_OUTPUTS, branches.size()));
+        }
+        Set<String> names = new HashSet<>();
+        int index = 0;
+        for (SecondaryOutputConfig branch : branches) {
+            index++;
+            if (branch.name() == null || branch.name().isBlank()) {
+                return Optional.of(ResourcesEngine.getString("secondary.name.missing", index));
+            }
+            if (!names.add(branch.name().strip().toLowerCase(Locale.ROOT))) {
+                return Optional.of(ResourcesEngine.getString("secondary.name.duplicate", index, branch.name()));
+            }
+            if (branch.outStep() == null) {
+                return Optional.of(ResourcesEngine.getString("secondary.out.missing", branch.name()));
             }
         }
         return Optional.empty();

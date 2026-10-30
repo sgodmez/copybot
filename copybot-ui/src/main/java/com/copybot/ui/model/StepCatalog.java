@@ -83,19 +83,17 @@ public final class StepCatalog {
     }
 
     /**
-     * The plugins the steps of the pipeline name that are not loaded at all, in pipeline order without duplicates
-     * (a plugin loaded in another version is not counted). Not loaded is not always not installed: a plugin that
-     * failed to load (refused for its API, a missing dependency) is here too; "Install" is offered only for what the
-     * catalogue rows say leads somewhere ({@code PluginRow.offersInstall}).
+     * The plugins the steps of the pipeline (secondary outputs included) name that are not loaded at all, in pipeline
+     * order without duplicates (a plugin loaded in another version is not counted). Not loaded is not always not
+     * installed: a plugin that failed to load (refused for its API, a missing dependency) is here too; "Install" is
+     * offered only for what the catalogue rows say leads somewhere ({@code PluginRow.offersInstall}).
      */
     public List<String> missingPlugins(PipelineDocument document) {
         Set<String> missing = new LinkedHashSet<>();
-        for (PipelineDocument.Section section : PipelineDocument.Section.values()) {
-            for (JsonObject step : document.steps(section)) {
-                String plugin = pluginName(step);
-                if (!plugin.equals(CatalogAction.EMBEDDED_PLUGIN) && !isLoaded(plugin)) {
-                    missing.add(plugin);
-                }
+        for (PipelineDocument.StepAddress address : document.stepAddresses()) {
+            String plugin = pluginName(document.step(address));
+            if (!plugin.equals(CatalogAction.EMBEDDED_PLUGIN) && !isLoaded(plugin)) {
+                missing.add(plugin);
             }
         }
         return List.copyOf(missing);

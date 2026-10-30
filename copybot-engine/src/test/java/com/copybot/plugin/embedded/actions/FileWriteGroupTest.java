@@ -209,6 +209,18 @@ public class FileWriteGroupTest {
     private static final String MOVE = ",\"deleteSource\":true,\"onConflict\":{\"compare\":\"fullHash\"}";
 
     @Test
+    public void aGroupMarkedSourceKeptDeletesNoSource() throws IOException {
+        WorkItem item = rawWithXmp("raw", "xmp").withSourceKept();
+        WorkItem xmp = item.getCompanions().getFirst().item();
+
+        action(MOVE).write(item, WriteContext.newRun());
+
+        assertEquals(List.of("IMG_1.CR3", "IMG_1.xmp"), nasFiles());
+        assertTrue(Files.exists(item.getLocalLocation()), "the main source stays");
+        assertTrue(Files.exists(xmp.getLocalLocation()), "the companion source stays");
+    }
+
+    @Test
     public void aFailedCompanionDeletesNoSourceAndTheNextRunCatchesUp() throws IOException {
         WorkItem item = rawWithXmp("raw", "xmp");
         WorkItem xmp = item.getCompanions().getFirst().item();

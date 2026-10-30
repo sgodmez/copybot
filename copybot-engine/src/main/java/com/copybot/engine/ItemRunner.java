@@ -4,9 +4,11 @@ import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStep;
+import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.resources.FootprintResolver;
 import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.exception.CopybotException;
 import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
@@ -17,20 +19,25 @@ import com.copybot.plugin.api.action.TargetCheck;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
+import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /**
  * Runs the steps of one work item: its resources acquired step by step, the lifecycle calls of each action around
- * the step, the forks of a process step submitted as items of their own, the target checked once the item is
- * analysed. {@link MainExecutor} decides which steps a phase runs and sets the phase settings below.
+ * the step, the forks of a process step submitted as items of their own, the secondary outputs run inline on copies
+ * of the item, the target checked once the item is analysed. {@link MainExecutor} decides which steps a phase runs and
+ * sets the phase settings below.
  */
 final class ItemRunner {
 
@@ -41,12 +48,14 @@ final class ItemRunner {
     private final TaskGroup tasks;
     private final CoalescingNotifier<PipelineState> notifier;
     private final WriteContext writeContext;
-    /** The item steps of the pipeline, null until they are resolved. */
-    private final Supplier<List<PipelineStep<?>>> itemSteps;
+    /** The item steps of the pipeline and where the secondary outputs sit among them, null until they are resolved. */
+    private final Supplier<ItemLayout> layout;
     /** The out step's action, null when the pipeline has none. */
     private final Supplier<IOutAction> outAction;
     /** A cancel() of the pipeline took effect. */
     private final BooleanSupplier cancelRequested;
+    /** Adds warnings to the run's: the errors of the secondary outputs that only warn. */
+    private final Consumer<List<String>> runWarnings;
 
     private boolean processWhileListing;
     /** Released once every listing is over: without processing while listing, the items wait for it. */
@@ -67,16 +76,17 @@ final class ItemRunner {
     private volatile ConflictCheck conflictCheck = ConflictCheck.QUICK;
 
     ItemRunner(ResourceRegistry registry, PipelineState state, TaskGroup tasks, CoalescingNotifier<PipelineState> notifier,
-               WriteContext writeContext, Supplier<List<PipelineStep<?>>> itemSteps, Supplier<IOutAction> outAction,
-               BooleanSupplier cancelRequested) {
+               WriteContext writeContext, Supplier<ItemLayout> layout, Supplier<IOutAction> outAction,
+               BooleanSupplier cancelRequested, Consumer<List<String>> runWarnings) {
         this.registry = registry;
         this.state = state;
         this.tasks = tasks;
         this.notifier = notifier;
         this.writeContext = writeContext;
-        this.itemSteps = itemSteps;
+        this.layout = layout;
         this.outAction = outAction;
         this.cancelRequested = cancelRequested;
+        this.runWarnings = runWarnings;
     }
 
     void setProcessWhileListing(boolean processWhileListing) {
@@ -120,22 +130,18 @@ final class ItemRunner {
             if (!processWhileListing) {
                 listingGate.await();
             }
-            List<PipelineStep<?>> steps = itemSteps.get();
+            ItemLayout items = layout.get();
+            List<PipelineStep<?>> steps = items.steps();
             StepOutcome outcome = StepOutcome.CONTINUE;
             for (int i = fromStep; i < toStep; i++) {
-                PipelineStep<?> step = steps.get(i);
-                Set<String> footprint = FootprintResolver.resolve(step.getAction(), exec.getWorkItem(), step.getConfig(), i);
-                exec.setWaitingResources(i, footprint);
-                notifier.changed();
-                registry.acquireAll(footprint, ticket);
-                if (cancelRequested.getAsBoolean()) {
-                    // cancel() lifts a pause before the tasks are shut down: the waiters it grants must not
-                    // start their step
-                    registry.releaseAll(footprint);
-                    throw new InterruptedException("cancelled");
+                ItemLayout.BranchRange branch = items.branchAt(i);
+                if (branch != null) {
+                    runBranch(exec, branch, steps, ticket); // whatever it wrote, the item goes on
+                    i = branch.outIndex(); // on with the step after the branch
+                    continue;
                 }
-                exec.setRunning(i);
-                notifier.changed();
+                PipelineStep<?> step = steps.get(i);
+                Set<String> footprint = acquire(exec, step, i, exec.getWorkItem(), ticket);
                 try {
                     outcome = runStepOfItem(exec, step, i, toStep);
                 } finally {
@@ -190,16 +196,159 @@ final class ItemRunner {
      */
     private static void afterItem(List<WorkItemExecution> finished) {
         for (WorkItemExecution exec : finished) {
-            List<PipelineStep<?>> steps = exec.getPipelineSteps();
-            List<Map.Entry<Integer, WorkItem>> handed = List.copyOf(exec.handedItems().entrySet());
-            for (Map.Entry<Integer, WorkItem> began : handed.reversed()) {
-                IAction action = steps.get(began.getKey()).getAction();
-                try {
-                    action.afterItem(began.getValue());
-                } catch (Throwable t) {
-                    LOG.warn(t, "item.after-item.failed", began.getValue().getNameDisplay(), String.valueOf(t));
-                }
+            afterItem(exec.getPipelineSteps(), List.copyOf(exec.handedItems().entrySet()).reversed());
+        }
+    }
+
+    /** {@link IAction#afterItem} of each step for the item it was handed, in this order, every one of them called. */
+    private static void afterItem(List<PipelineStep<?>> steps, List<Map.Entry<Integer, WorkItem>> handed) {
+        for (Map.Entry<Integer, WorkItem> began : handed) {
+            IAction action = steps.get(began.getKey()).getAction();
+            try {
+                action.afterItem(began.getValue());
+            } catch (Throwable t) {
+                LOG.warn(t, "item.after-item.failed", began.getValue().getNameDisplay(), String.valueOf(t));
             }
+        }
+    }
+
+    /**
+     * The resources of the step {@code index} for this item, waited for; the item is then RUNNING that step.
+     *
+     * @throws InterruptedException interrupted while waiting, or the pipeline is cancelled
+     */
+    private Set<String> acquire(WorkItemExecution exec, PipelineStep<?> step, int index, WorkItem item, long ticket)
+            throws InterruptedException {
+        Set<String> footprint = FootprintResolver.resolve(step.getAction(), item, step.getConfig(), index);
+        exec.setWaitingResources(index, footprint);
+        notifier.changed();
+        registry.acquireAll(footprint, ticket);
+        if (cancelRequested.getAsBoolean()) {
+            // cancel() lifts a pause before the tasks are shut down: the waiters it grants must not start their step
+            registry.releaseAll(footprint);
+            throw new InterruptedException("cancelled");
+        }
+        exec.setRunning(index);
+        notifier.changed();
+        return footprint;
+    }
+
+    /**
+     * One secondary output for this item (spec secondary-outputs §3): its own copy of the analysed item, without
+     * companions, marked source kept, without the item's own out pattern (the main output's); each item a process
+     * step produces goes on alone to the out step, in sequence. Then {@link IAction#afterItem} of its steps for each
+     * item they were handed, the last first, whatever happened. An error of an output that fails the item is thrown,
+     * the name of the output in front; one that only warns becomes a warning of the run. A cancel is never converted.
+     */
+    private void runBranch(WorkItemExecution exec, ItemLayout.BranchRange branch, List<PipelineStep<?>> steps,
+                           long ticket) throws InterruptedException {
+        // each copy has its own metadata tables: the output never writes into the item of the main branch
+        WorkItem copy = exec.getWorkItem().copyForDryRun().withoutCompanions().withSourceKept();
+        copy.setOutPattern(null); // the item's own out pattern is the main output's (spec secondary-outputs §6)
+        List<Map.Entry<Integer, WorkItem>> handed = new ArrayList<>();
+        BranchTally tally = new BranchTally();
+        try {
+            runBranchFrom(exec, steps, copy, branch.from(), handed, tally, ticket);
+            exec.setBranchResult(tally.result(branch.name()));
+        } catch (PhaseStopped | RejectedExecutionException | VirtualMachineError e) {
+            throw e; // control, or the JVM failing: never an error of the output
+        } catch (RuntimeException | Error t) {
+            if (cancelRequested.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+                throw t; // an interruption of the item, told apart by run()
+            }
+            String message = t.getMessage() != null ? t.getMessage() : t.getClass().getName();
+            if (branch.onError() == SecondaryOutputConfig.OnError.FAIL) {
+                exec.setBranchResult(tally.failed(branch.name(), WorkItemExecution.BranchOutcome.ERROR, message));
+                throw CopybotException.ofResource(t, "secondary.item.failed", branch.name(), message);
+            }
+            exec.setBranchResult(tally.failed(branch.name(), WorkItemExecution.BranchOutcome.WARNING, message));
+            runWarnings.accept(List.of(ResourcesEngine.getString("secondary.item.warning", branch.name(), message,
+                    exec.getWorkItem().getNameDisplay())));
+        } finally {
+            afterItem(steps, handed.reversed());
+        }
+    }
+
+    /** The step {@code index} of a secondary output for one item, then the next steps for each item it produced. */
+    private void runBranchFrom(WorkItemExecution exec, List<PipelineStep<?>> steps, WorkItem item, int index,
+                               List<Map.Entry<Integer, WorkItem>> handed, BranchTally tally, long ticket)
+            throws InterruptedException {
+        PipelineStep<?> step = steps.get(index);
+        List<WorkItem> produced;
+        Set<String> footprint = acquire(exec, step, index, item, ticket);
+        try {
+            handed.add(Map.entry(index, item));
+            produced = aroundStep(exec, step, index, item, progress -> runBranchStep(step, item, progress, tally));
+        } catch (Error e) {
+            // without the secret values, like a runtime exception (aroundStep): it may become the item's error or a
+            // warning of the run; the JVM failing is left as it is
+            if (e instanceof VirtualMachineError) {
+                throw e;
+            }
+            Throwable hidden = step.getRedactor().redact(e);
+            if (hidden instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw hidden instanceof Error error ? error : e;
+        } finally {
+            registry.releaseAll(footprint);
+        }
+        for (WorkItem next : produced) {
+            // a process may hand on a new item of the same source: no out step of a branch ever deletes it
+            runBranchFrom(exec, steps, next.isSourceKept() ? next : next.withSourceKept(), index + 1, handed, tally,
+                    ticket);
+        }
+    }
+
+    /** @return the items the next step of the output gets: none after its out step, nor when a process filters */
+    private List<WorkItem> runBranchStep(PipelineStep<?> step, WorkItem item, ItemProgress progress, BranchTally tally) {
+        IAction action = step.getAction();
+        if (action instanceof IProcessAction process) {
+            List<WorkItem> produced = process.doProcess(item);
+            return produced == null ? List.of() : produced;
+        }
+        if (action instanceof IOutAction out) {
+            tally.add(out.write(item, writeContext.withProgress(progress)));
+            return List.of();
+        }
+        throw new UnsupportedOperationException("Unsupported action type: " + action.getClass());
+    }
+
+    /** What the out step of a secondary output did with the items it got, for {@link WorkItemExecution#getBranchResults}. */
+    private static final class BranchTally {
+        private final List<Path> targets = new ArrayList<>();
+        private int written;
+        private int skipped;
+        private String skipReason;
+
+        void add(WriteResult result) {
+            if (result != null && result.isSkipped()) {
+                skipped++;
+                if (skipReason == null) {
+                    skipReason = result.reason();
+                }
+            } else {
+                written++;
+            }
+            if (result != null && result.target() != null) {
+                targets.add(result.target());
+            }
+        }
+
+        /** Written when it wrote one item at least, skipped when it skipped every one, filtered when it got none. */
+        WorkItemExecution.BranchResult result(String name) {
+            if (written > 0) {
+                return new WorkItemExecution.BranchResult(name, WorkItemExecution.BranchOutcome.WRITTEN, targets, null);
+            }
+            if (skipped > 0) {
+                return new WorkItemExecution.BranchResult(name, WorkItemExecution.BranchOutcome.SKIPPED, targets,
+                        skipReason);
+            }
+            return new WorkItemExecution.BranchResult(name, WorkItemExecution.BranchOutcome.FILTERED, targets, null);
+        }
+
+        WorkItemExecution.BranchResult failed(String name, WorkItemExecution.BranchOutcome outcome, String message) {
+            return new WorkItemExecution.BranchResult(name, outcome, targets, message);
         }
     }
 
@@ -291,22 +440,28 @@ final class ItemRunner {
      * watcher through {@link WorkItemExecution#getWorkStatus()}.
      */
     private StepOutcome runStepOfItem(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, int toStep) {
+        WorkItem item = exec.getWorkItem();
+        exec.stepBegan(stepIndex, item);
+        return aroundStep(exec, step, stepIndex, item, progress -> runStep(exec, step, stepIndex, toStep, progress));
+    }
+
+    /** The body of one step handed this item, with the lifecycle calls and the progress channel told above. */
+    private <R> R aroundStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, WorkItem item,
+                             Function<ItemProgress, R> body) {
         IAction action = step.getAction();
         ItemProgress progress = status -> {
             exec.reportProgress(stepIndex, status);
             notifier.changed();
         };
         return ItemProgress.callWith(progress, () -> {
-            WorkItem item = exec.getWorkItem();
-            exec.stepBegan(stepIndex, item);
             try {
                 action.beforeEach(item);
             } catch (RuntimeException e) {
                 throw redacted(step, e);
             }
-            StepOutcome outcome;
+            R outcome;
             try {
-                outcome = runStep(exec, step, stepIndex, toStep, progress);
+                outcome = body.apply(progress);
             } catch (Throwable t) {
                 try {
                     action.afterEach(item);
@@ -358,7 +513,7 @@ final class ItemRunner {
             produced.forEach(child -> DryRunner.inheritOutPattern(item, child));
             exec.replaceWorkItem(produced.get(0));
             for (int i = 1; i < produced.size(); i++) {
-                WorkItemExecution forked = new WorkItemExecution(produced.get(i), itemSteps.get());
+                WorkItemExecution forked = new WorkItemExecution(produced.get(i), layout.get().steps());
                 forked.setParent(exec);
                 state.getWorkItems().add(forked);
                 notifier.changed();

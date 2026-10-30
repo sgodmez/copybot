@@ -3,6 +3,7 @@ package com.copybot.ui.model;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.FieldKind;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument.Section;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -17,12 +18,14 @@ import java.util.Optional;
  * path of file.read, the output pattern of file.write and the resume mode. Every label falls back to the raw
  * value (action code, resume mode as written), never to a "%key".
  *
- * @param steps      the steps in pipeline order (input, analyse, process, output)
- * @param sourcePath the "path" of the first embedded file.read step, null without one
- * @param outPattern the "outPattern" of an embedded file.write output step, null without one
- * @param resumeMode the effective resume mode as written, null without "resume" block
+ * @param steps            the steps of the main pipeline in order (input, analyse, process, output)
+ * @param sourcePath       the "path" of the first embedded file.read step, null without one
+ * @param outPattern       the "outPattern" of an embedded file.write output step, null without one
+ * @param resumeMode       the effective resume mode as written, null without "resume" block
+ * @param secondaryOutputs how many secondary outputs the pipeline has (spec secondary-outputs §8): counted, not listed
  */
-public record PipelineSummary(List<Step> steps, String sourcePath, String outPattern, String resumeMode) {
+public record PipelineSummary(List<Step> steps, String sourcePath, String outPattern, String resumeMode,
+                              int secondaryOutputs) {
 
     /** The shown value of a source or destination the pipeline does not describe. */
     public static final String NONE = "—";
@@ -87,7 +90,13 @@ public record PipelineSummary(List<Step> steps, String sourcePath, String outPat
                 }
             }
         }
-        return new PipelineSummary(steps, sourcePath, outPattern, document.resumeMode().orElse(null));
+        return new PipelineSummary(steps, sourcePath, outPattern, document.resumeMode().orElse(null),
+                document.branchCount());
+    }
+
+    /** "+ 2 secondary outputs" after the steps, "" without any. */
+    public String secondaryOutputsText() {
+        return secondaryOutputs == 0 ? "" : ResourcesEngine.getString("plan.secondary-outputs", secondaryOutputs);
     }
 
     /** The leaf fields of the schema that have a value; the raw actionConfig members without schema. */

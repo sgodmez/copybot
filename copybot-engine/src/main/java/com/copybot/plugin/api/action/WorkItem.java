@@ -29,6 +29,7 @@ public class WorkItem {
     private String listedFolder;
     private SourceDeleter sourceDeleter; // deletes a source that is not a local file, null: none
     private List<Companion> companions = List.of();
+    private boolean sourceKept = false; // a secondary output's copy: no out step deletes the source
     private final WorkItemMetadata metadatas = new WorkItemMetadata();
 
 
@@ -53,6 +54,7 @@ public class WorkItem {
         copy.listedFolder = listedFolder;
         copy.sourceDeleter = sourceDeleter;
         copy.companions = companions;
+        copy.sourceKept = sourceKept;
         copy.metadatas.raw().putAll(metadatas.raw());
         copy.metadatas.display().putAll(metadatas.display());
         return copy;
@@ -164,6 +166,21 @@ public class WorkItem {
     public WorkItem withoutCompanions() {
         WorkItem copy = copyForDryRun();
         copy.companions = List.of();
+        return copy;
+    }
+
+    /**
+     * Whether the source of this item must be kept: set on the copy a secondary output receives (spec
+     * secondary-outputs §5). An out action never deletes the source of such an item (see {@link IOutAction}).
+     */
+    public boolean isSourceKept() {
+        return sourceKept;
+    }
+
+    /** A copy of this item (as {@link #copyForDryRun()}) marked source kept; this item is unchanged. */
+    public WorkItem withSourceKept() {
+        WorkItem copy = copyForDryRun();
+        copy.sourceKept = true;
         return copy;
     }
 

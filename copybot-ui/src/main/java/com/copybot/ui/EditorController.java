@@ -2,6 +2,7 @@ package com.copybot.ui;
 
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.engine.plugin.PluginEngine;
@@ -11,6 +12,7 @@ import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
+import com.copybot.ui.model.PipelineDocument.StepAddress;
 import com.copybot.ui.model.PlanViewModel;
 import com.copybot.ui.model.RecentPipelines;
 import com.copybot.ui.model.StepCatalog;
@@ -37,6 +39,7 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.TextField;
 import javafx.scene.control.TextInputControl;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
@@ -58,6 +61,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -76,15 +80,39 @@ public class EditorController {
 
     private static final System.Logger LOG = System.getLogger(EditorController.class.getName());
 
-    enum Kind { PIPELINE, SECTION, STEP, GROUPING, ARCHIVES }
+    enum Kind { PIPELINE, SECTION, STEP, GROUPING, ARCHIVES, SECONDARY, BRANCH }
 
-    /** A node of the tree: the pipeline, a section, the step at index of a section, the grouping or the archives. */
-    record EditorNode(Kind kind, Section section, int index) {
+    /**
+     * A node of the tree: the pipeline, a section, the step at index of a section, the grouping, the archives, the
+     * secondary outputs, one of them (branch). A section or a step is in the main pipeline ({@link StepAddress#MAIN})
+     * or in the secondary output at index {@code branch} (spec secondary-outputs §8).
+     */
+    record EditorNode(Kind kind, int branch, Section section, int index) {
+
+        static EditorNode section(int branch, Section section) {
+            return new EditorNode(Kind.SECTION, branch, section, -1);
+        }
+
+        static EditorNode step(StepAddress address) {
+            return new EditorNode(Kind.STEP, address.branch(), address.section(), address.index());
+        }
+
+        static EditorNode branch(int branch) {
+            return new EditorNode(Kind.BRANCH, branch, null, -1);
+        }
+
+        /** The address of the step node. */
+        StepAddress address() {
+            return new StepAddress(branch, section, index);
+        }
     }
 
-    private static final EditorNode PIPELINE_NODE = new EditorNode(Kind.PIPELINE, null, -1);
-    private static final EditorNode GROUPING_NODE = new EditorNode(Kind.GROUPING, null, -1);
-    private static final EditorNode ARCHIVES_NODE = new EditorNode(Kind.ARCHIVES, null, -1);
+    private static final EditorNode PIPELINE_NODE = new EditorNode(Kind.PIPELINE, StepAddress.MAIN, null, -1);
+    private static final EditorNode GROUPING_NODE = new EditorNode(Kind.GROUPING, StepAddress.MAIN, null, -1);
+    private static final EditorNode ARCHIVES_NODE = new EditorNode(Kind.ARCHIVES, StepAddress.MAIN, null, -1);
+    private static final EditorNode SECONDARY_NODE = new EditorNode(Kind.SECONDARY, StepAddress.MAIN, null, -1);
+    private static final String WARNING_STYLE = "-fx-text-fill: #c87f0a;";
+    private static final String BLOCKING_STYLE = "-fx-text-fill: #c62828;";
 
     @FXML private TreeView<EditorNode> tree;
     @FXML private Button addButton;
@@ -112,6 +140,9 @@ public class EditorController {
     private boolean saving;
     /** The controls of the current form whose text does not parse: no save meanwhile. */
     private final ConfigForm.Invalid invalid = new ConfigForm.Invalid();
+    /** Shows again the problems of the secondary output of the current form after an edit; nothing otherwise. */
+    private Runnable refreshBranchProblems = () -> {
+    };
 
     /** The sample and the tested files of the out form's helper (spec pattern-helper §5). */
     private EditorSamples samples;
@@ -324,42 +355,66 @@ public class EditorController {
 
     private void rebuildTree(EditorNode select) {
         TreeItem<EditorNode> root = new TreeItem<>();
-        TreeItem<EditorNode> selected = new TreeItem<>(PIPELINE_NODE);
-        root.getChildren().add(selected);
+        TreeItem<EditorNode> pipeline = new TreeItem<>(PIPELINE_NODE);
+        root.getChildren().add(pipeline);
         for (Section section : Section.values()) {
-            EditorNode sectionNode = new EditorNode(Kind.SECTION, section, -1);
-            TreeItem<EditorNode> sectionItem = new TreeItem<>(sectionNode);
-            sectionItem.setExpanded(true);
-            if (sectionNode.equals(select)) {
-                selected = sectionItem;
-            }
-            for (int i = 0; i < document.steps(section).size(); i++) {
-                TreeItem<EditorNode> stepItem = new TreeItem<>(new EditorNode(Kind.STEP, section, i));
-                if (stepItem.getValue().equals(select)) {
-                    selected = stepItem;
-                }
-                sectionItem.getChildren().add(stepItem);
-            }
-            root.getChildren().add(sectionItem);
+            root.getChildren().add(sectionItem(StepAddress.MAIN, section));
             if (section == Section.IN) { // grouping and archives work on the listing, right after the inputs
-                for (EditorNode node : List.of(GROUPING_NODE, ARCHIVES_NODE)) {
-                    TreeItem<EditorNode> item = new TreeItem<>(node);
-                    if (node.equals(select)) {
-                        selected = item;
+                root.getChildren().add(new TreeItem<>(GROUPING_NODE));
+                root.getChildren().add(new TreeItem<>(ARCHIVES_NODE));
+            }
+            if (section == Section.OUT) { // the secondary outputs: each with its process steps then its out step
+                TreeItem<EditorNode> secondary = new TreeItem<>(SECONDARY_NODE);
+                secondary.setExpanded(true);
+                for (int branch = 0; branch < document.branchCount(); branch++) {
+                    TreeItem<EditorNode> branchItem = new TreeItem<>(EditorNode.branch(branch));
+                    branchItem.setExpanded(true);
+                    for (Section own : PipelineDocument.BRANCH_SECTIONS) {
+                        branchItem.getChildren().add(sectionItem(branch, own));
                     }
-                    root.getChildren().add(item);
+                    secondary.getChildren().add(branchItem);
                 }
+                root.getChildren().add(secondary);
             }
         }
         tree.setRoot(root);
-        tree.getSelectionModel().select(selected);
+        tree.getSelectionModel().select(Optional.ofNullable(find(root, select)).orElse(pipeline));
     }
 
-    private String label(EditorNode node) {
+    /** The section of the branch, expanded, with its steps. */
+    private TreeItem<EditorNode> sectionItem(int branch, Section section) {
+        TreeItem<EditorNode> sectionItem = new TreeItem<>(EditorNode.section(branch, section));
+        sectionItem.setExpanded(true);
+        for (int i = 0; i < document.steps(branch, section).size(); i++) {
+            sectionItem.getChildren().add(new TreeItem<>(EditorNode.step(new StepAddress(branch, section, i))));
+        }
+        return sectionItem;
+    }
+
+    /** The item of this node under item, null when there is none. */
+    private static TreeItem<EditorNode> find(TreeItem<EditorNode> item, EditorNode node) {
+        if (node == null) {
+            return null;
+        }
+        if (node.equals(item.getValue())) {
+            return item;
+        }
+        for (TreeItem<EditorNode> child : item.getChildren()) {
+            TreeItem<EditorNode> found = find(child, node);
+            if (found != null) {
+                return found;
+            }
+        }
+        return null;
+    }
+
+    String label(EditorNode node) {
         return switch (node.kind()) {
             case PIPELINE -> ResourcesEngine.getString("editor.section.PIPELINE");
             case GROUPING -> ResourcesEngine.getString("editor.grouping");
             case ARCHIVES -> ResourcesEngine.getString("editor.archives");
+            case SECONDARY -> ResourcesEngine.getString("editor.secondary");
+            case BRANCH -> branchLabel(node.branch());
             case SECTION -> ResourcesEngine.getString("editor.section." + node.section().name());
             case STEP -> {
                 JsonObject step = step(node);
@@ -369,8 +424,20 @@ public class EditorController {
         };
     }
 
+    /** The name of the secondary output, "#2" without one. */
+    private String branchLabel(int branch) {
+        String name = document.branchName(branch);
+        return name.isEmpty() ? "#" + (branch + 1) : name;
+    }
+
+    /** The name of the secondary output between the quotes of the language, "#2" without one. */
+    String quotedBranch(int branch) {
+        String name = document.branchName(branch);
+        return name.isEmpty() ? "#" + (branch + 1) : ResourcesEngine.getString("editor.secondary.quoted", name);
+    }
+
     private JsonObject step(EditorNode node) {
-        return document.steps(node.section()).get(node.index());
+        return document.step(node.address());
     }
 
     private static String member(JsonObject object, String name) {
@@ -385,20 +452,45 @@ public class EditorController {
 
     private void updateButtons() {
         EditorNode node = selectedNode();
-        boolean step = node != null && node.kind() == Kind.STEP;
-        addButton.setDisable(node == null || node.section() == null || !document.canAdd(node.section()));
-        upButton.setDisable(!step || !document.canMove(node.section(), node.index(), -1));
-        downButton.setDisable(!step || !document.canMove(node.section(), node.index(), 1));
-        removeButton.setDisable(!step);
+        Kind kind = node == null ? null : node.kind();
+        boolean step = kind == Kind.STEP;
+        boolean branch = kind == Kind.BRANCH;
+        addButton.setDisable(kind == Kind.SECONDARY ? !document.canAddBranch()
+                : node == null || node.section() == null || !document.canAdd(node.branch(), node.section()));
+        upButton.setDisable(branch ? !document.canMoveBranch(node.branch(), -1)
+                : !step || !document.canMove(node.address(), -1));
+        downButton.setDisable(branch ? !document.canMoveBranch(node.branch(), 1)
+                : !step || !document.canMove(node.address(), 1));
+        removeButton.setDisable(!step && !branch);
     }
 
     @FXML
     protected void onAddClick() {
-        Section section = selectedNode().section();
+        EditorNode node = selectedNode();
+        if (node.kind() == Kind.SECONDARY) { // named at once, renamed in its form
+            rebuildTree(EditorNode.branch(document.addBranch(newBranchName())));
+            return;
+        }
+        int branch = node.branch();
+        Section section = node.section();
         chooseAction(section).ifPresent(action -> {
-            document.addStep(section, action);
-            rebuildTree(new EditorNode(Kind.STEP, section, document.steps(section).size() - 1));
+            document.addStep(branch, section, action);
+            rebuildTree(EditorNode.step(new StepAddress(branch, section, document.steps(branch, section).size() - 1)));
         });
+    }
+
+    /** "Secondary output 2": the first number from the count + 1 whose name is not taken (case ignored, as the engine). */
+    private String newBranchName() {
+        Set<String> taken = new HashSet<>();
+        for (int i = 0; i < document.branchCount(); i++) {
+            taken.add(document.branchName(i).toLowerCase(Locale.ROOT));
+        }
+        for (int n = document.branchCount() + 1; ; n++) {
+            String name = ResourcesEngine.getString("editor.secondary.new-name", String.valueOf(n));
+            if (!taken.contains(name.strip().toLowerCase(Locale.ROOT))) {
+                return name;
+            }
+        }
     }
 
     @FXML
@@ -413,15 +505,32 @@ public class EditorController {
 
     private void move(int delta) {
         EditorNode node = selectedNode();
-        document.moveStep(node.section(), node.index(), delta);
-        rebuildTree(new EditorNode(Kind.STEP, node.section(), node.index() + delta));
+        if (node.kind() == Kind.BRANCH) {
+            document.moveBranch(node.branch(), delta);
+            rebuildTree(EditorNode.branch(node.branch() + delta));
+            return;
+        }
+        document.moveStep(node.address(), delta);
+        rebuildTree(EditorNode.step(new StepAddress(node.branch(), node.section(), node.index() + delta)));
     }
 
     @FXML
     protected void onRemoveClick() {
         EditorNode node = selectedNode();
-        document.removeStep(node.section(), node.index());
-        rebuildTree(new EditorNode(Kind.SECTION, node.section(), -1));
+        if (node.kind() == Kind.BRANCH) {
+            int branch = node.branch();
+            boolean hasSteps = PipelineDocument.BRANCH_SECTIONS.stream()
+                    .anyMatch(section -> !document.steps(branch, section).isEmpty());
+            // its steps go with it: asked first when there are some
+            if (hasSteps && !confirm(ResourcesEngine.getString("editor.secondary.remove-confirm", quotedBranch(branch)))) {
+                return;
+            }
+            document.removeBranch(branch);
+            rebuildTree(SECONDARY_NODE);
+            return;
+        }
+        document.removeStep(node.address());
+        rebuildTree(EditorNode.section(node.branch(), node.section()));
     }
 
     /** The loaded actions of the section's step type, name and description localized. */
@@ -463,6 +572,8 @@ public class EditorController {
         samples.formReplaced(); // its helper belongs to the form being replaced
         formBox.getChildren().clear();
         invalid.clear();
+        refreshBranchProblems = () -> {
+        };
         if (node == null || node.kind() == Kind.SECTION) {
             return;
         }
@@ -472,9 +583,85 @@ public class EditorController {
             formBox.getChildren().add(GroupingForms.groupingForm(document, stage, () -> showForm(node)));
         } else if (node.kind() == Kind.ARCHIVES) {
             formBox.getChildren().add(GroupingForms.archivesForm(document));
+        } else if (node.kind() == Kind.SECONDARY) {
+            secondaryForm();
+        } else if (node.kind() == Kind.BRANCH) {
+            branchForm(node.branch());
         } else {
             stepForm(node);
         }
+    }
+
+    /** What the secondary outputs are for, and every problem of theirs (spec secondary-outputs §8). */
+    private void secondaryForm() {
+        Label help = new Label(ResourcesEngine.getString("editor.secondary.help"));
+        help.setWrapText(true);
+        formBox.getChildren().addAll(title(ResourcesEngine.getString("editor.secondary")), help);
+        if (document.branchCount() == 0) {
+            Label empty = new Label(ResourcesEngine.getString("editor.secondary.empty"));
+            empty.setWrapText(true);
+            formBox.getChildren().add(empty);
+        }
+        formBox.getChildren().add(branchProblems(null));
+    }
+
+    /** The name and what an error does, then the problems of the secondary output (spec secondary-outputs §8). */
+    private void branchForm(int branch) {
+        Label title = title(branchLabel(branch));
+        VBox problems = branchProblems(branch);
+        TextField name = new TextField(document.branchName(branch));
+        name.textProperty().addListener((obs, old, text) -> {
+            document.setBranchName(branch, text);
+            title.setText(branchLabel(branch));
+            tree.refresh();
+            refreshBranchProblems.run();
+        });
+        ComboBox<SecondaryOutputConfig.OnError> onError = new ComboBox<>();
+        onError.getItems().addAll(SecondaryOutputConfig.OnError.values());
+        onError.setConverter(new StringConverter<>() {
+            @Override
+            public String toString(SecondaryOutputConfig.OnError value) {
+                return value == null ? "" : ResourcesEngine.getString("editor.secondary.on-error." + value.name());
+            }
+
+            @Override
+            public SecondaryOutputConfig.OnError fromString(String s) {
+                return null; // not editable
+            }
+        });
+        // an unknown stored value (a problem shown above) selects nothing, so that choosing fail still writes it
+        boolean unknown = document.branchProblems().stream().anyMatch(problem -> problem.branch() == branch
+                && problem.kind() == PipelineDocument.BranchProblem.Kind.ON_ERROR_UNKNOWN);
+        onError.setValue(unknown ? null : document.onError(branch));
+        onError.valueProperty().addListener((obs, old, value) -> {
+            document.setOnError(branch, value == null ? SecondaryOutputConfig.OnError.FAIL : value);
+            refreshBranchProblems.run();
+        });
+        formBox.getChildren().addAll(title, problems,
+                new VBox(3, new Label(ResourcesEngine.getString("editor.secondary.name")), name),
+                new VBox(3, new Label(ResourcesEngine.getString("editor.secondary.on-error")), onError));
+    }
+
+    /**
+     * The problems of the secondary output (all of them for null), kept up to date by {@link #refreshBranchProblems}:
+     * what the engine would refuse in red, a source that will be kept anyway as a warning.
+     */
+    private VBox branchProblems(Integer branch) {
+        VBox box = new VBox(3);
+        refreshBranchProblems = () -> {
+            box.getChildren().clear();
+            for (PipelineDocument.BranchProblem problem : document.branchProblems()) {
+                if (branch == null || problem.branch() == branch) {
+                    Label label = new Label("⚠ " + problem.message());
+                    label.setWrapText(true);
+                    label.setStyle(problem.kind().blocking() ? BLOCKING_STYLE : WARNING_STYLE);
+                    box.getChildren().add(label);
+                }
+            }
+            box.setManaged(!box.getChildren().isEmpty());
+        };
+        refreshBranchProblems.run();
+        return box;
     }
 
     /**
@@ -631,6 +818,9 @@ public class EditorController {
                         .ifPresent(main -> main.openPlugins(Set.of(row.entry().module()), false, stage)));
                 formBox.getChildren().add(install);
             });
+            if (node.branch() != StepAddress.MAIN) {
+                formBox.getChildren().add(branchProblems(node.branch()));
+            }
             formBox.getChildren().add(readOnly(PipelineDocument.json(step)));
             return;
         }
@@ -641,10 +831,15 @@ public class EditorController {
             description.setWrapText(true);
             formBox.getChildren().add(description);
         }
+        if (node.branch() != StepAddress.MAIN) { // e.g. its file.write deleting the source: kept anyway
+            formBox.getChildren().add(branchProblems(node.branch()));
+        }
         Optional<ConfigSchema> schema = catalogAction.configSchema();
         if (schema.isPresent()) {
+            // the helper's sample goes through the main process steps: not what a secondary output gets
+            boolean mainOut = node.section() == Section.OUT && node.branch() == StepAddress.MAIN;
             formBox.getChildren().add(ConfigForm.build(schema.get().fields(),
-                    configAccess(step, catalogAction, node.section() == Section.OUT), stage, invalid));
+                    configAccess(step, catalogAction, mainOut), stage, invalid));
         } else {
             formBox.getChildren().addAll(new Label(ResourcesEngine.getString("editor.no-schema")),
                     readOnly(PipelineDocument.json(step.get("actionConfig"))));
@@ -670,6 +865,7 @@ public class EditorController {
             public void setText(ConfigField field, String text) {
                 document.setConfigText(step, field, text);
                 samples.refreshHelper(); // "onMissingKey" may have changed: the effects shown follow it
+                refreshBranchProblems.run(); // "deleteSource" of the out step of a secondary output
             }
 
             @Override
@@ -804,8 +1000,8 @@ public class EditorController {
         if (unknown.isEmpty()) {
             return true;
         }
-        String lines = unknown.stream().map(secret -> ResourcesEngine.getString("editor.section." + secret.section().name())
-                + " #" + (secret.index() + 1) + " : " + secret.name()).collect(Collectors.joining("\n"));
+        String lines = unknown.stream().map(secret -> stepLabel(secret.address()) + " : " + secret.name())
+                .collect(Collectors.joining("\n"));
         ButtonType saveAnyway = new ButtonType(ResourcesEngine.getString("editor.save-anyway"), ButtonBar.ButtonData.OK_DONE);
         Alert alert = new Alert(Alert.AlertType.WARNING, ResourcesEngine.getString("editor.unknown-secrets", lines),
                 saveAnyway, ButtonType.CANCEL);
@@ -911,13 +1107,29 @@ public class EditorController {
         if (!problems.isEmpty()) {
             List<String> lines = new ArrayList<>();
             for (Problem problem : problems) {
-                lines.add(ResourcesEngine.getString("editor.section." + problem.section().name())
-                        + " #" + (problem.index() + 1) + " : " + fieldLabel(problem));
+                lines.add(stepLabel(problem.address()) + " : " + fieldLabel(problem));
             }
             warn(ResourcesEngine.getString("editor.required-missing", String.join("\n", lines)));
             return false;
         }
+        // what the engine would refuse in the secondary outputs (spec secondary-outputs §7): its own sentences
+        List<String> refused = document.branchProblems().stream().filter(problem -> problem.kind().blocking())
+                .map(PipelineDocument.BranchProblem::message).toList();
+        if (!refused.isEmpty()) {
+            warn(String.join("\n", refused));
+            return false;
+        }
         return true;
+    }
+
+    /** "Processing #2", prefixed with the name of its secondary output for a step of one. */
+    String stepLabel(StepAddress address) {
+        String label = ResourcesEngine.getString("editor.section." + address.section().name())
+                + " #" + (address.index() + 1);
+        if (!address.inBranch()) {
+            return label;
+        }
+        return quotedBranch(address.branch()) + " / " + label;
     }
 
     /** The focused field may write only on Enter or focus loss ("version"): its text is written now. */
@@ -980,7 +1192,7 @@ public class EditorController {
         if (problem.section() == Section.RUN_END && "when".equals(problem.fieldPath())) {
             return ResourcesEngine.getString("editor.run-end.when");
         }
-        JsonObject step = document.steps(problem.section()).get(problem.index());
+        JsonObject step = document.step(problem.address());
         return catalog.find(problem.section(), step)
                 .flatMap(action -> action.configSchema()
                         .flatMap(schema -> schema.field(problem.fieldPath()))

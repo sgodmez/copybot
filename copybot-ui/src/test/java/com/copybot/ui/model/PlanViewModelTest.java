@@ -1577,6 +1577,80 @@ public class PlanViewModelTest {
         assertEquals("", lines.get(4));
     }
 
+    /** Each secondary output after the main target: its projected target before the copy (spec secondary-outputs §6). */
+    @Test
+    public void theDetailListsTheProjectedTargetOfEachSecondaryOutput() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), new TargetProjection.Targets(List.of(Path.of("/nas"))),
+                List.of(Path.of("/nas/DSC_1.NEF")), List.of(
+                new ItemDetail.BranchDetail("Thumbs", new TargetProjection.Targets(
+                        List.of(Path.of("/thumbs/s"), Path.of("/thumbs/l"))), null),
+                new ItemDetail.BranchDetail("Web", new TargetProjection.Filtered("drop"), null),
+                new ItemDetail.BranchDetail("Odd", TargetProjection.NONE, null)));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertTrue(start > 0, lines.toString());
+        assertEquals("", lines.get(start - 1));
+        assertEquals(List.of(
+                "   " + quoted("Thumbs") + " → " + Path.of("/thumbs/s"),
+                "      " + Path.of("/thumbs/l"),
+                "   " + quoted("Web") + " → " + ResourcesEngine.getString("dryrun.filtered", "drop"),
+                "   " + quoted("Odd") + " → " + ResourcesEngine.getString("plan.detail.branch.unknown")),
+                lines.subList(start + 1, lines.size()));
+    }
+
+    /** The files of a secondary output are listed like the main targets, not only their directories. */
+    @Test
+    public void theDetailListsTheProjectedFilesOfASecondaryOutput() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of(), List.of(
+                new ItemDetail.BranchDetail("Thumbs", new TargetProjection.Targets(List.of(Path.of("/thumbs"))),
+                        List.of(Path.of("/thumbs/s.jpg"), Path.of("/thumbs/l.jpg")), null)));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertEquals(List.of("   " + quoted("Thumbs") + " → " + Path.of("/thumbs/s.jpg"),
+                "      " + Path.of("/thumbs/l.jpg")), lines.subList(start + 1, lines.size()));
+    }
+
+    /** Once the item is copied, what each secondary output really did: its outcome, its error, its targets. */
+    @Test
+    public void theDetailListsWhatEachSecondaryOutputDidAfterTheCopy() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of(), List.of(
+                new ItemDetail.BranchDetail("Thumbs", TargetProjection.NONE, new WorkItemExecution.BranchResult(
+                        "Thumbs", WorkItemExecution.BranchOutcome.WRITTEN,
+                        List.of(Path.of("/thumbs/a.jpg"), Path.of("/thumbs/b.jpg")), null)),
+                new ItemDetail.BranchDetail("Web", TargetProjection.NONE, new WorkItemExecution.BranchResult(
+                        "Web", WorkItemExecution.BranchOutcome.WARNING, List.of(), "no codec"))));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertEquals(List.of(
+                "   " + quoted("Thumbs") + " → " + ResourcesEngine.getString("plan.detail.branch.WRITTEN"),
+                "      💾 " + Path.of("/thumbs/a.jpg"),
+                "      💾 " + Path.of("/thumbs/b.jpg"),
+                "   " + quoted("Web") + " → " + ResourcesEngine.getString("plan.detail.branch.WARNING")
+                        + " — no codec"),
+                lines.subList(start + 1, lines.size()));
+    }
+
+    @Test
+    public void theDetailWithoutSecondaryOutputHasNoSuchSection() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        String text = PlanViewModel.detailText(item, new ItemDetail(List.of(), TargetProjection.NONE, List.of()));
+
+        assertFalse(text.contains(ResourcesEngine.getString("plan.detail.branches")), text);
+    }
+
+    private static String quoted(String name) {
+        return ResourcesEngine.getString("editor.secondary.quoted", name);
+    }
+
     private static String lastLine(WorkItemExecution item, ItemDetail detail) {
         return PlanViewModel.detailText(item, detail).lines().toList().getLast();
     }

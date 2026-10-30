@@ -303,6 +303,79 @@ Known limits: the links inside a saved HTML page are not rewritten when its
 main file is renamed (the `_files` folder follows); only ZIP is
 supported (no 7z or tar.gz yet).
 
+## Secondary outputs
+
+A file is read once but can leave for several destinations, each with its own
+processing: the original copied as is into the photo library, and a
+thumbnail (or, with a transcoding plugin, a converted video) somewhere else.
+The optional `secondaryOutputs` list holds the extra branches; the main
+branch (`actionSteps` and `outStep`) is unchanged, and a pipeline without the
+list behaves exactly as before.
+
+```json
+{
+  "inSteps": [ { "action": "file.read", "actionConfig": { "path": "E:\\DCIM", "include": ["**/*.jpg"] } } ],
+  "analyseSteps": [ { "plugin": "com.copybot.plugin.metadataextractor", "action": "extract" } ],
+  "outStep": {
+    "action": "file.write",
+    "actionConfig": { "outPattern": "\\\\nas\\photos\\{captureDate.Y|lastModified.Y}\\{name}" }
+  },
+  "secondaryOutputs": [
+    {
+      "name": "Thumbnails",
+      "onError": "warn",
+      "actionSteps": [ { "plugin": "com.acme.thumbnails", "action": "make", "actionConfig": { "size": 320 } } ],
+      "outStep": {
+        "action": "file.write",
+        "actionConfig": { "outPattern": "\\\\nas\\thumbs\\{name}" }
+      }
+    }
+  ]
+}
+```
+
+- **Fields.** `name` is required, not empty and unique in the pipeline (it
+  appears in messages, in the item detail and in the editor). `outStep` is
+  required; `actionSteps` holds 0 to n process steps. `onError` is `fail`
+  (default) or `warn`. At most 8 secondary outputs. Reading the pipeline checks
+  this structure; the plugins and actions of the branch steps are resolved when
+  the run starts, like the other steps.
+- **Order.** After the last analysis, each secondary output runs in order,
+  then the main branch runs **last**. Each branch gets its own copy of the
+  analysed item (same source, independent metadata) and **no companion files**:
+  only the main branch writes groups. A process step that produces several
+  items (several thumbnail sizes) sends each one to the branch output; a step
+  that filters writes nothing for the item, which is not an error.
+- **The source is kept.** An item handed to a secondary output never loses
+  its source: `file.write` ignores `deleteSource` there (logged once per
+  run, and shown as a warning in the editor), so the main branch, which runs last, may still
+  move the file.
+- **`onError`.** With `fail`, an error in a branch puts the item in error, the
+  main branch is not run for it and neither are the next branches; the item is
+  not counted as done and is retried at the next run (the outputs already
+  written apply their own conflict rule, typically "skip if identical"). With
+  `warn` the error becomes a warning of the run and the item can succeed, but
+  it will not be retried for that branch. A cancellation stops the item
+  whatever the branch.
+- **Result and report.** The outcome of an item is the main branch's, except
+  the error of a `fail` branch. The files written by the branches appear in
+  the run report with the others (`writtenFiles`); the item detail lists each
+  branch: the projected target in the plan, then its real result after the
+  copy. The plan's target, conflict check and per-item output pattern concern
+  the main output only.
+- **Editor.** Under *Output*, a *Secondary outputs* node lists the branches,
+  each with its processing steps and its output, using the same forms as the
+  main branch. Add, remove, rename and reorder them; the form of a branch sets
+  its name and what an error does.
+
+Limits: there is one resume cursor per pipeline, not one per branch, so a
+branch added to a pipeline does not replay on files already copied (run again
+with "all" if needed); the "already at the destination" check looks at the main
+output only. Not supported: a branch inside a branch, branches in parallel for
+one item, conflict check of the branches in the plan, companion files in
+branches, conditional branches (a filter at the head of the branch does the
+job: every step accepts `filterCondition`).
+
 ## After the copy (run-end actions)
 
 A pipeline can end with an ordered list of actions, `runEnd`, set in the

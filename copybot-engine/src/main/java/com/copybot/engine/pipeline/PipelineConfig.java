@@ -42,12 +42,29 @@ public record PipelineConfig(
         /**
          * The unfolding of the archives at the listing. Absent: no unfolding.
          */
-        ArchivesConfig archives
+        ArchivesConfig archives,
+
+        /**
+         * The secondary outputs, run in order after the analyses and before the main branch (spec secondary-outputs
+         * §2). Absent: none; never null.
+         */
+        List<SecondaryOutputConfig> secondaryOutputs
 
         ) {
 
     public PipelineConfig {
         runEnd = runEnd == null ? List.of() : runEnd.stream().filter(Objects::nonNull).toList();
+        secondaryOutputs = secondaryOutputs == null ? List.of()
+                : secondaryOutputs.stream().filter(Objects::nonNull).toList();
+    }
+
+    /** Without secondary outputs. */
+    public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
+                          List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
+                          ResumeConfig resume, ConflictCheck conflictCheck, List<RunEndStepConfig> runEnd,
+                          GroupingConfig grouping, ArchivesConfig archives) {
+        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, conflictCheck, runEnd, grouping,
+                archives, null);
     }
 
     /** Without grouping nor archives. */

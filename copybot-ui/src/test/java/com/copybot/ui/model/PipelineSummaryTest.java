@@ -24,6 +24,19 @@ public class PipelineSummaryTest {
     }
 
     @Test
+    public void theSecondaryOutputsAreCountedNotListed() {
+        com.copybot.resources.ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+        PipelineSummary summary = PipelineSummary.of(PipelineDocument.parse(PipelineDocumentTest.BRANCHES), CATALOG);
+
+        assertEquals(List.of("file.read name", "file.write name"), summary.stepNames(), "the main branch only");
+        assertEquals("nas/{name}", summary.outPattern());
+        assertEquals(2, summary.secondaryOutputs());
+        assertTrue(summary.secondaryOutputsText().contains("2"), summary.secondaryOutputsText());
+        assertFalse(summary.secondaryOutputsText().startsWith("%"), summary.secondaryOutputsText());
+        assertEquals("", PipelineSummary.of(PipelineDocument.empty(), CATALOG).secondaryOutputsText());
+    }
+
+    @Test
     public void anEmptyPipelineHasNothingToShow() {
         PipelineSummary summary = PipelineSummary.of(PipelineDocument.empty(), CATALOG);
 

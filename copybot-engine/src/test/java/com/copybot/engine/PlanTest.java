@@ -383,4 +383,99 @@ public class PlanTest {
         CopybotException unknown = assertThrows(CopybotException.class, () -> plan.fromFile("NOPE.JPG"));
         assertEquals(ResourcesEngine.getString("resume.from-file.not-found", "NOPE.JPG"), unknown.getMessage());
     }
+
+    /** Renames what it gets "b_name" in its dry run; Optional.empty() as dry run when unsupported. */
+    final class Rename extends FakeAction implements IProcessAction {
+        final boolean supported;
+
+        Rename(boolean supported) {
+            this.supported = supported;
+        }
+
+        @Override
+        public List<WorkItem> doProcess(WorkItem item) {
+            return List.of(item);
+        }
+
+        @Override
+        public Optional<List<WorkItem>> dryRun(WorkItem item) {
+            if (!supported) {
+                return Optional.empty();
+            }
+            item.getMetadatas().display().put("name", "b_" + item.getNameDisplay());
+            return Optional.of(List.of(item));
+        }
+    }
+
+    /** Resolves nas2/display name, records what the item looked like (source kept/companions/own pattern). */
+    final class BranchOut extends FakeAction implements IOutAction {
+        final List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+        @Override
+        public WriteResult write(WorkItem item, WriteContext context) {
+            return WriteResult.written(null);
+        }
+
+        @Override
+        public Optional<Path> resolveTarget(WorkItem item) {
+            seen.add(item.isSourceKept() + "/" + item.getCompanions().size() + "/" + item.getOutPattern().isPresent());
+            return Optional.of(tempDir.resolve("nas2").resolve(item.getNameDisplay()));
+        }
+    }
+
+    private MainExecutor withBranches(List<StepResolver.Branch> branches) {
+        MainExecutor executor = new MainExecutor(
+                List.of(new PipelineStep<>(null, new SizedIn(), emptyConfig())),
+                List.of(new PipelineStep<>(null, new TargetOut(null), emptyConfig())),
+                0, false, null, registry(Map.of("disk:*", 1000)),
+                new ResumeContext(ResumeMode.STATE, new ResumeStateStore(tempDir.resolve("p.state.json"))));
+        executor.setSecondaryBranches(branches);
+        return executor;
+    }
+
+    private StepResolver.Branch branch(String name, IOutAction out, IProcessAction... steps) {
+        return new StepResolver.Branch(name, com.copybot.engine.pipeline.SecondaryOutputConfig.OnError.FAIL,
+                java.util.Arrays.stream(steps).map(a -> new PipelineStep<>(null, a, emptyConfig())).toList(),
+                new PipelineStep<>(null, out, emptyConfig()));
+    }
+
+    @Test
+    public void theDetailListsTheTargetOfEachBranchFromTheDryRunOfItsProcessesWhileTheMainProjectionIsUnchanged() {
+        BranchOut out = new BranchOut();
+        MainExecutor executor = withBranches(List.of(
+                branch("Mirror", out, new Rename(true)), branch("Legacy", out, new Rename(false)),
+                branch("Plain", new BranchOut())));
+        executor.prepare();
+        Plan plan = new Plan(executor);
+        WorkItemExecution item = named(plan, "IMG_02.JPG");
+
+        ItemDetail detail = plan.detailOf(item).orElseThrow();
+
+        assertEquals(List.of("Mirror", "Legacy", "Plain"), detail.branches().stream().map(ItemDetail.BranchDetail::name).toList());
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas2"))), detail.branches().get(0).projection());
+        assertEquals(List.of(tempDir.resolve("nas2").resolve("IMG_02.JPG").toAbsolutePath().normalize()),
+                detail.branches().get(0).targets(), "the files, like the targets of the main output");
+        assertTrue(detail.branches().get(1).targets().isEmpty());
+        assertInstanceOf(TargetProjection.Unknown.class, detail.branches().get(1).projection());
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas2"))), detail.branches().get(2).projection());
+        assertTrue(detail.branches().stream().allMatch(b -> b.result() == null));
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas").resolve("IMG_02"))), detail.outcome());
+        assertEquals(new TargetProjection.Targets(List.of(tempDir.resolve("nas").resolve("IMG_02"))), plan.projectionOf(item));
+        assertEquals("IMG_02.JPG", item.getWorkItem().getNameDisplay(), "the item itself is not changed by the branch dry run");
+        assertTrue(out.seen.stream().allMatch("true/0/false"::equals), "a copy like the branch gets: " + out.seen);
+    }
+
+    @Test
+    public void afterTheCopyTheDetailShowsTheRealResultOfEachBranch() {
+        MainExecutor executor = withBranches(List.of(branch("Mirror", new BranchOut(), new Rename(true))));
+        executor.run();
+        Plan plan = new Plan(executor);
+        WorkItemExecution item = named(plan, "IMG_01.JPG");
+
+        ItemDetail.BranchDetail shown = plan.detailOf(item).orElseThrow().branches().getFirst();
+
+        assertEquals("Mirror", shown.name());
+        assertEquals(item.getBranchResults().getFirst(), shown.result());
+        assertEquals(WorkItemExecution.BranchOutcome.WRITTEN, shown.result().outcome());
+    }
 }

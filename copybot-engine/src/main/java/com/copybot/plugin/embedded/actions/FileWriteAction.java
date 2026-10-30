@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -54,6 +55,16 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
     private volatile ConflictResolver conflicts;
     private volatile SafeFileWriter writer;
     private volatile GroupWriter group;
+
+    private static final System.Logger LOGGER = System.getLogger(FileWriteAction.class.getName());
+
+    /** Whether the "deleteSource ignored" warning was logged in this run (reset by {@link #beforeAll}). */
+    private final AtomicBoolean keptWarned = new AtomicBoolean();
+
+    @Override
+    public void beforeAll() {
+        keptWarned.set(false);
+    }
 
     @Override
     protected Class<FileWriteConfig> getConfigClass() {
@@ -112,6 +123,11 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
      */
     @Override
     public WriteResult write(WorkItem workItem, WriteContext context) {
+        if (workItem.isSourceKept() && settings.deleteSource() && keptWarned.compareAndSet(false, true)) {
+            // an out step has no run warning channel: logged, once per run and step
+            LOGGER.log(System.Logger.Level.WARNING,
+                    "file.write: deleteSource is ignored for a secondary output, the source is kept");
+        }
         OutPattern.Resolution resolution = resolution(workItem);
         if (!resolution.complete()) {
             switch (settings.onMissingKey()) {
@@ -346,8 +362,8 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
      * @throws CopybotException write.delete-source.failed
      */
     static void deleteSource(FileWriteSettings settings, WorkItem workItem, Path target) {
-        if (!settings.deleteSource() || workItem.isDeleted()) {
-            return; // nothing asked, or already gone
+        if (!settings.deleteSource() || workItem.isDeleted() || workItem.isSourceKept()) {
+            return; // nothing asked, already gone, or a secondary output: the main output still reads it
         }
         if (!workItem.isLocal()) {
             if (workItem.getSourceDeleter().isPresent()) {

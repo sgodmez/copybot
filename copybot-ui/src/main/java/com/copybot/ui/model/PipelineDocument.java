@@ -6,9 +6,11 @@ import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.GroupingConfig;
 import com.copybot.engine.pipeline.GroupingRuleConfig;
+import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.RunEndMigration;
 import com.copybot.engine.pipeline.RunEndStepConfig;
+import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
@@ -42,6 +44,7 @@ import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -98,8 +101,97 @@ public final class PipelineDocument {
     /** What counts as imported at the destination, as written ("resume.destinationMatch"), the default first. */
     public static final List<String> DESTINATION_MATCHES = List.of("directory", "file");
 
-    /** A required field left empty: the step at index of the section, the field path in its actionConfig. */
-    public record Problem(Section section, int index, String fieldPath) {
+    /** The sections of a secondary output: its process steps and its out step (spec secondary-outputs §2). */
+    public static final List<Section> BRANCH_SECTIONS = List.of(Section.PROCESS, Section.OUT);
+
+    /**
+     * Where a step is: at index of a section of the main pipeline (branch {@link #MAIN}), or at index of the process
+     * steps or the out step of the secondary output at index {@code branch} (spec secondary-outputs §8).
+     *
+     * @throws IllegalArgumentException a branch below {@link #MAIN}, a section a branch does not have
+     */
+    public record StepAddress(int branch, Section section, int index) {
+
+        /** The branch of the main pipeline. */
+        public static final int MAIN = -1;
+
+        public StepAddress {
+            Objects.requireNonNull(section, "section");
+            if (branch < MAIN || branch != MAIN && !BRANCH_SECTIONS.contains(section)) {
+                throw new IllegalArgumentException("no " + section + " step in branch " + branch);
+            }
+        }
+
+        /** A step of the main pipeline. */
+        public static StepAddress main(Section section, int index) {
+            return new StepAddress(MAIN, section, index);
+        }
+
+        /** A process step (PROCESS) or the out step (OUT) of the secondary output at index {@code branch}. */
+        public static StepAddress branch(int branch, Section section, int index) {
+            if (branch < 0) {
+                throw new IllegalArgumentException("branch " + branch);
+            }
+            return new StepAddress(branch, section, index);
+        }
+
+        /** The step is in a secondary output. */
+        public boolean inBranch() {
+            return branch != MAIN;
+        }
+    }
+
+    /** A required field left empty: the step at that address, the field path in its actionConfig. */
+    public record Problem(StepAddress address, String fieldPath) {
+
+        /** A problem of the step at index of a section of the main pipeline. */
+        public Problem(Section section, int index, String fieldPath) {
+            this(StepAddress.main(section, index), fieldPath);
+        }
+
+        public Section section() {
+            return address.section();
+        }
+
+        public int index() {
+            return address.index();
+        }
+    }
+
+    /**
+     * Something wrong with a secondary output as a whole (spec secondary-outputs §7, §8): the blocking ones are what
+     * the engine refuses when it reads the pipeline.
+     *
+     * @param branch  the index of the branch; for {@link Kind#TOO_MANY}, the first one beyond the limit
+     * @param message the localized sentence (the engine's for the blocking ones)
+     */
+    public record BranchProblem(int branch, Kind kind, String message) {
+
+        public enum Kind {
+            /** more than {@link PipelineChecks#MAX_SECONDARY_OUTPUTS} branches */
+            TOO_MANY(true),
+            /** no name, or a blank one */
+            NAME_MISSING(true),
+            /** the name of an earlier branch, case and surrounding spaces ignored */
+            NAME_DUPLICATE(true),
+            /** an "onError" that is neither "fail" nor "warn" */
+            ON_ERROR_UNKNOWN(true),
+            /** no out step */
+            OUT_MISSING(true),
+            /** a built-in file.write out step that deletes the source: ignored in a branch, the source is kept (§5) */
+            SOURCE_KEPT(false);
+
+            private final boolean blocking;
+
+            Kind(boolean blocking) {
+                this.blocking = blocking;
+            }
+
+            /** The pipeline cannot be saved: the engine would refuse it. Otherwise a warning. */
+            public boolean blocking() {
+                return blocking;
+            }
+        }
     }
 
     /** The "Advanced" fields of every step (spec desktop-ui §3), members of the step object itself. */
@@ -125,6 +217,10 @@ public final class PipelineDocument {
             RunEndStepConfig.SUCCESS, RunEndStepConfig.ERROR, RunEndStepConfig.CANCELLED);
 
     private static final String WHEN = "when";
+
+    private static final String SECONDARY_OUTPUTS = "secondaryOutputs";
+    private static final String BRANCH_NAME = "name";
+    private static final String ON_ERROR = "onError";
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().disableHtmlEscaping().create();
 
@@ -209,15 +305,33 @@ public final class PipelineDocument {
         // so the document is not marked modified (closing asks nothing), but the next save writes the new form
         RunEndMigration.migrate(root);
         for (Section section : Section.values()) {
-            JsonElement value = root.get(section.jsonName());
-            boolean valid = value == null || value.isJsonNull()
-                    || (section == Section.OUT ? value.isJsonObject() : isArrayOfObjects(value));
-            if (!valid) {
+            checkSteps(root, section, section.jsonName());
+        }
+        JsonElement branches = root.get(SECONDARY_OUTPUTS);
+        if (branches != null && !branches.isJsonNull()) {
+            if (!isArrayOfObjects(branches)) {
                 throw new IllegalArgumentException(
-                        ResourcesEngine.getString("pipeline.document.not-steps", section.jsonName()));
+                        ResourcesEngine.getString("pipeline.document.not-steps", SECONDARY_OUTPUTS));
+            }
+            JsonArray array = branches.getAsJsonArray();
+            for (int i = 0; i < array.size(); i++) {
+                for (Section section : BRANCH_SECTIONS) {
+                    checkSteps(array.get(i).getAsJsonObject(), section,
+                            SECONDARY_OUTPUTS + "[" + i + "]." + section.jsonName());
+                }
             }
         }
         return new PipelineDocument(root, !JsonTexts.isStrictJson(json), JsonTexts.duplicateKeys(json));
+    }
+
+    /** @throws IllegalArgumentException the section of this object is not made of step objects ({@code label}) */
+    private static void checkSteps(JsonObject container, Section section, String label) {
+        JsonElement value = container.get(section.jsonName());
+        boolean valid = value == null || value.isJsonNull()
+                || (section == Section.OUT ? value.isJsonObject() : isArrayOfObjects(value));
+        if (!valid) {
+            throw new IllegalArgumentException(ResourcesEngine.getString("pipeline.document.not-steps", label));
+        }
     }
 
     private static boolean isArrayOfObjects(JsonElement value) {
@@ -811,11 +925,16 @@ public final class PipelineDocument {
     }
 
     private static boolean isFileRead(JsonObject step) {
+        return isEmbeddedAction(step, FILE_READ);
+    }
+
+    /** The step runs this action of the built-in plugin ("plugin" absent, blank or "embedded"). */
+    private static boolean isEmbeddedAction(JsonObject step, String code) {
         JsonElement action = step.get("action");
         JsonElement plugin = step.get("plugin");
         boolean embedded = plugin == null || plugin.isJsonNull()
                 || plugin.isJsonPrimitive() && (plugin.getAsString().isBlank() || CatalogAction.EMBEDDED_PLUGIN.equals(plugin.getAsString()));
-        return embedded && action != null && action.isJsonPrimitive() && FILE_READ.equals(action.getAsString());
+        return embedded && action != null && action.isJsonPrimitive() && code.equals(action.getAsString());
     }
 
     // ---- sampling (spec pattern-helper §5) ----
@@ -850,9 +969,19 @@ public final class PipelineDocument {
 
     // ---- steps ----
 
-    /** The step objects of the section, in order (live: changing one changes the document). */
+    /** The step objects of the section of the main pipeline, in order (live: changing one changes the document). */
     public List<JsonObject> steps(Section section) {
-        JsonElement value = root.get(section.jsonName());
+        return steps(StepAddress.MAIN, section);
+    }
+
+    /**
+     * The step objects of the section of a branch ({@link StepAddress#MAIN} or a secondary output), in order, live.
+     *
+     * @throws IllegalArgumentException a section the branch does not have
+     * @throws IndexOutOfBoundsException no such secondary output
+     */
+    public List<JsonObject> steps(int branch, Section section) {
+        JsonElement value = container(branch, section).get(section.jsonName());
         if (value == null || value.isJsonNull()) {
             return List.of();
         }
@@ -862,6 +991,52 @@ public final class PipelineDocument {
         List<JsonObject> steps = new ArrayList<>();
         value.getAsJsonArray().forEach(element -> steps.add(element.getAsJsonObject()));
         return steps;
+    }
+
+    /**
+     * The step at that address (live).
+     *
+     * @throws IndexOutOfBoundsException no such branch or step
+     */
+    public JsonObject step(StepAddress address) {
+        return steps(address.branch(), address.section()).get(address.index());
+    }
+
+    /**
+     * The address of every step, in the order of the editor tree: the main sections, the secondary outputs (their
+     * process steps then their out step) right after the output, the run-end actions last.
+     */
+    public List<StepAddress> stepAddresses() {
+        List<StepAddress> addresses = new ArrayList<>();
+        for (Section section : Section.values()) {
+            addAddresses(StepAddress.MAIN, section, addresses);
+            if (section == Section.OUT) {
+                for (int branch = 0; branch < branchCount(); branch++) {
+                    for (Section own : BRANCH_SECTIONS) {
+                        addAddresses(branch, own, addresses);
+                    }
+                }
+            }
+        }
+        return addresses;
+    }
+
+    private void addAddresses(int branch, Section section, List<StepAddress> addresses) {
+        int size = steps(branch, section).size();
+        for (int i = 0; i < size; i++) {
+            addresses.add(new StepAddress(branch, section, i));
+        }
+    }
+
+    /** The object that holds the section of the branch: the pipeline itself, or the secondary output. */
+    private JsonObject container(int branch, Section section) {
+        if (branch == StepAddress.MAIN) {
+            return root;
+        }
+        if (!BRANCH_SECTIONS.contains(section)) {
+            throw new IllegalArgumentException("no " + section + " step in a secondary output");
+        }
+        return branch(branch);
     }
 
     /** What a saved pipeline lacks to be useful: not blocking, the save only warns (same rules as the engine). */
@@ -897,7 +1072,12 @@ public final class PipelineDocument {
 
     /** The output holds at most one step (spec desktop-ui §3). */
     public boolean canAdd(Section section) {
-        return section != Section.OUT || steps(Section.OUT).isEmpty();
+        return canAdd(StepAddress.MAIN, section);
+    }
+
+    /** The output of a branch holds at most one step. */
+    public boolean canAdd(int branch, Section section) {
+        return section != Section.OUT || steps(branch, Section.OUT).isEmpty();
     }
 
     /**
@@ -907,9 +1087,19 @@ public final class PipelineDocument {
      * @throws IllegalStateException the output already has a step
      */
     public JsonObject addStep(Section section, CatalogAction action) {
-        if (!canAdd(section)) {
+        return addStep(StepAddress.MAIN, section, action);
+    }
+
+    /**
+     * Like {@link #addStep(Section, CatalogAction)}, in a branch: a process step or the out step of a secondary output.
+     *
+     * @throws IllegalArgumentException a section the branch does not have
+     */
+    public JsonObject addStep(int branch, Section section, CatalogAction action) {
+        if (!canAdd(branch, section)) {
             throw new IllegalStateException("the output already has a step");
         }
+        JsonObject container = container(branch, section);
         JsonObject step = new JsonObject();
         if (!action.isEmbedded()) {
             step.addProperty("plugin", action.pluginName());
@@ -917,12 +1107,12 @@ public final class PipelineDocument {
         step.addProperty("action", action.actionCode());
         step.add("actionConfig", new JsonObject());
         if (section == Section.OUT) {
-            root.add(section.jsonName(), step);
+            container.add(section.jsonName(), step);
         } else {
-            JsonElement value = root.get(section.jsonName());
+            JsonElement value = container.get(section.jsonName());
             if (value == null || value.isJsonNull()) {
                 value = new JsonArray();
-                root.add(section.jsonName(), value);
+                container.add(section.jsonName(), value);
             }
             value.getAsJsonArray().add(step);
         }
@@ -932,42 +1122,247 @@ public final class PipelineDocument {
 
     /** The output step never moves; a list step moves within its list. */
     public boolean canMove(Section section, int index, int delta) {
-        int size = steps(section).size();
+        return canMove(StepAddress.main(section, index), delta);
+    }
+
+    /** Like {@link #canMove(Section, int, int)}, in any branch: a step never leaves its list. */
+    public boolean canMove(StepAddress address, int delta) {
+        int size = steps(address.branch(), address.section()).size();
+        int index = address.index();
         int target = index + delta;
-        return section != Section.OUT && index >= 0 && index < size && target >= 0 && target < size;
+        return address.section() != Section.OUT && index >= 0 && index < size && target >= 0 && target < size;
     }
 
     /** Moves the step by delta places (-1: up, +1: down); no effect when it cannot move. */
     public void moveStep(Section section, int index, int delta) {
-        if (delta == 0 || !canMove(section, index, delta)) {
+        moveStep(StepAddress.main(section, index), delta);
+    }
+
+    /** Like {@link #moveStep(Section, int, int)}, in any branch. */
+    public void moveStep(StepAddress address, int delta) {
+        if (delta == 0 || !canMove(address, delta)) {
             return;
         }
-        JsonArray array = root.getAsJsonArray(section.jsonName());
-        JsonElement step = array.remove(index);
+        JsonObject container = container(address.branch(), address.section());
+        String member = address.section().jsonName();
+        JsonArray array = container.getAsJsonArray(member);
+        JsonElement step = array.remove(address.index());
         List<JsonElement> elements = new ArrayList<>(array.asList());
-        elements.add(index + delta, step);
+        elements.add(address.index() + delta, step);
         JsonArray moved = new JsonArray();
         elements.forEach(moved::add);
-        root.add(section.jsonName(), moved); // same key: keeps its place among the members
+        container.add(member, moved); // same key: keeps its place among the members
         modified = true;
     }
 
     /** An emptied list stays in the file; the output step is removed with its "outStep" member. */
     public void removeStep(Section section, int index) {
-        if (index < 0 || index >= steps(section).size()) {
+        removeStep(StepAddress.main(section, index));
+    }
+
+    /** Like {@link #removeStep(Section, int)}, in any branch: removing the out step of a branch leaves it without. */
+    public void removeStep(StepAddress address) {
+        int index = address.index();
+        if (index < 0 || index >= steps(address.branch(), address.section()).size()) {
             throw new IndexOutOfBoundsException(index);
         }
-        if (section == Section.OUT) {
-            root.remove(section.jsonName());
+        JsonObject container = container(address.branch(), address.section());
+        if (address.section() == Section.OUT) {
+            container.remove(address.section().jsonName());
         } else {
-            root.getAsJsonArray(section.jsonName()).remove(index);
+            container.getAsJsonArray(address.section().jsonName()).remove(index);
         }
         modified = true;
+    }
+
+    // ---- secondary outputs (spec secondary-outputs §2, §8) ----
+
+    /** The secondary outputs, 0 when there are none. */
+    public int branchCount() {
+        JsonArray branches = branchArray();
+        return branches == null ? 0 : branches.size();
+    }
+
+    private JsonArray branchArray() {
+        JsonElement value = root.get(SECONDARY_OUTPUTS);
+        return value != null && value.isJsonArray() ? value.getAsJsonArray() : null;
+    }
+
+    /** @throws IndexOutOfBoundsException no such secondary output */
+    private JsonObject branch(int index) {
+        JsonArray branches = branchArray();
+        if (branches == null || index < 0 || index >= branches.size()) {
+            throw new IndexOutOfBoundsException(index);
+        }
+        return branches.get(index).getAsJsonObject();
+    }
+
+    /** The name of the secondary output, stripped; "" when it has none. */
+    public String branchName(int index) {
+        JsonElement name = branch(index).get(BRANCH_NAME);
+        return name != null && name.isJsonPrimitive() ? name.getAsString().strip() : "";
+    }
+
+    /** Renames the secondary output (stripped): blank removes the name (a problem), the same name rewrites nothing. */
+    public void setBranchName(int index, String name) {
+        JsonObject branch = branch(index);
+        String stripped = name == null ? "" : name.strip();
+        if (stripped.equals(branchName(index)) && (!stripped.isEmpty() || !branch.has(BRANCH_NAME))) {
+            return;
+        }
+        if (stripped.isEmpty()) {
+            branch.remove(BRANCH_NAME);
+        } else {
+            branch.addProperty(BRANCH_NAME, stripped);
+        }
+        modified = true;
+    }
+
+    /** What an error of the secondary output does: fail when absent (or unknown: a {@link BranchProblem}). */
+    public SecondaryOutputConfig.OnError onError(int index) {
+        JsonElement value = branch(index).get(ON_ERROR);
+        return value != null && value.isJsonPrimitive() && "warn".equals(value.getAsString())
+                ? SecondaryOutputConfig.OnError.WARN : SecondaryOutputConfig.OnError.FAIL;
+    }
+
+    /** Fail, the default, removes the member; warn is written. The same value as now rewrites nothing. */
+    public void setOnError(int index, SecondaryOutputConfig.OnError onError) {
+        JsonObject branch = branch(index);
+        JsonElement current = branch.get(ON_ERROR);
+        String name = onError.name().toLowerCase(Locale.ROOT);
+        if (current == null && onError == SecondaryOutputConfig.OnError.FAIL
+                || current != null && current.isJsonPrimitive() && name.equals(current.getAsString())) {
+            return;
+        }
+        if (onError == SecondaryOutputConfig.OnError.FAIL) {
+            branch.remove(ON_ERROR);
+        } else {
+            branch.addProperty(ON_ERROR, name);
+        }
+        modified = true;
+    }
+
+    /** At most {@link PipelineChecks#MAX_SECONDARY_OUTPUTS} secondary outputs. */
+    public boolean canAddBranch() {
+        return branchCount() < PipelineChecks.MAX_SECONDARY_OUTPUTS;
+    }
+
+    /**
+     * Adds a secondary output at the end, with this name (stripped) and nothing else: no step yet, fail on error.
+     *
+     * @return its index
+     * @throws IllegalStateException there are already {@link PipelineChecks#MAX_SECONDARY_OUTPUTS}
+     */
+    public int addBranch(String name) {
+        if (!canAddBranch()) {
+            throw new IllegalStateException("already " + PipelineChecks.MAX_SECONDARY_OUTPUTS + " secondary outputs");
+        }
+        JsonArray branches = branchArray();
+        if (branches == null) {
+            branches = new JsonArray();
+            root.add(SECONDARY_OUTPUTS, branches);
+        }
+        JsonObject branch = new JsonObject();
+        String stripped = name == null ? "" : name.strip();
+        if (!stripped.isEmpty()) {
+            branch.addProperty(BRANCH_NAME, stripped);
+        }
+        branches.add(branch);
+        modified = true;
+        return branches.size() - 1;
+    }
+
+    /** Removes the secondary output with its steps; the member goes with the last one (the pipeline as before). */
+    public void removeBranch(int index) {
+        branch(index);
+        JsonArray branches = branchArray();
+        branches.remove(index);
+        if (branches.isEmpty()) {
+            root.remove(SECONDARY_OUTPUTS);
+        }
+        modified = true;
+    }
+
+    /** A secondary output moves within the list (they run in order). */
+    public boolean canMoveBranch(int index, int delta) {
+        int size = branchCount();
+        int target = index + delta;
+        return index >= 0 && index < size && target >= 0 && target < size;
+    }
+
+    /** Moves the secondary output by delta places (-1: up, +1: down); no effect when it cannot move. */
+    public void moveBranch(int index, int delta) {
+        if (delta == 0 || !canMoveBranch(index, delta)) {
+            return;
+        }
+        List<JsonElement> branches = new ArrayList<>(branchArray().asList());
+        branches.add(index + delta, branches.remove(index));
+        JsonArray moved = new JsonArray();
+        branches.forEach(moved::add);
+        root.add(SECONDARY_OUTPUTS, moved); // same key: keeps its place among the members
+        modified = true;
+    }
+
+    /**
+     * What is wrong with the secondary outputs as a whole, in order: the engine's refusals (blocking) and the
+     * file.write outputs that would delete the source (a warning). The problems of their steps are in {@link #validate}.
+     */
+    public List<BranchProblem> branchProblems() {
+        List<BranchProblem> problems = new ArrayList<>();
+        int count = branchCount();
+        int max = PipelineChecks.MAX_SECONDARY_OUTPUTS;
+        if (count > max) {
+            problems.add(new BranchProblem(max, BranchProblem.Kind.TOO_MANY,
+                    ResourcesEngine.getString("secondary.too-many", max, count)));
+        }
+        Set<String> names = new HashSet<>();
+        for (int i = 0; i < count; i++) {
+            String name = branchName(i);
+            String label = name.isEmpty() ? "#" + (i + 1) : name;
+            String quoted = name.isEmpty() ? label : "\"" + name + "\""; // as the engine tells it for onError
+            String quotedLabel = name.isEmpty() ? label : ResourcesEngine.getString("editor.secondary.quoted", name);
+            if (name.isEmpty()) {
+                problems.add(new BranchProblem(i, BranchProblem.Kind.NAME_MISSING,
+                        ResourcesEngine.getString("secondary.name.missing", i + 1)));
+            } else if (!names.add(name.toLowerCase(Locale.ROOT))) {
+                problems.add(new BranchProblem(i, BranchProblem.Kind.NAME_DUPLICATE,
+                        ResourcesEngine.getString("secondary.name.duplicate", i + 1, name)));
+            }
+            JsonElement onError = branch(i).get(ON_ERROR);
+            if (onError != null && !onError.isJsonNull() && !isKnownOnError(onError)) {
+                problems.add(new BranchProblem(i, BranchProblem.Kind.ON_ERROR_UNKNOWN,
+                        ResourcesEngine.getString("secondary.on-error.unknown", quoted,
+                                onError.isJsonPrimitive() ? onError.getAsString() : onError.toString())));
+            }
+            List<JsonObject> out = steps(i, Section.OUT);
+            if (out.isEmpty()) {
+                problems.add(new BranchProblem(i, BranchProblem.Kind.OUT_MISSING,
+                        ResourcesEngine.getString("secondary.out.missing", label)));
+            } else if (deletesSource(out.getFirst())) {
+                problems.add(new BranchProblem(i, BranchProblem.Kind.SOURCE_KEPT,
+                        ResourcesEngine.getString("editor.secondary.source-kept", quotedLabel)));
+            }
+        }
+        return problems;
+    }
+
+    /** Like the engine: a string, "fail" or "warn". */
+    private static boolean isKnownOnError(JsonElement value) {
+        return value.isJsonPrimitive() && value.getAsJsonPrimitive().isString()
+                && ("fail".equals(value.getAsString()) || "warn".equals(value.getAsString()));
+    }
+
+    /** A built-in file.write step whose "deleteSource" is on. */
+    private static boolean deletesSource(JsonObject step) {
+        JsonElement deleteSource = get(step, List.of("actionConfig", "deleteSource"));
+        return isEmbeddedAction(step, FILE_WRITE) && deleteSource != null && deleteSource.isJsonPrimitive()
+                && deleteSource.getAsBoolean();
     }
 
     // ---- exclusions ("always ignore" in the plan view) ----
 
     private static final String FILE_READ = "file.read";
+    private static final String FILE_WRITE = "file.write";
 
     /**
      * What {@link #exclude} did.
@@ -1092,6 +1487,11 @@ public final class PipelineDocument {
     /** The "Advanced" fields of a step of the section: {@link #ADVANCED_FIELDS}, but a time limit for a run-end action. */
     public static List<ConfigField> advancedFields(Section section) {
         return section == Section.RUN_END ? RUN_END_ADVANCED_FIELDS : ADVANCED_FIELDS;
+    }
+
+    /** The "Advanced" fields of the step at that address: a step of a secondary output has those of its section. */
+    public static List<ConfigField> advancedFields(StepAddress address) {
+        return advancedFields(address.section());
     }
 
     /** The JSON value of a schema field of the step's actionConfig, null when absent. */
@@ -1244,48 +1644,57 @@ public final class PipelineDocument {
      * The required fields left empty (spec desktop-ui §3), for the steps whose action is loaded: a required
      * field of a record counts only when the record is present. A step without action is a problem too
      * (field path "action"), and so are the conditions of a run-end action the engine refuses (field path "when").
+     * The steps of the secondary outputs too, in the order of {@link #stepAddresses}; what is wrong with a secondary
+     * output as a whole is in {@link #branchProblems}.
      */
     public List<Problem> validate(StepCatalog catalog) {
         List<Problem> problems = new ArrayList<>();
-        for (Section section : Section.values()) {
-            List<JsonObject> steps = steps(section);
-            for (int i = 0; i < steps.size(); i++) {
-                JsonObject step = steps.get(i);
-                JsonElement action = step.get("action");
-                if (action == null || !action.isJsonPrimitive() || action.getAsString().isBlank()) {
-                    problems.add(new Problem(section, i, "action"));
-                    continue;
-                }
-                int index = i;
-                catalog.find(section, step).flatMap(CatalogAction::configSchema).ifPresent(schema ->
-                        checkRequired(step, schema.fields(), section, index, problems));
-                if (section == Section.RUN_END && invalidWhen(step)) {
-                    problems.add(new Problem(section, i, WHEN));
-                }
+        for (StepAddress address : stepAddresses()) {
+            JsonObject step = step(address);
+            JsonElement action = step.get("action");
+            if (action == null || !action.isJsonPrimitive() || action.getAsString().isBlank()) {
+                problems.add(new Problem(address, "action"));
+                continue;
+            }
+            catalog.find(address.section(), step).flatMap(CatalogAction::configSchema).ifPresent(schema ->
+                    checkRequired(step, schema.fields(), address, problems));
+            if (address.section() == Section.RUN_END && invalidWhen(step)) {
+                problems.add(new Problem(address, WHEN));
             }
         }
         return problems;
     }
 
-    /** A reference to a secret not defined on this machine: the step at index of the section, the secret's name. */
-    public record UnknownSecret(Section section, int index, String name) {
+    /** A reference to a secret not defined on this machine: the step at that address, the secret's name. */
+    public record UnknownSecret(StepAddress address, String name) {
+
+        /** A secret of the step at index of a section of the main pipeline. */
+        public UnknownSecret(Section section, int index, String name) {
+            this(StepAddress.main(section, index), name);
+        }
+
+        public Section section() {
+            return address.section();
+        }
+
+        public int index() {
+            return address.index();
+        }
     }
 
     /**
      * The secrets the action configurations refer to ({@code ${secret:name}} in any text value) that are not among
      * these names: not blocking (a pipeline may be shared with a machine where they are defined), the save only warns.
+     * The steps of the secondary outputs too.
      */
     public List<UnknownSecret> unknownSecrets(Collection<String> definedNames) {
         List<UnknownSecret> unknown = new ArrayList<>();
-        for (Section section : Section.values()) {
-            List<JsonObject> steps = steps(section);
-            for (int i = 0; i < steps.size(); i++) {
-                Set<String> names = new LinkedHashSet<>();
-                collectSecretNames(steps.get(i).get("actionConfig"), names);
-                for (String name : names) {
-                    if (!definedNames.contains(name)) {
-                        unknown.add(new UnknownSecret(section, i, name));
-                    }
+        for (StepAddress address : stepAddresses()) {
+            Set<String> names = new LinkedHashSet<>();
+            collectSecretNames(step(address).get("actionConfig"), names);
+            for (String name : names) {
+                if (!definedNames.contains(name)) {
+                    unknown.add(new UnknownSecret(address, name));
                 }
             }
         }
@@ -1305,17 +1714,17 @@ public final class PipelineDocument {
         }
     }
 
-    private static void checkRequired(JsonObject step, List<ConfigField> fields, Section section, int index,
+    private static void checkRequired(JsonObject step, List<ConfigField> fields, StepAddress address,
                                       List<Problem> problems) {
         for (ConfigField field : fields) {
             JsonElement value = get(step, configPath(field));
             boolean empty = value == null || (value.isJsonPrimitive() && value.getAsString().isBlank())
                     || (value.isJsonArray() && value.getAsJsonArray().isEmpty());
             if (field.required() && empty) {
-                problems.add(new Problem(section, index, field.path()));
+                problems.add(new Problem(address, field.path()));
             }
             if (field.kind() == FieldKind.RECORD && value != null && value.isJsonObject()) {
-                checkRequired(step, field.children(), section, index, problems);
+                checkRequired(step, field.children(), address, problems);
             }
         }
     }

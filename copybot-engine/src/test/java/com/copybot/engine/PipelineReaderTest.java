@@ -2,6 +2,8 @@ package com.copybot.engine;
 
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.RunEndStepConfig;
+import com.copybot.engine.pipeline.SecondaryOutputConfig;
+import com.copybot.utils.GsonUtil;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.RunOutcome;
 import com.copybot.plugin.api.action.RunReport;
@@ -110,5 +112,72 @@ public class PipelineReaderTest {
         assertTrue(unknown.getMessage().contains("oops"), unknown.getMessage());
 
         assertThrows(CopybotException.class, () -> read("{\"runEnd\":[{\"action\":\"post.process\",\"when\":[]}]}"));
+    }
+
+    private static final String OUT = "{\"action\":\"file.write\",\"actionConfig\":{\"outPattern\":\"/o/{name}\"}}";
+
+    private static String branch(String name, String extra) {
+        return "{" + (name == null ? "" : "\"name\":\"" + name + "\",") + extra + "\"outStep\":" + OUT + "}";
+    }
+
+    @Test
+    public void aPipelineWithoutSecondaryOutputsHasNone() throws IOException {
+        assertEquals(List.of(), read("{}").secondaryOutputs());
+        assertEquals(List.of(), read("{\"secondaryOutputs\":null}").secondaryOutputs());
+    }
+
+    @Test
+    public void secondaryOutputsAreReadInOrderWithTheirDefaults() throws IOException {
+        PipelineConfig config = read("{\"secondaryOutputs\":[" + branch("Thumbs", "\"onError\":\"warn\","
+                + "\"actionSteps\":[{\"action\":\"file.buffer\"}],") + "," + branch("Copy", "") + "]}");
+
+        assertEquals(2, config.secondaryOutputs().size());
+        SecondaryOutputConfig thumbs = config.secondaryOutputs().get(0);
+        assertEquals("Thumbs", thumbs.name());
+        assertEquals(SecondaryOutputConfig.OnError.WARN, thumbs.onError());
+        assertEquals(1, thumbs.actionSteps().size());
+        assertEquals("file.write", thumbs.outStep().action());
+        SecondaryOutputConfig copy = config.secondaryOutputs().get(1);
+        assertEquals(SecondaryOutputConfig.OnError.FAIL, copy.onError());
+        assertEquals(List.of(), copy.actionSteps());
+    }
+
+    @Test
+    public void secondaryOutputsSurviveAJsonRoundTrip() throws IOException {
+        PipelineConfig config = read("{\"secondaryOutputs\":[" + branch("Thumbs", "\"onError\":\"warn\",") + "]}");
+
+        String json = GsonUtil.getGson().toJson(config);
+        assertTrue(json.replaceAll("\\s", "").contains("\"onError\":\"warn\""), json);
+        assertEquals(config, PipelineReader.read(Files.writeString(tempDir.resolve("again.json"), json)));
+    }
+
+    @Test
+    public void anInvalidSecondaryOutputRefusesThePipelineNamingTheBranch() throws IOException {
+        CopybotException noName = assertThrows(CopybotException.class,
+                () -> read("{\"secondaryOutputs\":[" + branch("a", "") + "," + branch(null, "") + "]}"));
+        assertTrue(noName.getMessage().contains("2"), noName.getMessage());
+        assertThrows(CopybotException.class, () -> read("{\"secondaryOutputs\":[" + branch("  ", "") + "]}"));
+
+        CopybotException twice = assertThrows(CopybotException.class,
+                () -> read("{\"secondaryOutputs\":[" + branch("Thumbs", "") + "," + branch("THUMBS", "") + "]}"));
+        assertTrue(twice.getMessage().contains("THUMBS"), twice.getMessage());
+
+        CopybotException noOut = assertThrows(CopybotException.class,
+                () -> read("{\"secondaryOutputs\":[{\"name\":\"Lonely\"}]}"));
+        assertTrue(noOut.getMessage().contains("Lonely"), noOut.getMessage());
+
+        List<String> nine = java.util.stream.IntStream.range(0, 9).mapToObj(i -> branch("b" + i, "")).toList();
+        assertThrows(CopybotException.class, () -> read("{\"secondaryOutputs\":[" + String.join(",", nine) + "]}"));
+        assertEquals(8, read("{\"secondaryOutputs\":[" + String.join(",", nine.subList(0, 8)) + "]}")
+                .secondaryOutputs().size());
+    }
+
+    @Test
+    public void anUnknownOnErrorIsRefusedNotReadAsFail() {
+        for (String bad : List.of("\"oops\"", "\"WARN\"", "5", "{}")) {
+            CopybotException e = assertThrows(CopybotException.class,
+                    () -> read("{\"secondaryOutputs\":[" + branch("Thumbs", "\"onError\":" + bad + ",") + "]}"), bad);
+            assertTrue(e.getMessage().contains("Thumbs"), e.getMessage());
+        }
     }
 }

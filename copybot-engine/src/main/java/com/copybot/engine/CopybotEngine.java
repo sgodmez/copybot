@@ -7,6 +7,7 @@ import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
@@ -166,6 +167,10 @@ public final class CopybotEngine implements AutoCloseable {
         addTouchedPaths(paths, pipeline.actionSteps(), IProcessAction.class);
         if (pipeline.outStep() != null) {
             addTouchedPaths(paths, List.of(pipeline.outStep()), IOutAction.class);
+        }
+        for (SecondaryOutputConfig branch : pipeline.secondaryOutputs()) {
+            addTouchedPaths(paths, branch.actionSteps(), IProcessAction.class);
+            addTouchedPaths(paths, List.of(branch.outStep()), IOutAction.class);
         }
         return List.copyOf(paths);
     }

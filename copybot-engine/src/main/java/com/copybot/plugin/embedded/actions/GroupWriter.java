@@ -108,6 +108,9 @@ final class GroupWriter {
      */
     private void deleteSources(WorkItem main, boolean mainWritten, List<Companion> copies, List<Integer> written,
                                ConflictResolver.GroupDecision decision) {
+        if (main.isSourceKept()) {
+            return; // a secondary output: the main output still reads every source of the group
+        }
         boolean provenIdentical = decision.identical() && settings.compare() == Compare.FULL_HASH;
         boolean allQualify = (mainWritten || provenIdentical)
                 && (provenIdentical || written.size() == copies.size());

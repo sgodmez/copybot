@@ -10,6 +10,10 @@ public interface IOutAction extends IAction {
      * {@link WriteResult#skipped} with a reason (e.g. already at the destination: the item ends SKIPPED). A
      * failure is thrown: the item ends ERROR. The context tells the run ({@link WriteContext#runId()}) and takes
      * the progress of the item ({@link WriteContext#progress()}).
+     * <p>
+     * An item marked {@link WorkItem#isSourceKept() source kept} (the copy a secondary output receives, whose source
+     * the main output still has to read) is written as any other, but its source is never deleted, whatever the
+     * action's own settings: an action that deletes sources must check the mark.
      */
     WriteResult write(WorkItem workItem, WriteContext context);
 

@@ -167,6 +167,18 @@ public class FileWriteActionTest {
     }
 
     @Test
+    public void deleteSourceIgnoresAnItemMarkedSourceKept() throws IOException {
+        Path target = tempDir.resolve("nas").resolve("photo.jpg");
+        WorkItem item = itemWithContent("src8k.bin", "abc".getBytes()).withSourceKept();
+
+        action(target, ",\"deleteSource\":true").write(item, WriteContext.newRun());
+
+        assertEquals("abc", Files.readString(target));
+        assertTrue(Files.exists(tempDir.resolve("src8k.bin")), "a secondary output never deletes the source");
+        assertFalse(item.isDeleted());
+    }
+
+    @Test
     public void deleteSourceKeepsTheSourceWhenTheWriteFails() throws IOException {
         Path target = nasFile("photo.jpg", "other content");
         WorkItem item = itemWithContent("src9.bin", "abc".getBytes());

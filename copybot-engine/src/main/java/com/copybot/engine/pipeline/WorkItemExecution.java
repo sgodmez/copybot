@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -29,6 +30,33 @@ public class WorkItemExecution {
         SKIPPED,
         /** DONE, filtered out by a process step: nothing written. */
         FILTERED
+    }
+
+    /** How a secondary output ended for an item (spec secondary-outputs §4). */
+    public enum BranchOutcome {
+        /** Its out step wrote one item at least. */
+        WRITTEN,
+        /** Its out step skipped every item it got (e.g. already there). */
+        SKIPPED,
+        /** Its process steps filtered everything out: nothing written, not an error. */
+        FILTERED,
+        /** It failed, and so did the item (onError fail). */
+        ERROR,
+        /** It failed, the error became a warning of the run (onError warn). */
+        WARNING
+    }
+
+    /**
+     * What a secondary output did for this item, for its detail.
+     *
+     * @param name    the name of the output
+     * @param targets where its out step wrote, or the existing targets that made it skip; possibly empty
+     * @param message the reason of the first skip (SKIPPED), the error (ERROR, WARNING); null otherwise
+     */
+    public record BranchResult(String name, BranchOutcome outcome, List<Path> targets, String message) {
+        public BranchResult {
+            targets = List.copyOf(targets);
+        }
     }
 
     private volatile WorkItem wi;
@@ -78,6 +106,8 @@ public class WorkItemExecution {
     /** This item, plus the items forked from it not finished yet. */
     private final AtomicInteger unfinished = new AtomicInteger(1);
     private final AtomicBoolean finished = new AtomicBoolean();
+    /** What each secondary output did for this item, in the order they ran. */
+    private final List<BranchResult> branchResults = new CopyOnWriteArrayList<>();
 
     public WorkItemExecution(WorkItem wi, List<PipelineStep<?>> pipelineSteps) {
         this.wi = wi;
@@ -145,6 +175,17 @@ public class WorkItemExecution {
             done.add(e);
         }
         return done;
+    }
+
+    /** What a secondary output did for this item; replaces what it did before (an item run again). */
+    public synchronized void setBranchResult(BranchResult result) {
+        branchResults.removeIf(previous -> previous.name().equals(result.name()));
+        branchResults.add(result);
+    }
+
+    /** What the secondary outputs did for this item, in the order they ran; empty before (or without any). */
+    public List<BranchResult> getBranchResults() {
+        return List.copyOf(branchResults);
     }
 
     /** A process step may transform the item (e.g. transcoding produces a new file). */

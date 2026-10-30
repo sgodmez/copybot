@@ -119,6 +119,25 @@ public class CopybotEngineTest {
     }
 
     @Test
+    public void theFoldersOfTheSecondaryOutputsAreThoseOfThePipelineToo() throws IOException {
+        Path in = tempDir.resolve("card");
+        Path out = tempDir.resolve("nas").resolve("photos");
+        Path thumbs = tempDir.resolve("nas").resolve("thumbs");
+        Path pipeline = Files.writeString(tempDir.resolve("p.json"), """
+                {
+                  "inSteps": [ { "action": "file.read", "actionConfig": { "path": "%s" } } ],
+                  "outStep": { "action": "file.write", "actionConfig": { "outPattern": "%s/{name}" } },
+                  "secondaryOutputs": [ { "name": "Thumbs", "outStep": { "action": "file.write",
+                      "actionConfig": { "outPattern": "%s/{name}" } } } ]
+                }
+                """.formatted(json(in), json(out), json(thumbs)));
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null))) {
+            assertEquals(List.of(in.toAbsolutePath().normalize(), out.toAbsolutePath().normalize(),
+                    thumbs.toAbsolutePath().normalize()), engine.pipelinePaths(pipeline));
+        }
+    }
+
+    @Test
     public void aStreamingPipelineWhoseInputsSignalTheirFoldersStaysStreamingWithGroupingRules() throws Exception {
         Path in = dir("in");
         Path out = tempDir.resolve("out");

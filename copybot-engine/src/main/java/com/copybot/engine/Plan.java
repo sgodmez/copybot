@@ -165,7 +165,29 @@ public final class Plan {
         TargetProjection outcome = out == null && projection instanceof Projection.Projected
                 ? TargetProjection.NONE : outcome(out, projection, files);
         return Optional.of(new ItemDetail(projection.trace(), outcome,
-                outcome instanceof TargetProjection.Targets ? files : List.of()));
+                outcome instanceof TargetProjection.Targets ? files : List.of(), branchDetails(item)));
+    }
+
+    /**
+     * The secondary outputs of an item: its real result once it has one, else the target projected by the dry run of
+     * the branch processes on a copy like the one the branch gets (no companion, source kept, no own out pattern).
+     */
+    private List<ItemDetail.BranchDetail> branchDetails(WorkItemExecution item) {
+        List<ItemDetail.BranchDetail> details = new ArrayList<>();
+        for (StepResolver.Branch branch : executor.secondaryBranches()) {
+            WorkItemExecution.BranchResult result = item.getBranchResults().stream()
+                    .filter(r -> r.name().equals(branch.name())).findFirst().orElse(null);
+            TargetProjection projection = TargetProjection.NONE;
+            List<Path> files = new ArrayList<>();
+            if (result == null) {
+                WorkItem copy = item.getWorkItem().copyForDryRun().withoutCompanions().withSourceKept();
+                copy.setOutPattern(null);
+                projection = outcome(branch.out().getAction(), DryRunner.project(copy, branch.steps()), files);
+            }
+            details.add(new ItemDetail.BranchDetail(branch.name(), projection,
+                    projection instanceof TargetProjection.Targets ? files : List.of(), result));
+        }
+        return details;
     }
 
     /** How the dry run ended; out is only used (non null then) when it projected items, whose files go to files. */

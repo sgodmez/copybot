@@ -123,6 +123,23 @@ public class WorkItemCopyTest {
     }
 
     @Test
+    public void theSourceKeptMarkFollowsEveryCopy() throws IOException {
+        WorkItem item = new WorkItem(Files.writeString(tempDir.resolve("a.jpg"), "x"));
+        assertFalse(item.isSourceKept(), "not marked by default");
+
+        WorkItem kept = item.withSourceKept();
+
+        assertTrue(kept.isSourceKept());
+        assertFalse(item.isSourceKept(), "the original is unchanged");
+        assertTrue(kept.copyForDryRun().isSourceKept());
+        assertTrue(kept.withContent(() -> new java.io.ByteArrayInputStream("y".getBytes()), 1).isSourceKept());
+        assertTrue(kept.withContentFile(Files.writeString(tempDir.resolve("b.bin"), "x")).isSourceKept());
+        assertTrue(kept.withCompanions(java.util.List.of()).isSourceKept());
+        assertTrue(kept.withoutCompanions().isSourceKept());
+        assertFalse(item.withoutCompanions().isSourceKept());
+    }
+
+    @Test
     public void anItemFromAUrlHasNoContentLocationUntilBuffered() throws IOException {
         WorkItem remote = new WorkItem(new java.net.URL("http://example.invalid/a.jpg"),
                 () -> new java.io.ByteArrayInputStream("remote".getBytes()));

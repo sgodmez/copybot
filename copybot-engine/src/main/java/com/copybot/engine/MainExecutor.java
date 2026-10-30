@@ -122,8 +122,15 @@ public class MainExecutor implements Runnable {
     private volatile Instant copyStarted;
 
     private List<PipelineStep<IInAction>> inSteps;
-    /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
+    /**
+     * The steps of {@link #layout}, flat: analyses, secondary outputs, main branch. volatile: {@link Plan#projectionOf}
+     * reads it from another thread while the plan is being prepared.
+     */
     private volatile List<PipelineStep<?>> itemSteps;
+    /** Where the parts of {@link #itemSteps} sit; set before it. */
+    private volatile ItemLayout layout;
+    /** The secondary outputs with their steps resolved (laid in {@link #itemSteps} too); empty without any. */
+    private volatile List<StepResolver.Branch> secondaryBranches = List.of();
 
     /**
      * null: single-phase run without barrier nor resume (historical behaviour of run(), and {@link #stream()} without
@@ -279,7 +286,8 @@ public class MainExecutor implements Runnable {
         this.registry = registry;
         this.resume = resume;
         this.inSteps = inSteps;
-        this.itemSteps = itemSteps;
+        this.layout = ItemLayout.withoutBranches(itemSteps, barrierIndex);
+        this.itemSteps = layout.steps();
         this.barrierIndex = barrierIndex;
         this.state = new PipelineState();
         this.state.setRegistry(registry);
@@ -288,6 +296,14 @@ public class MainExecutor implements Runnable {
         this.listingPipe = newListingPipe(null);
         this.itemRunner = newItemRunner();
         this.itemRunner.setProcessWhileListing(processWhileListing);
+    }
+
+    // visible for tests: secondary outputs laid between the analyses and the main branch of the pre-resolved steps
+    // (once, before the run)
+    void setSecondaryBranches(List<StepResolver.Branch> branches) {
+        this.secondaryBranches = List.copyOf(branches);
+        this.layout = ItemLayout.of(itemSteps, barrierIndex, branches);
+        this.itemSteps = layout.steps();
     }
 
     // visible for tests: the end-of-run actions, instead of the pipeline's
@@ -361,8 +377,8 @@ public class MainExecutor implements Runnable {
     }
 
     private ItemRunner newItemRunner() {
-        return new ItemRunner(registry, state, tasks, notifier, writeContext, () -> itemSteps, this::findOutAction,
-                () -> cancelRequested);
+        return new ItemRunner(registry, state, tasks, notifier, writeContext, () -> layout, this::findOutAction,
+                () -> cancelRequested, this::addWarnings);
     }
 
     /**
@@ -1138,11 +1154,14 @@ public class MainExecutor implements Runnable {
         return preparing;
     }
 
-    /** The process steps among the item steps (the instances the execution will use). */
+    /**
+     * The process steps of the main branch (the instances the execution will use): the projection of the plan is the
+     * main output's, the secondary outputs take no part in it.
+     */
     @SuppressWarnings("unchecked")
     private List<PipelineStep<IProcessAction>> processSteps() {
         List<PipelineStep<IProcessAction>> steps = new ArrayList<>();
-        for (PipelineStep<?> step : itemSteps) {
+        for (PipelineStep<?> step : layout.mainSteps()) {
             if (step.getAction() instanceof IProcessAction) {
                 steps.add((PipelineStep<IProcessAction>) step);
             }
@@ -1601,7 +1620,7 @@ public class MainExecutor implements Runnable {
         }
         List<String> warnings = new ArrayList<>();
         inSteps.forEach(step -> addWarnings(warnings, step.getAction(), step.getRedactor()));
-        itemSteps.forEach(step -> addWarnings(warnings, step.getAction(), step.getRedactor()));
+        itemSteps.forEach(step -> addWarnings(warnings, step.getAction(), step.getRedactor())); // branches included
         RunEnd actions = runEnd; // resolved before the steps
         if (actions != null) {
             actions.entries().forEach(entry -> addWarnings(warnings, entry.action(), entry.redactor()));
@@ -1652,8 +1671,12 @@ public class MainExecutor implements Runnable {
         }
         if (pipelineConfig != null && inSteps == null) {
             List<PipelineStep<IInAction>> in = StepResolver.in(pipelineConfig);
-            itemSteps = StepResolver.itemSteps(pipelineConfig);
+            List<PipelineStep<?>> steps = StepResolver.itemSteps(pipelineConfig);
+            List<StepResolver.Branch> branches = StepResolver.secondary(pipelineConfig);
             barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
+            secondaryBranches = branches;
+            layout = ItemLayout.of(steps, barrierIndex, branches);
+            itemSteps = layout.steps();
             inSteps = in; // last: the marker of steps resolved
         }
     }
@@ -1700,9 +1723,19 @@ public class MainExecutor implements Runnable {
         return pipelineConfig;
     }
 
-    /** The out step's action, null when the pipeline has none or its steps are not resolved (yet). */
+    /** The secondary outputs with their steps resolved, empty without any or before the steps are resolved. */
+    List<StepResolver.Branch> secondaryBranches() {
+        return secondaryBranches;
+    }
+
+    /**
+     * The out step's action of the main branch (the last step), null when the pipeline has none or its steps are not
+     * resolved (yet).
+     */
     IOutAction findOutAction() {
-        if (itemSteps != null && !itemSteps.isEmpty() && itemSteps.getLast().getAction() instanceof IOutAction out) {
+        ItemLayout items = layout;
+        if (items != null && !items.mainSteps().isEmpty()
+                && items.mainSteps().getLast().getAction() instanceof IOutAction out) {
             return out;
         }
         return null;

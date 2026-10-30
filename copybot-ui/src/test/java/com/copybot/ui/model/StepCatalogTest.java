@@ -131,4 +131,17 @@ public class StepCatalogTest {
         assertTrue(catalog.isLoaded("com.acme.failed"), "failed, but loaded: installing would not help");
         assertFalse(catalog.isLoaded("com.acme.gps"));
     }
+
+    @Test
+    public void thePluginsOfTheSecondaryOutputsCountToo() {
+        StepCatalog catalog = new StepCatalog(new PluginCatalog(List.of(READ, WRITE), List.of()));
+        PipelineDocument document = PipelineDocument.parse("""
+                {"inSteps": [{"action": "file.read"}],
+                 "outStep": {"action": "file.write"},
+                 "secondaryOutputs": [{"name": "Thumbs",
+                                       "actionSteps": [{"plugin": "com.acme.thumbs", "action": "thumb.make"}],
+                                       "outStep": {"plugin": "com.acme.ftp", "action": "ftp.write"}}]}""");
+
+        assertEquals(List.of("com.acme.thumbs", "com.acme.ftp"), catalog.missingPlugins(document));
+    }
 }
