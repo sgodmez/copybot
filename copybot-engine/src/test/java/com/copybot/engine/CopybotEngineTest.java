@@ -2,6 +2,7 @@ package com.copybot.engine;
 
 import com.copybot.config.AppFolders;
 import com.copybot.config.CopybotConfig;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.plugin.PluginDefinition;
@@ -114,6 +115,24 @@ public class CopybotEngineTest {
         try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null))) {
             assertEquals(List.of(in.toAbsolutePath().normalize(), out.toAbsolutePath().normalize()),
                     engine.pipelinePaths(pipeline), "the step that cannot be resolved is left out");
+        }
+    }
+
+    @Test
+    public void aStreamingPipelineWhoseInputsSignalTheirFoldersStaysStreamingWithGroupingRules() throws Exception {
+        Path in = dir("in");
+        Path out = tempDir.resolve("out");
+        String rules = ",\"grouping\":{\"rules\":[{\"preset\":\"raw-jpeg-xmp\"}]}";
+        try (CopybotEngine engine = new CopybotEngine(new CopybotConfig(null, null))) {
+            assertEquals(ExecutionMode.PLAN, engine.executionMode(pipeline("p.json", in, out, "file.write", rules)));
+            Path streaming = pipeline("s.json", in, out, "file.write", ",\"execution\":\"streaming\"" + rules);
+            assertEquals(ExecutionMode.STREAMING, engine.executionMode(streaming), "file.read signals its folders");
+            Execution run = engine.run(streaming, null);
+            assertEquals(PipelineStatus.SUCCESS, run.await());
+            assertTrue(run.getState().getWarnings().contains(ResourcesEngine.getString("grouping.streaming-by-folder")),
+                    run.getState().getWarnings().toString());
+            assertEquals(ExecutionMode.AUTO, engine.executionMode(pipeline("a.json", in, out, "file.write",
+                    ",\"execution\":\"auto\"" + rules)));
         }
     }
 

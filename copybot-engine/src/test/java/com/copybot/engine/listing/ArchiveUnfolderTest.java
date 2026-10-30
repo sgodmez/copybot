@@ -6,6 +6,7 @@ import com.copybot.plugin.api.action.ListingSink;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.embedded.actions.FileReadAction;
+import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -155,6 +157,27 @@ class ArchiveUnfolderTest {
     }
 
     // ---- entries ----
+
+    @Test
+    void rootIsForwardedDownstream() {
+        List<String> roots = new ArrayList<>();
+        ArchiveUnfolder unfolder = new ArchiveUnfolder(config(false, false), ws, sources, new ListingSink() {
+            @Override
+            public void root(String folder) {
+                roots.add(folder);
+            }
+
+            @Override
+            public void item(WorkItem item) {
+            }
+
+            @Override
+            public void folderDone(String folder) {
+            }
+        }, failures, 1);
+        unfolder.root("/d");
+        assertEquals(List.of("/d"), roots);
+    }
 
     @Test
     void localZipEntriesAreEmittedPerInnerFolder() throws IOException {
@@ -586,5 +609,23 @@ class ArchiveUnfolderTest {
         unfolder(config(false, false)).item(local(zip));
         assertInstanceOf(CopybotException.class, causes.get(0));
         assertTrue(causes.get(0).getMessage().contains(zip.toString()), causes.get(0).getMessage());
+    }
+
+    @Test
+    void workFolderThatCannotBeMadeFailsTheArchiveOnly() throws IOException {
+        Path zip = zip("a.zip", entries("x.jpg", "x"));
+        Path jpg = Files.writeString(dir.resolve("b.jpg"), "b");
+        ArchiveUnfolder unfolder = new ArchiveUnfolder(config(false, false), () -> {
+            throw new UncheckedIOException(new IOException("disk full"));
+        }, sources, out, failures, 1, progress);
+
+        unfolder.item(local(zip)); // not thrown into the listing of the plugin
+        unfolder.item(local(jpg));
+
+        assertEquals(List.of("a.zip"), failed);
+        assertEquals(ResourcesEngine.getString("archive.workspace.failed", zip.toString(), "disk full"),
+                causes.get(0).getMessage());
+        assertEquals(List.of("item " + dir + " | b.jpg"), events, "the listing goes on");
+        assertEquals(0, unfolded.get());
     }
 }

@@ -68,9 +68,33 @@ public final class Plan {
     }
 
     private final MainExecutor executor;
+    /** The engine that prepared it, null for a plan built by a test around an executor. */
+    private final CopybotEngine engine;
 
+    // visible for tests: a plan outside any engine
     Plan(MainExecutor executor) {
+        this(executor, null);
+    }
+
+    Plan(MainExecutor executor, CopybotEngine engine) {
         this.executor = executor;
+        this.engine = engine;
+    }
+
+    /**
+     * Abandons this plan (the view forgets it: pipeline read again, view closed): what it holds is released (the work
+     * folder of its archives, spec grouping/archives), at once or, while it is being prepared or analysed, when that
+     * operation ends; it can no longer be executed nor analysed ({@link CopybotEngine#execute} refuses it, as it
+     * refuses a plan replaced by a more recent preparation). Idempotent; no effect on a plan already executed or being
+     * executed (its execution releases what it holds). Non-blocking but for the removal of the work folder; callable
+     * from any thread.
+     */
+    public void discard() {
+        if (engine != null) {
+            engine.discard(executor);
+        } else {
+            executor.archives().release();
+        }
     }
 
     MainExecutor getExecutor() {

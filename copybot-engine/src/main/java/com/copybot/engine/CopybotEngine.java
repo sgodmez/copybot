@@ -57,6 +57,9 @@ import java.util.function.Supplier;
  */
 public final class CopybotEngine implements AutoCloseable {
 
+    /** What the engine did with a prepared plan: still open, executed, or abandoned ({@link Plan#discard()}). */
+    enum PlanFate { OPEN, EXECUTED, DISCARDED }
+
     private static final System.Logger LOGGER = System.getLogger(CopybotEngine.class.getName());
 
     /** Best-effort grace period given to a cancelled pipeline to release its resources. */
@@ -85,10 +88,15 @@ public final class CopybotEngine implements AutoCloseable {
     private MainExecutor preparedPlan;
     /**
      * The last plan prepared, whatever its outcome: the work folder of its archives lives until it is executed, or
-     * abandoned (the next preparation or run replaces it, the engine is closed: spec grouping/archives). Guarded by
-     * lock.
+     * abandoned (the next preparation or run replaces it, {@link Plan#discard()}, the engine is closed: spec
+     * grouping/archives). Only this plan can be executed. Guarded by lock.
      */
     private MainExecutor lastPlan;
+    /**
+     * A plan discarded while its own operation (preparation, analysis) runs: the work folder of its archives is
+     * removed when that operation ends ({@link #end()}). Guarded by lock.
+     */
+    private MainExecutor discardedWhileActive;
     /** Guarded by lock. */
     private boolean closed;
 
@@ -160,6 +168,24 @@ public final class CopybotEngine implements AutoCloseable {
             addTouchedPaths(paths, List.of(pipeline.outStep()), IOutAction.class);
         }
         return List.copyOf(paths);
+    }
+
+    /**
+     * The mode a run of the pipeline really takes: its {@code "execution"}, but a streaming pipeline with grouping
+     * rules and an input that does not signal the end of its folders runs in the automatic mode (spec
+     * execution-mode §3, see {@link MainExecutor#stream()}), its preparation telling why. For the view that starts it.
+     *
+     * @throws CopybotException pipeline.not-found / pipeline.not-json, an input or a grouping rule that cannot be
+     *                          resolved
+     */
+    public ExecutionMode executionMode(Path pipelinePath) {
+        PipelineConfig pipeline = PipelineReader.read(pipelinePath);
+        ExecutionMode declared = pipeline.executionMode();
+        if (declared != ExecutionMode.STREAMING || ListingPipe.groupingRules(pipeline).isEmpty()
+                || ListingPipe.inputsWithoutFolderSignal(pipeline, StepResolver.in(pipeline)).isEmpty()) {
+            return declared;
+        }
+        return ExecutionMode.AUTO;
     }
 
     private static void addTouchedPaths(Set<Path> paths, List<PipelineStepConfig> steps,
@@ -251,7 +277,8 @@ public final class CopybotEngine implements AutoCloseable {
      *
      * @param override resume point chosen by the user, null for the proposed one
      * @throws IllegalStateException when another operation is active, the engine is closed or the plan
-     *                               is not PREPARED (checked before anything is submitted)
+     *                               is not PREPARED, was discarded ({@link Plan#discard()}) or replaced by a more
+     *                               recent preparation or run (checked before anything is submitted)
      */
     public Execution execute(Plan plan, ResumePoint override) {
         begin();
@@ -264,6 +291,8 @@ public final class CopybotEngine implements AutoCloseable {
             });
             MainExecutor mainExecutor = plan.getExecutor();
             synchronized (lock) {
+                requireCurrent(mainExecutor);
+                mainExecutor.setFate(PlanFate.EXECUTED); // from now on discard() leaves it to its execution
                 if (preparedPlan == mainExecutor) {
                     preparedPlan = null; // from now on the execution owns it (and close() cancels it)
                 }
@@ -282,13 +311,18 @@ public final class CopybotEngine implements AutoCloseable {
      * listing ({@link Plan#isStoppedAfterTheListing()}), the files asked for ({@link Plan#requestAnalysis}): CANCELLED
      * again when it returns, still stopped after its listing (spec manual-point §2).
      *
-     * @throws IllegalStateException when another operation is active, the engine is closed or the plan is neither
-     *                               PREPARED nor a preparation stopped after its listing
+     * @throws IllegalStateException when another operation is active, the engine is closed, the plan was discarded
+     *                               or replaced (as for {@link #execute}), or it is neither PREPARED nor a
+     *                               preparation stopped after its listing
      */
     public void analyse(Plan plan) {
         begin();
         try {
             MainExecutor mainExecutor = plan.getExecutor();
+            synchronized (lock) {
+                requireCurrent(mainExecutor); // checked and tracked at once: a discard then waits for the end
+                active = mainExecutor;
+            }
             track(mainExecutor);
             mainExecutor.analyseDeferred();
         } finally {
@@ -384,7 +418,7 @@ public final class CopybotEngine implements AutoCloseable {
         } catch (InterruptedException e) {
             interrupted = true;
         }
-        replacePlan(null); // a plan never executed: its archive work folder is removed
+        abandonPlan();
         if (interrupted) {
             Thread.currentThread().interrupt();
         }
@@ -427,10 +461,64 @@ public final class CopybotEngine implements AutoCloseable {
     }
 
     private void end() {
+        MainExecutor abandoned;
         synchronized (lock) {
             busy = false;
+            // the engine is closed, or the plan discarded meanwhile: nothing reads its archives any more
+            abandoned = closed || (active != null && active == discardedWhileActive) ? active : null;
+            if (active == discardedWhileActive) {
+                discardedWhileActive = null;
+            }
             active = null;
             lock.notifyAll();
+        }
+        if (abandoned != null) {
+            abandoned.archives().release();
+        }
+    }
+
+    /**
+     * The plan can be executed or analysed: neither discarded nor replaced by a more recent preparation or run.
+     * Called under lock.
+     */
+    private void requireCurrent(MainExecutor plan) {
+        if (plan.fate() == PlanFate.DISCARDED) {
+            throw new IllegalStateException(ResourcesEngine.getString("engine.plan.discarded"));
+        }
+        if (plan != lastPlan) {
+            throw new IllegalStateException(ResourcesEngine.getString("engine.plan.replaced"));
+        }
+    }
+
+    /**
+     * See {@link Plan#discard()}: the work folder of its archives is removed now, or when its own operation
+     * (preparation, analysis) ends; a pause left on it is lifted. No effect on a plan executed or already discarded.
+     */
+    void discard(MainExecutor plan) {
+        boolean release;
+        boolean wasPrepared;
+        synchronized (lock) {
+            if (plan.fate() != PlanFate.OPEN) {
+                return;
+            }
+            plan.setFate(PlanFate.DISCARDED);
+            if (lastPlan == plan) {
+                lastPlan = null;
+            }
+            wasPrepared = preparedPlan == plan;
+            if (wasPrepared) {
+                preparedPlan = null;
+            }
+            release = !(busy && active == plan);
+            if (!release) {
+                discardedWhileActive = plan;
+            }
+        }
+        if (wasPrepared) {
+            plan.resume(); // a plan never executed: nothing stays paused
+        }
+        if (release) {
+            plan.archives().release();
         }
     }
 
@@ -452,7 +540,7 @@ public final class CopybotEngine implements AutoCloseable {
         try {
             track(mainExecutor);
             replacePlan(mainExecutor);
-            Plan plan = new Plan(mainExecutor);
+            Plan plan = new Plan(mainExecutor, this);
             if (started != null) {
                 started.accept(plan);
             }
@@ -460,7 +548,8 @@ public final class CopybotEngine implements AutoCloseable {
             boolean kept = false;
             if (mainExecutor.getState().getStatus() == PipelineStatus.PREPARED) {
                 synchronized (lock) {
-                    if (!closed) { // otherwise close() already looked for a plan to resume
+                    // closed: close() already looked for a plan to resume; discarded meanwhile: nothing to resume
+                    if (!closed && mainExecutor.fate() == PlanFate.OPEN) {
                         preparedPlan = mainExecutor;
                         kept = true;
                     }
@@ -486,7 +575,26 @@ public final class CopybotEngine implements AutoCloseable {
             lastPlan = next;
         }
         if (previous != null && previous != next) {
-            previous.releaseArchives();
+            previous.archives().release();
+        }
+    }
+
+    /**
+     * On close, the last plan prepared is abandoned: the work folder of its archives is removed, unless its operation
+     * is still running (the grace period of close() is over): it is then removed when that operation ends
+     * ({@link #end()}), never while it may still read its archives.
+     */
+    private void abandonPlan() {
+        MainExecutor previous;
+        synchronized (lock) {
+            previous = lastPlan;
+            lastPlan = null;
+            if (busy && previous == active) {
+                previous = null;
+            }
+        }
+        if (previous != null) {
+            previous.archives().release();
         }
     }
 

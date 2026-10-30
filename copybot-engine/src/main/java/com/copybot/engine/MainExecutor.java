@@ -1,15 +1,7 @@
 package com.copybot.engine;
 
-import com.copybot.engine.listing.ArchiveProgress;
-import com.copybot.engine.listing.ArchiveSources;
-import com.copybot.engine.listing.ArchiveUnfolder;
-import com.copybot.engine.listing.ArchiveWorkspace;
-import com.copybot.engine.listing.Grouper;
-import com.copybot.engine.listing.GroupingPresets;
-import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.ConflictCheck;
-import com.copybot.engine.pipeline.GroupingConfig;
-import com.copybot.engine.pipeline.GroupingRuleConfig;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
@@ -18,7 +10,6 @@ import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.WorkItemExecution;
-import com.copybot.engine.resources.FootprintResolver;
 import com.copybot.engine.resources.ResourceRegistry;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumeContext;
@@ -34,15 +25,12 @@ import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
-import com.copybot.plugin.api.action.ListingSink;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.time.ZoneId;
 import java.util.ArrayList;
@@ -56,9 +44,7 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -80,40 +66,12 @@ public class MainExecutor implements Runnable {
     private final ResourceRegistry registry;
     private final PipelineState state;
 
-    /**
-     * Where the listing pipe reads its grouping rules and archives block (spec grouping/archives, "Où ça se place"):
-     * the pipeline configuration; null: no pipe.
-     */
-    private PipelineConfig listingConfig;
-
-    /** Guards archiveWorkspace, archiveSources and archivesReleased. */
-    private final Object archivesLock = new Object();
-    /**
-     * The work folder of the archives of this execution (spec grouping/archives, "Archives distantes ou dans une
-     * archive"): opened by the first listing that unfolds, it lives during the preparation and the copy (the entries
-     * are read then), until the end of the copy, a cancel, a failed phase or the plan is abandoned
-     * ({@link #releaseArchives()}). Guarded by archivesLock.
-     */
-    private ArchiveWorkspace archiveWorkspace;
-    /** Released: a late listing opens no work folder again, until the next phase starts afresh. Guarded by archivesLock. */
-    private boolean archivesReleased;
-    /** The archives unfolded by this execution, shared by its listings. Guarded by archivesLock. */
-    private ArchiveSources archiveSources = new ArchiveSources();
-    private Path archiveBase = ArchiveWorkspace.defaultBase();
-    /** The archive counters of the preparation. */
-    private final ArchiveProgress archiveProgress = new ArchiveProgress() {
-        @Override
-        public void unfolded() {
-            state.addArchiveUnfolded();
-            notifier.changed();
-        }
-
-        @Override
-        public void toDownload(long bytes) {
-            state.addArchiveToDownload(bytes);
-            notifier.changed();
-        }
-    };
+    /** The archives of this execution: their work folder lives from the preparation until the end of the copy. */
+    private final RunArchives archives;
+    /** The pipe of the listings: archives unfolded, items grouped, then {@link #emitItem}. */
+    private final ListingPipe listingPipe;
+    /** What the engine did with this plan (executed, abandoned). Guarded by the lock of the engine. */
+    private CopybotEngine.PlanFate fate = CopybotEngine.PlanFate.OPEN;
 
     /**
      * Unique per pipeline run (prepare and execute share it), handed to the out step: it names its temporary
@@ -180,8 +138,6 @@ public class MainExecutor implements Runnable {
      * rows can be used when its listing is complete. Guarded by phaseLock.
      */
     private boolean lastPhaseWasPreparation;
-    /** A listing of the current preparation was stopped (cancel, interrupt) before its end. */
-    private final AtomicBoolean listingStopped = new AtomicBoolean(false);
 
     /** {@link #stream()}: processing while listing, the resume applied at the listing. */
     private volatile boolean streaming;
@@ -192,6 +148,13 @@ public class MainExecutor implements Runnable {
     /** While streaming with resume: the listed files (not the forks), for the cursor. */
     private final Queue<WorkItemExecution> listedItems = new ConcurrentLinkedQueue<>();
     private final Object warningsLock = new Object();
+    /**
+     * With grouping rules, the warning of a streaming pipeline (spec execution-mode §3): streamed folder by folder, or
+     * run in the automatic mode. Published with the configuration warnings.
+     */
+    private volatile List<String> modeWarnings = List.of();
+    /** The steps could not be resolved before the phase ({@link #stream()}): thrown again by the phase. */
+    private Throwable stepsFailure;
     /** The actions whose {@link IAction#beforeAll} ran in the current phase, in that order. Phase thread only. */
     private final List<IAction> begunActions = new ArrayList<>();
 
@@ -219,9 +182,6 @@ public class MainExecutor implements Runnable {
     private final CoalescingNotifier<PipelineState> notifier;
     private final ItemRunner itemRunner;
 
-    private CountDownLatch listingGate;
-    private final AtomicBoolean listingFailed = new AtomicBoolean(false);
-
     /** Guards phaseThread, cancelInterruptSent and paused against the start and the end of a phase. */
     private final Object phaseLock = new Object();
     /** The thread running the current phase (single-phase run, prepare or execute), null between phases
@@ -247,12 +207,13 @@ public class MainExecutor implements Runnable {
     public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
                         ResumeContext resume) {
         this.pipelineConfig = pipelineConfig;
-        this.listingConfig = pipelineConfig;
         this.registry = registry;
         this.resume = resume;
         this.state = new PipelineState();
         this.state.setRegistry(registry);
         this.notifier = new CoalescingNotifier<>(watcher, state);
+        this.archives = newRunArchives();
+        this.listingPipe = newListingPipe(pipelineConfig);
         this.itemRunner = newItemRunner();
         this.itemRunner.setConflictCheck(pipelineConfig.conflictCheckMode());
         this.postProcess = PostProcess.of(pipelineConfig.postProcess());
@@ -277,6 +238,8 @@ public class MainExecutor implements Runnable {
         this.state = new PipelineState();
         this.state.setRegistry(registry);
         this.notifier = new CoalescingNotifier<>(watcher, state);
+        this.archives = newRunArchives();
+        this.listingPipe = newListingPipe(null);
         this.itemRunner = newItemRunner();
         this.itemRunner.setProcessWhileListing(processWhileListing);
         this.postProcess = PostProcess.of(null);
@@ -289,12 +252,37 @@ public class MainExecutor implements Runnable {
 
     // visible for tests: the grouping rules and archives block of an executor built from pre-resolved steps
     void setListingConfig(PipelineConfig config) {
-        this.listingConfig = config;
+        listingPipe.setConfig(config);
     }
 
     // visible for tests: where the work folders of the archives are made
     void setArchiveBase(Path base) {
-        this.archiveBase = base;
+        archives.setBase(base);
+    }
+
+    private RunArchives newRunArchives() {
+        return new RunArchives(state, notifier::changed, this::stopListing);
+    }
+
+    /** @param config where the pipe reads its grouping rules and archives block; null: no pipe */
+    private ListingPipe newListingPipe(PipelineConfig config) {
+        return new ListingPipe(config, archives, registry, state, notifier::changed, this::emitItem, this::emitFailed,
+                () -> cancelRequested);
+    }
+
+    /** The archives of this execution, released by the engine when the plan is abandoned. */
+    RunArchives archives() {
+        return archives;
+    }
+
+    /** Called by the engine under its lock. */
+    CopybotEngine.PlanFate fate() {
+        return fate;
+    }
+
+    /** Called by the engine under its lock. */
+    void setFate(CopybotEngine.PlanFate fate) {
+        this.fate = fate;
     }
 
     private ItemRunner newItemRunner() {
@@ -325,11 +313,51 @@ public class MainExecutor implements Runnable {
      * destination-based mode each file is skipped once analysed when it is at the destination; the cursor is written
      * at the end like {@link #execute} does (not after a listing failure: the files not listed would be skipped
      * next time). Never prepared first.
+     * <p>
+     * With grouping rules, the files are processed folder by folder, as each input signals the end of a folder; when
+     * an input signals no end of folder, the run falls back to the automatic mode instead ({@link #run()}: every input
+     * listed before the first copy), with a warning naming that input.
      */
     public void stream() {
+        List<String> silent = inputsWithoutFolderSignal();
+        if (silent != null && !silent.isEmpty()) {
+            modeWarnings = fallbackWarnings(silent);
+            itemRunner.setProcessWhileListing(false);
+            run();
+            return;
+        }
+        if (silent != null) {
+            modeWarnings = List.of(ResourcesEngine.getString("grouping.streaming-by-folder"));
+        }
         streaming = true;
         itemRunner.setProcessWhileListing(true);
         runSinglePhase();
+    }
+
+    /**
+     * With grouping rules, the inputs that signal no end of folder; null without grouping rules (nothing resolved
+     * then), or when the rules or the steps cannot be read: the phase then reports it (a step resolution failure is
+     * kept and thrown again by the phase, see {@link #resolveSteps()}).
+     */
+    private List<String> inputsWithoutFolderSignal() {
+        try {
+            if (listingPipe.groupingRules().isEmpty()) {
+                return null;
+            }
+        } catch (RuntimeException e) {
+            return null; // an invalid rule: refused by the phase before any listing
+        }
+        try {
+            resolveSteps();
+        } catch (RuntimeException | Error e) {
+            stepsFailure = e;
+            return null;
+        }
+        return ListingPipe.inputsWithoutFolderSignal(listingPipe.config(), inSteps);
+    }
+
+    private static List<String> fallbackWarnings(List<String> inputs) {
+        return inputs.stream().map(input -> ResourcesEngine.getString("grouping.streaming-fallback", input)).toList();
     }
 
     /**
@@ -484,7 +512,7 @@ public class MainExecutor implements Runnable {
         }
         markRunning();
         state.setListingInProgress(true);
-        resetArchives();
+        archives.reset();
         startPhase();
         boolean preparing = true;
         try {
@@ -500,23 +528,20 @@ public class MainExecutor implements Runnable {
             preparing = false;
             phaseEnd = itemSteps.size();
             itemRunner.setFinalPhase(true);
-            if (streaming) {
-                warnNoFolderSignal();
-            }
             runListings();
-            addWarnings(archiveSources().warnings());
+            addWarnings(archives.warnings());
             endActions();
             commitPhase();
             // like execute(): the final status is published once, after the cursor save
             PipelineStatus finalStatus = resolveFinalStatus();
             if (streamed != null) {
                 orderedItems = ResumeResolver.order(listedItems); // the keys are frozen since the listing
-                if (!listingFailed.get() && !saveCursor(streamed.point(), streamed.source())) {
+                if (!listingPipe.failed() && !saveCursor(streamed.point(), streamed.source())) {
                     finalStatus = PipelineStatus.ERROR;
                 }
             }
             runPostProcess();
-            addWarnings(archiveSources().keptWarnings());
+            addWarnings(archives.keptWarnings());
             state.setStatus(finalStatus);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -526,7 +551,7 @@ public class MainExecutor implements Runnable {
             listingPoint = null;
             state.setListingInProgress(false);
             endActionsQuietly(true);
-            endArchives();
+            archives.releaseAtPhaseEnd();
             endPhase();
         }
     }
@@ -591,14 +616,22 @@ public class MainExecutor implements Runnable {
             preparationStoppable = true;
             lastPhaseWasPreparation = true;
         }
-        listingStopped.set(false);
+        listingPipe.clearStopped();
         state.setListingComplete(false);
         markRunning();
         state.setListingInProgress(true);
-        resetArchives(); // a new preparation replaces the plan
+        archives.reset(); // a new preparation replaces the plan
         startPhase();
         try {
             checkCancelled();
+            PipelineConfig declared = listingPipe.config();
+            if (declared != null && declared.executionMode() == ExecutionMode.STREAMING) {
+                // prepared although streaming (its fallback, see stream()): told like the streaming run
+                List<String> silent = inputsWithoutFolderSignal();
+                if (silent != null && !silent.isEmpty()) {
+                    modeWarnings = fallbackWarnings(silent);
+                }
+            }
             resolveStepsIfNeeded();
             loadOwnPatterns();
             phaseEnd = barrierIndex;
@@ -620,9 +653,9 @@ public class MainExecutor implements Runnable {
             beginActions(inSteps);
             beginActions(itemSteps.subList(0, barrierIndex));
             runListings();
-            addWarnings(archiveSources().warnings());
+            addWarnings(archives.warnings());
             commitPhase();
-            if (listingFailed.get()) {
+            if (listingPipe.failed()) {
                 state.setStatus(PipelineStatus.ERROR);
                 return;
             }
@@ -668,7 +701,7 @@ public class MainExecutor implements Runnable {
                     && !(status == PipelineStatus.CANCELLED && state.isListingComplete())) {
                 // failed, or stopped while listing: no copy will read the entries. A preparation stopped after its
                 // listing keeps them for its analysis (spec manual-point §2) until the plan is abandoned.
-                endArchives();
+                archives.releaseAtPhaseEnd();
             }
             endPhase();
             preparing = false;
@@ -1250,7 +1283,7 @@ public class MainExecutor implements Runnable {
                 finalStatus = PipelineStatus.ERROR;
             }
             runPostProcess();
-            addWarnings(archiveSources().keptWarnings());
+            addWarnings(archives.keptWarnings());
             state.setStatus(finalStatus);
         } catch (InterruptedException e) {
             onPhaseInterrupted();
@@ -1258,7 +1291,7 @@ public class MainExecutor implements Runnable {
             onPhaseFailed(e, false);
         } finally {
             endActionsQuietly(true);
-            endArchives();
+            archives.releaseAtPhaseEnd();
             endPhase();
         }
     }
@@ -1375,6 +1408,7 @@ public class MainExecutor implements Runnable {
         List<String> warnings = new ArrayList<>();
         inSteps.forEach(step -> addWarnings(warnings, step.getAction()));
         itemSteps.forEach(step -> addWarnings(warnings, step.getAction()));
+        warnings.addAll(modeWarnings);
         state.setWarnings(warnings);
         warningsCollected = true;
     }
@@ -1387,13 +1421,10 @@ public class MainExecutor implements Runnable {
     }
 
     private void resolveStepsIfNeeded() {
-        if (pipelineConfig != null && inSteps == null) {
-            inSteps = StepResolver.in(pipelineConfig);
-            itemSteps = StepResolver.itemSteps(pipelineConfig);
-            barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
-        }
+        resolveSteps();
         registerStepCapacities();
         collectConfigWarnings();
+        PipelineConfig listingConfig = listingPipe.config();
         if (listingConfig != null) { // before any listing, like the other refusals
             PipelineChecks.groupingRefusal(listingConfig, findOutAction()).ifPresent(message -> {
                 throw CopybotException.of(message);
@@ -1401,12 +1432,32 @@ public class MainExecutor implements Runnable {
         }
     }
 
+    /**
+     * Resolves the steps of the pipeline once: all of them, or none when one cannot be resolved. A failure met before
+     * the phase (the decision of {@link #stream()}) is thrown again here, inside the phase, without resolving twice.
+     */
+    private void resolveSteps() {
+        Throwable failure = stepsFailure;
+        if (failure != null) {
+            stepsFailure = null;
+            if (failure instanceof Error error) {
+                throw error;
+            }
+            throw (RuntimeException) failure;
+        }
+        if (pipelineConfig != null && inSteps == null) {
+            List<PipelineStep<IInAction>> in = StepResolver.in(pipelineConfig);
+            itemSteps = StepResolver.itemSteps(pipelineConfig);
+            barrierIndex = pipelineConfig.analyseSteps() == null ? 0 : pipelineConfig.analyseSteps().size();
+            inSteps = in; // last: the marker of steps resolved
+        }
+    }
+
     /** Submits every listing and waits for them AND every item they emitted (including forked ones). */
     private void runListings() throws InterruptedException {
-        listingGate = new CountDownLatch(inSteps.size());
-        itemRunner.setListingGate(listingGate);
+        itemRunner.setListingGate(listingPipe.open(inSteps.size()));
         for (PipelineStep<IInAction> inStep : inSteps) {
-            tasks.submit(() -> runListing(inStep));
+            tasks.submit(() -> listingPipe.run(inStep));
         }
         tasks.awaitCompletion();
     }
@@ -1435,6 +1486,7 @@ public class MainExecutor implements Runnable {
             Thread.interrupted();
         }
         tasks.shutdown();
+        archives.phaseEnded(); // after the shutdown: no listing nor item reads an archive any more
         notifier.stop(); // includes the final, guaranteed notification
     }
 
@@ -1478,185 +1530,7 @@ public class MainExecutor implements Runnable {
     private PipelineStatus resolveFinalStatus() {
         boolean anyItemFailed = state.getWorkItems().stream()
                 .anyMatch(item -> item.getStatus() == ItemStatus.ERROR);
-        return listingFailed.get() || anyItemFailed ? PipelineStatus.ERROR : PipelineStatus.SUCCESS;
-    }
-
-    private void runListing(PipelineStep<IInAction> inStep) {
-        try {
-            Set<String> footprint = FootprintResolver.forListing(inStep.getAction(), inStep.getConfig());
-            registry.acquireAll(footprint);
-            try {
-                list(inStep.getAction());
-            } finally {
-                registry.releaseAll(footprint);
-            }
-            if (Thread.currentThread().isInterrupted() || cancelRequested) {
-                listingStopped.set(true); // a plugin that ended its listing early on the stop: maybe incomplete
-            }
-        } catch (InterruptedException e) {
-            listingStopped.set(true);
-            Thread.currentThread().interrupt();
-        } catch (PhaseStopped e) {
-            // the phase is being stopped (see emitItem): not a listing failure. Only this private marker is
-            // ignored: any other exception, a plugin's own CancellationException included, fails the run.
-            listingStopped.set(true);
-        } catch (Throwable t) {
-            // A failing listing must not silently look like success: the whole run is marked ERROR.
-            state.recordFailureIfAbsent(t); // the first listing failure wins, atomically
-            listingFailed.set(true);
-        } finally {
-            listingGate.countDown();
-            if (listingGate.getCount() == 0) {
-                state.setListingComplete(!listingStopped.get() && !listingFailed.get());
-                state.setListingInProgress(false);
-                notifier.changed();
-            }
-        }
-    }
-
-    /**
-     * One listing through the pipe of its input step (spec grouping/archives, "Où ça se place"): the archives
-     * unfolded, then the items grouped, then {@link #emitItem}. Without grouping nor unfolding, no pipe:
-     * {@code listFiles(this::emitItem)} as before. One pipe per listing (it is not thread-safe); what it still holds
-     * is emitted once the listing returns, nothing more once the phase is stopped.
-     */
-    private void list(IInAction action) {
-        List<GroupingRuleConfig> rules = groupingRules();
-        ArchivesConfig archives = unfoldConfig();
-        if (rules.isEmpty() && archives == null) {
-            action.listFiles(this::emitItem);
-            return;
-        }
-        ListingSink toEmit = new ListingSink() {
-            @Override
-            public void item(WorkItem item) {
-                emitItem(item);
-            }
-
-            @Override
-            public void folderDone(String folder) {
-                // emitItem holds nothing back
-            }
-        };
-        Grouper grouper = rules.isEmpty() ? null : new Grouper(rules, toEmit);
-        ListingSink grouped = grouper == null ? toEmit : grouper;
-        ArchiveUnfolder unfolder = archives == null ? null
-                : new ArchiveUnfolder(archives, openArchives(), archiveSources(), grouped, this::emitFailed, 1,
-                archiveProgress);
-        action.listFiles(unfolder == null ? grouped : unfolder);
-        if (Thread.currentThread().isInterrupted() || cancelRequested) {
-            return; // stopped: what the pipe holds is not emitted
-        }
-        if (unfolder != null) {
-            unfolder.finish(); // first: its merged folders go through the grouping
-        }
-        if (grouper != null) {
-            grouper.finish();
-        }
-    }
-
-    /** The grouping rules of the pipeline, presets not expanded (the Grouper does it); empty: no grouping. */
-    private List<GroupingRuleConfig> groupingRules() {
-        GroupingConfig grouping = listingConfig == null ? null : listingConfig.grouping();
-        return GroupingPresets.expand(grouping).isEmpty() ? List.of() : grouping.rules();
-    }
-
-    /**
-     * The archives block with the merge of the archive folders resolved (asked for, or implied by a preset such as
-     * takeout); null: no unfolding.
-     */
-    private ArchivesConfig unfoldConfig() {
-        ArchivesConfig archives = listingConfig == null ? null : listingConfig.archives();
-        if (archives == null || !archives.isUnfold()) {
-            return null;
-        }
-        boolean merge = archives.isMergeFolder() || GroupingPresets.impliesMergeFolder(listingConfig.grouping());
-        return new ArchivesConfig(archives.unfold(), archives.nested(), merge, archives.include(), archives.exclude());
-    }
-
-    /**
-     * Streaming with grouping: an input that signals no end of folder has its groups settled only once it has listed
-     * everything, its files waiting until then: said in the warnings.
-     */
-    private void warnNoFolderSignal() {
-        if (groupingRules().isEmpty()) {
-            return;
-        }
-        List<String> warnings = new ArrayList<>();
-        for (PipelineStep<IInAction> step : inSteps) {
-            if (!step.getAction().signalsFolders()) {
-                warnings.add(ResourcesEngine.getString("grouping.no-folder-signal", stepName(step)));
-            }
-        }
-        addWarnings(warnings);
-    }
-
-    private static String stepName(PipelineStep<?> step) {
-        PipelineStepConfig config = step.getConfig();
-        return config == null || config.action() == null
-                ? step.getAction().getClass().getSimpleName()
-                : config.getDisplayName();
-    }
-
-    /** The work folder of the archives, opened by the first listing that needs it. */
-    private ArchiveWorkspace openArchives() {
-        synchronized (archivesLock) {
-            if (archivesReleased) {
-                throw stopListing(); // the phase ended: a late listing unfolds nothing more
-            }
-            if (archiveWorkspace == null) {
-                try {
-                    archiveWorkspace = ArchiveWorkspace.open(archiveBase);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-            return archiveWorkspace;
-        }
-    }
-
-    private ArchiveSources archiveSources() {
-        synchronized (archivesLock) {
-            return archiveSources;
-        }
-    }
-
-    /** At the start of a listing phase: the archives of a previous one are released, new ones are tracked. */
-    private void resetArchives() {
-        releaseArchives();
-        synchronized (archivesLock) {
-            archiveSources = new ArchiveSources();
-            archivesReleased = false;
-        }
-    }
-
-    /** At the end of a phase that leaves no copy to come: once its tasks are over, the work folder is removed. */
-    private void endArchives() {
-        synchronized (archivesLock) {
-            if (archiveWorkspace == null) {
-                archivesReleased = true; // nothing to remove; a late listing opens nothing any more
-                return;
-            }
-        }
-        tasks.shutdown(); // no listing nor item reads an archive any more
-        releaseArchives();
-    }
-
-    /**
-     * Removes the work folder of the archives (its archives closed): at the end of the copy, on a cancel or a
-     * failure, or when the plan is abandoned without being executed (replaced by a new preparation, engine closed).
-     * Idempotent, callable from any thread while no phase runs.
-     */
-    void releaseArchives() {
-        ArchiveWorkspace workspace;
-        synchronized (archivesLock) {
-            workspace = archiveWorkspace;
-            archiveWorkspace = null;
-            archivesReleased = true;
-        }
-        if (workspace != null) {
-            workspace.close();
-        }
+        return listingPipe.failed() || anyItemFailed ? PipelineStatus.ERROR : PipelineStatus.SUCCESS;
     }
 
     /**
@@ -1718,13 +1592,9 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    /**
-     * The listing calling {@link #emitItem} stops because the phase is being stopped: it is marked incomplete now,
-     * even if the plugin swallows the marker returned (to throw).
-     */
+    /** The listing calling {@link #emitItem} stops because the phase is being stopped (see {@link ListingPipe#stop}). */
     private PhaseStopped stopListing() {
-        listingStopped.set(true);
-        return new PhaseStopped();
+        return listingPipe.stop();
     }
 
     /**

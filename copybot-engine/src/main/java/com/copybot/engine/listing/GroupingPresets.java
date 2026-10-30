@@ -28,9 +28,6 @@ public final class GroupingPresets {
         PRESETS.put("web-page", List.of(
                 new GroupingRuleConfig(null, "folder", List.of("html", "htm"), null, "{base}_files", "copy", null,
                         null)));
-        PRESETS.put("takeout", List.of(
-                new GroupingRuleConfig(null, "regex", List.of("(.+\\.(?:jpe?g|heic|png|gif|mp4|mov))"), null, null,
-                        "read", "\\1(?:\\.supplemental-metadata)?\\.json", "name")));
     }
 
     private GroupingPresets() {
@@ -71,11 +68,5 @@ public final class GroupingPresets {
             }
         }
         return expanded;
-    }
-
-    /** Whether a preset of the configuration asks for the merge of the archive folders (takeout). */
-    public static boolean impliesMergeFolder(GroupingConfig config) {
-        return config != null && config.rules() != null
-                && config.rules().stream().anyMatch(rule -> rule != null && "takeout".equals(rule.preset()));
     }
 }

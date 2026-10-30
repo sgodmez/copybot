@@ -89,6 +89,7 @@ com.copybot.plugin.api.action.ItemProgress method public static com.copybot.plug
 com.copybot.plugin.api.action.ItemProgress type public abstract interface com.copybot.plugin.api.action.ItemProgress
 com.copybot.plugin.api.action.ListingSink method public abstract void folderDone(java.lang.String)
 com.copybot.plugin.api.action.ListingSink method public abstract void item(com.copybot.plugin.api.action.WorkItem)
+com.copybot.plugin.api.action.ListingSink method public default void root(java.lang.String)
 com.copybot.plugin.api.action.ListingSink type public abstract interface com.copybot.plugin.api.action.ListingSink
 com.copybot.plugin.api.action.SourceDeleter method public abstract void delete() throws java.io.IOException
 com.copybot.plugin.api.action.SourceDeleter type public abstract interface com.copybot.plugin.api.action.SourceDeleter

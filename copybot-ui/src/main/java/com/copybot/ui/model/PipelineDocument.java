@@ -753,12 +753,33 @@ public final class PipelineDocument {
     }
 
     /**
-     * Streaming with grouping rules and an input that is not the built-in file.read (which signals its folders): a
-     * plugin input may make the streaming wait for the end of its listing.
+     * The warning of streaming with grouping rules (spec execution-mode §3): the files processed folder by folder,
+     * or, with an input that is not the built-in file.read (which signals its folders), the run in the automatic
+     * mode should that input not signal them. Empty when not streaming or without rule.
      */
-    public boolean streamingMayWaitForInputs() {
-        return executionMode() == ExecutionMode.STREAMING && !groupingRules().isEmpty()
-                && steps(Section.IN).stream().anyMatch(step -> !isFileRead(step));
+    public Optional<StreamingNote> streamingGroupingWarning() {
+        if (executionMode() != ExecutionMode.STREAMING || groupingRules().isEmpty()) {
+            return Optional.empty();
+        }
+        List<String> others = steps(Section.IN).stream().filter(step -> !isFileRead(step))
+                .map(PipelineDocument::actionName).toList();
+        return Optional.of(others.isEmpty()
+                ? new StreamingNote(ResourcesEngine.getString("editor.grouping.warning.streaming-by-folder"), false)
+                : new StreamingNote(ResourcesEngine.getString("editor.grouping.warning.streaming-fallback",
+                        String.join(", ", others)), true));
+    }
+
+    /**
+     * The text of {@link #streamingGroupingWarning()}.
+     *
+     * @param fallback a warning (the run may fall back to the automatic mode), otherwise an information
+     */
+    public record StreamingNote(String text, boolean fallback) {
+    }
+
+    private static String actionName(JsonObject step) {
+        JsonElement action = step.get("action");
+        return action != null && action.isJsonPrimitive() ? action.getAsString() : "?";
     }
 
     private static boolean isFileRead(JsonObject step) {

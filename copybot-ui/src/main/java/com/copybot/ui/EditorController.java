@@ -513,7 +513,7 @@ public class EditorController {
         Label executionWarning = new Label("⚠ " + ResourcesEngine.getString("editor.execution.streaming-last-found"));
         executionWarning.setWrapText(true);
         executionWarning.setStyle("-fx-text-fill: #c87f0a;");
-        Label groupingWarning = GroupingForms.streamingWarning(); // grouping waits for the folders of the inputs
+        Label groupingWarning = new Label(); // streaming with grouping rules: folder by folder, or automatic mode
 
         ComboBox<String> destinationCheck = optionBox("editor.destination-check.", PipelineDocument.DESTINATION_CHECKS);
         ComboBox<String> destinationMatch = optionBox("editor.destination-match.", PipelineDocument.DESTINATION_MATCHES);
@@ -545,8 +545,7 @@ public class EditorController {
                     && PipelineDocument.DESTINATION_CHECKS.getFirst().equals(document.destinationCheck());
             executionWarning.setVisible(warn);
             executionWarning.setManaged(warn);
-            groupingWarning.setVisible(document.streamingMayWaitForInputs());
-            groupingWarning.setManaged(document.streamingMayWaitForInputs());
+            GroupingForms.showStreamingWarning(groupingWarning, document);
         };
         sync.run();
         execution.valueProperty().addListener((obs, old, mode) -> {

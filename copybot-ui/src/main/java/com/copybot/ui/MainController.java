@@ -39,6 +39,11 @@ public class MainController {
 
     /** The pipeline of the plan view, null on the home screen: kept when the view is reloaded (language). */
     private static Path shownPipeline;
+    /**
+     * The plan view shown, null on the home screen: told when it is replaced, also by the view of a rebuilt window
+     * (language), so that its plan is discarded in the engine.
+     */
+    private static PlanController shownPlan;
 
     /** The plugins window, at most one, non modal: kept to bring it to front and refresh it. */
     private static Stage pluginsWindow;
@@ -91,6 +96,7 @@ public class MainController {
 
     public void showHome() {
         shownPipeline = null;
+        leavePlan();
         setBusy(false);
         Views.Loaded<HomeController> home = Views.load("home-view.fxml");
         home.controller().init(this);
@@ -133,10 +139,20 @@ public class MainController {
 
     private void openPlan(Path pipeline) {
         shownPipeline = pipeline.toAbsolutePath().normalize();
+        leavePlan();
         setBusy(false);
         Views.Loaded<PlanController> plan = Views.load("plan-view.fxml");
         plan.controller().init(this, shownPipeline);
+        shownPlan = plan.controller();
         root.setCenter(plan.root());
+    }
+
+    /** The plan view shown, if any, is replaced: its plan is discarded. */
+    private static void leavePlan() {
+        if (shownPlan != null) {
+            shownPlan.leave();
+            shownPlan = null;
+        }
     }
 
     /** While a preparation or a copy runs the language cannot change (the view would be rebuilt). */

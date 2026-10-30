@@ -123,9 +123,6 @@ public class GroupingConfigTest {
                 GroupingPresets.expand(new GroupingConfig(List.of(preset("sony-xml")))));
         assertEquals(List.of(rule("folder", List.of("html", "htm"), null, "{base}_files", "copy", null, null)),
                 GroupingPresets.expand(new GroupingConfig(List.of(preset("web-page")))));
-        assertEquals(List.of(rule("regex", List.of("(.+\\.(?:jpe?g|heic|png|gif|mp4|mov))"), null, null, "read",
-                        "\\1(?:\\.supplemental-metadata)?\\.json", "name")),
-                GroupingPresets.expand(new GroupingConfig(List.of(preset("takeout")))));
     }
 
     @Test
@@ -142,15 +139,16 @@ public class GroupingConfigTest {
     }
 
     @Test
-    public void takeoutImpliesMergingTheArchiveFolders() {
-        assertTrue(GroupingPresets.impliesMergeFolder(new GroupingConfig(List.of(preset("takeout")))));
-        assertFalse(GroupingPresets.impliesMergeFolder(new GroupingConfig(List.of(preset("iphone")))));
-        assertFalse(GroupingPresets.impliesMergeFolder(null));
+    public void takeoutIsNoLongerAPresetOfTheCore() {
+        assertFalse(GroupingPresets.isKnown("takeout"));
+        assertEquals(List.of(), GroupingPresets.expand(new GroupingConfig(List.of(preset("takeout")))));
+        assertEquals(Optional.of(ResourcesEngine.getString("grouping.preset.unknown", 1, "takeout")),
+                PipelineChecks.groupingRefusal(withRules(preset("takeout")), PLAIN_OUT));
     }
 
     @Test
     public void presetNamesAreListedInOrder() {
-        assertEquals(List.of("raw-jpeg-xmp", "iphone", "action-cam", "sony-xml", "web-page", "takeout"),
+        assertEquals(List.of("raw-jpeg-xmp", "iphone", "action-cam", "sony-xml", "web-page"),
                 GroupingPresets.names());
     }
 
@@ -189,7 +187,8 @@ public class GroupingConfigTest {
     @Test
     public void copyCompanionsNeedAnOutputThatWritesThem() {
         PipelineConfig copy = withRules(preset("iphone"));
-        PipelineConfig readOnly = withRules(preset("takeout"));
+        PipelineConfig readOnly = withRules(
+                rule("regex", List.of("(.+)\\.mp4"), null, null, "read", "\\1.xml", null));
 
         Optional<String> refusal = PipelineChecks.groupingRefusal(copy, PLAIN_OUT);
         assertTrue(refusal.isPresent());

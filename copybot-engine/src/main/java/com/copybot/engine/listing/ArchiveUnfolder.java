@@ -10,6 +10,7 @@ import com.copybot.resources.ResourcesEngine;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.Charset;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -25,6 +26,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.Supplier;
 import java.util.regex.PatternSyntaxException;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
@@ -64,7 +66,8 @@ public final class ArchiveUnfolder implements ListingSink {
     }
 
     private final ArchivesConfig config;
-    private final ArchiveWorkspace ws;
+    /** The work folder, asked for at each archive met. */
+    private final Supplier<ArchiveWorkspace> workspace;
     private final ArchiveSources sources;
     private final ListingSink downstream;
     private final ListingFailures failures;
@@ -82,14 +85,26 @@ public final class ArchiveUnfolder implements ListingSink {
     }
 
     /**
-     * @param depth    the depth of the archives this unfolder unfolds: 1 for the archives of the listing
+     * @param depth     the depth of the archives this unfolder unfolds: 1 for the archives of the listing
      * @param progress reports the archives unfolded and copied, null: no report
      * @throws CopybotException archive.config.invalid-glob
      */
     public ArchiveUnfolder(ArchivesConfig config, ArchiveWorkspace ws, ArchiveSources sources, ListingSink downstream,
                            ListingFailures failures, int depth, ArchiveProgress progress) {
+        this(config, () -> ws, sources, downstream, failures, depth, progress);
+    }
+
+    /**
+     * @param workspace the work folder, asked for at each archive met: none is made for a listing without archive;
+     *                  an {@link UncheckedIOException} (folder that cannot be made) fails that archive only
+     * @param depth     the depth of the archives this unfolder unfolds: 1 for the archives of the listing
+     * @param progress  reports the archives unfolded and copied, null: no report
+     * @throws CopybotException archive.config.invalid-glob
+     */
+    public ArchiveUnfolder(ArchivesConfig config, Supplier<ArchiveWorkspace> workspace, ArchiveSources sources,
+                           ListingSink downstream, ListingFailures failures, int depth, ArchiveProgress progress) {
         this.config = config;
-        this.ws = ws;
+        this.workspace = workspace;
         this.sources = sources;
         this.downstream = downstream;
         this.failures = failures;
@@ -107,6 +122,12 @@ public final class ArchiveUnfolder implements ListingSink {
         } else {
             downstream.item(item);
         }
+    }
+
+    /** The folders of the archives are below the archive's folder: the root of the source still applies. */
+    @Override
+    public void root(String folder) {
+        downstream.root(folder);
     }
 
     @Override
@@ -132,6 +153,15 @@ public final class ArchiveUnfolder implements ListingSink {
         Folder root;
         int entries;
         List<Object[]> warnings = new ArrayList<>(); // {key, args...}: given once the archive is unfolded
+        ArchiveWorkspace ws;
+        try {
+            ws = workspace.get(); // a stopped phase is not a failure of this archive: its exception goes on
+        } catch (UncheckedIOException e) {
+            // reported here, not thrown into the listing of the plugin (which could rewrap or swallow it)
+            failures.failed(archive, CopybotException.ofResource(e.getCause(), "archive.workspace.failed", location,
+                    e.getCause().getLocalizedMessage()));
+            return;
+        }
         try {
             if (depth == 1 && archive.getLocalLocation() == null && progress != null) {
                 Long size = archive.getMetadatas().getSize();
@@ -258,7 +288,7 @@ public final class ArchiveUnfolder implements ListingSink {
         if (isZip(entry.getNameDisplay()) && unfoldsNested()) {
             if (nested == null) {
                 ArchivesConfig child = new ArchivesConfig(true, true, false, config.include(), config.exclude());
-                nested = new ArchiveUnfolder(child, ws, sources, downstream, failures, depth + 1, progress);
+                nested = new ArchiveUnfolder(child, workspace, sources, downstream, failures, depth + 1, progress);
             }
             nested.item(entry);
         } else {

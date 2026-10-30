@@ -79,8 +79,10 @@ que le cœur lit sur chaque élément (nouveau `WorkItem.getListedFolder()`, rem
 sous-dossiers). En mode non récursif (profondeur 1), seul le dossier racine est signalé, à la fin du parcours ; les
 sous-arbres sautés (cachés, exclus : `SKIP_SUBTREE`) n'ont rien émis et n'ont pas besoin de signal. Une règle `folder`
 (`page_files/`) ne peut rien rattacher en non récursif : l'éditeur le signale. Une source qui ne le signale pas : le regroupement attend la fin de son
-listage (correct en préparation, où le listage complet précède déjà les étapes ; en continu, le flux se bloque jusqu'à
-la fin — l'éditeur le dit à côté de l'option).
+listage (correct en préparation, où le listage complet précède déjà les étapes). En continu avec des règles, les
+fichiers sont traités dossier par dossier (avertissement d'information) ; une entrée qui ne signale pas ses dossiers
+fait replier l'exécution en mode automatique (préparer puis copier sans confirmation), avec un avertissement qui le
+dit — l'éditeur affiche le texte correspondant à côté de l'option.
 
 ### Compagnons sur le WorkItem
 
@@ -173,9 +175,11 @@ va au premier selon la priorité `main` ; RAW+JPEG eux-mêmes ne sont regroupés
 
 Livrés par le cœur, choisis dans l'éditeur : `raw-jpeg-xmp` (RAW principal, JPEG et XMP copiés), `iphone` (HEIC/JPG
 principal, AAE copié, MOV de Live Photo copié), `action-cam` (MP4 principal, LRV et THM copiés), `sony-xml` (MP4
-principal, `<base>M01.XML` en lecture), `web-page` (`folder`), `takeout` (`regex` JSON en lecture, active la fusion des
-archives du dossier). Les noms Takeout tronqués à 46 caractères ne sont pas tous couverts par l'expression : limite
-connue de la v1 (un type de règle fourni par plugin pourra le faire).
+principal, `<base>M01.XML` en lecture), `web-page` (`folder`).
+
+> Note du 2026-10-30 : le préréglage `takeout` (`regex` JSON en lecture, qui activait la fusion des archives du
+> dossier ; les noms tronqués à 46 caractères n'étaient pas tous couverts) a été retiré du cœur : Takeout deviendra un
+> plugin dédié. L'option `mergeFolder` reste, générique (archives découpées en parties).
 
 ### Moment du regroupement
 
@@ -294,8 +298,8 @@ conflit (comportement normal des conflits). Emplacement affiché : celui de l'ar
 
 - **Éditeur** : entrée « Regroupements » dans l'arbre, après les entrées (l'ordre de l'exécution) : liste des règles,
   ajout par préréglage ou par type, rôle par extension. Entrée « Archives » à côté : déplier, imbriquées (avec la
-  profondeur 5 rappelée), fusionner le dossier, inclure/exclure. Avertissement quand une entrée de la pipeline ne
-  signale pas ses dossiers (« le mode continu attendra la fin du listage »).
+  profondeur 5 rappelée), fusionner le dossier, inclure/exclure. En continu avec des règles : avertissement
+  d'information (dossier par dossier), ou de repli en mode automatique quand une entrée n'est pas `file.read`.
 - **Plan** : une ligne par groupe ; nouvelle colonne « Compagnons » (nombre, infobulle avec leurs noms et rôles) et
   détail de l'élément listant compagnons et cibles. Pas de lignes dépliables (la table reste plate). Les entrées
   d'archive affichent leur emplacement `archive.zip!/…`. Compteur « archives dépliées / à télécharger ».

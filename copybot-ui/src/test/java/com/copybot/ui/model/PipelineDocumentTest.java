@@ -7,6 +7,7 @@ import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
+import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument.Gap;
 import com.copybot.ui.model.PipelineDocument.Problem;
 import com.copybot.ui.model.PipelineDocument.Section;
@@ -177,15 +178,15 @@ public class PipelineDocumentTest {
 
         document.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
         document.addGroupingRule(rule("{\"type\":\"doubleExtension\",\"companions\":{\"xmp\":\"copy\"}}"));
-        document.addGroupingRule(rule("{\"preset\":\"takeout\"}"));
+        document.addGroupingRule(rule("{\"preset\":\"action-cam\"}"));
         assertTrue(document.isModified());
         assertEquals(3, document.groupingRules().size());
 
         document.moveGroupingRule(2, 0);
-        assertEquals(List.of("takeout", "iphone"), document.groupingRules().stream()
+        assertEquals(List.of("action-cam", "iphone"), document.groupingRules().stream()
                 .limit(2).map(r -> r.get("preset").getAsString()).toList());
         document.moveGroupingRule(0, 9);
-        assertEquals("takeout", document.groupingRules().getFirst().get("preset").getAsString(), "out of range");
+        assertEquals("action-cam", document.groupingRules().getFirst().get("preset").getAsString(), "out of range");
 
         document.removeGroupingRule(0);
         document.removeGroupingRule(1);
@@ -284,7 +285,7 @@ public class PipelineDocumentTest {
         assertEquals(2, document.groupingRules().size());
         assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
         assertFalse(document.folderRuleWithNonRecursiveFileRead());
-        assertFalse(document.streamingMayWaitForInputs());
+        assertEquals(Optional.empty(), document.streamingGroupingWarning());
     }
 
     @Test
@@ -296,13 +297,20 @@ public class PipelineDocumentTest {
                 .folderRuleWithNonRecursiveFileRead());
 
         PipelineDocument plugin = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
+                + "{\"action\":\"file.read\",\"actionConfig\":{\"path\":\"D:/p\"}},"
                 + "{\"plugin\":\"com.x\",\"action\":\"ftp.read\",\"actionConfig\":{}}]}");
-        assertFalse(plugin.streamingMayWaitForInputs(), "no rule: nothing to wait for");
+        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(), "no rule: nothing to say");
         plugin.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
-        assertTrue(plugin.streamingMayWaitForInputs());
+        assertEquals(Optional.of(new PipelineDocument.StreamingNote(
+                        ResourcesEngine.getString("editor.grouping.warning.streaming-fallback", "ftp.read"), true)),
+                plugin.streamingGroupingWarning(), "an input that may not signal its folders");
+        plugin.setExecutionMode(ExecutionMode.AUTO);
+        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(), "not streaming");
         PipelineDocument builtIn = withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"iphone\"}");
         builtIn.setExecutionMode(ExecutionMode.STREAMING);
-        assertFalse(builtIn.streamingMayWaitForInputs(), "file.read signals its folders");
+        assertEquals(Optional.of(new PipelineDocument.StreamingNote(
+                        ResourcesEngine.getString("editor.grouping.warning.streaming-by-folder"), false)),
+                builtIn.streamingGroupingWarning(), "file.read signals its folders");
     }
 
     @Test

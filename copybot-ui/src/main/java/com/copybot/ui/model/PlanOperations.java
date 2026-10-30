@@ -63,6 +63,9 @@ public final class PlanOperations<P, E> {
 
         void cancelAnalysis(P plan);
 
+        /** The view forgets this plan: the engine releases what it holds and will not execute it (blocking). */
+        void discard(P plan);
+
         PipelineState runState(E run);
 
         void pause(E run);
@@ -103,6 +106,11 @@ public final class PlanOperations<P, E> {
     private P preparingPlan;
     /** The execution of the plan, completed once the engine accepted it (null before the copy). */
     private CompletableFuture<E> execution;
+    /**
+     * The view was left ({@link #leave()}): its plans are discarded and never copied, but the operation under way
+     * still drives the model to its end (busy flag of the window, run recorded).
+     */
+    private boolean left;
     /**
      * The engine is still held by an operation started here: from Prepare until {@code prepare()} has
      * returned, from Copy until the execution is really over ({@code await()}). The model may
@@ -163,18 +171,58 @@ public final class PlanOperations<P, E> {
     }
 
     /**
-     * The pipeline is read again: the prepared plan, if any, is dropped (a late notification of it is ignored) and
+     * The pipeline is read again: the prepared plan, if any, is dropped and discarded in the engine (a late
+     * notification of it is ignored) and
      * the model starts afresh, keeping the resume point chosen by the user. Only while the engine is idle.
      */
     public void dropPlan(Filter filter) {
-        operation = new Object();
-        plan = null;
-        preparingPlan = null;
-        execution = null;
+        forgetPlan();
         ResumePoint chosen = model.chosenPoint();
         model = new PlanViewModel();
         model.setChosenPoint(chosen);
         model.setFilter(filter);
+    }
+
+    /**
+     * The view is left (Back, another pipeline opened, the window rebuilt): its plan, prepared or being prepared, is
+     * discarded in the engine (a plan still being prepared once it is returned) and never copied. The operation under
+     * way keeps its token: its notifications still bring the model to its end, so that the window is no longer busy
+     * and a finished run is recorded. A copy under way, or about to be accepted, goes on: its plan is not discarded.
+     */
+    public void leave() {
+        left = true;
+        if (execution != null) {
+            return;
+        }
+        discard(plan);
+        if (preparingPlan != plan) {
+            discard(preparingPlan);
+        }
+    }
+
+    /** A new operation token; the plan, if any, is discarded in the engine. */
+    private void forgetPlan() {
+        operation = new Object();
+        discard(plan);
+        if (preparingPlan != plan) {
+            discard(preparingPlan);
+        }
+        plan = null;
+        preparingPlan = null;
+        execution = null;
+    }
+
+    /** In the background: it removes the work folder of the archives of the plan. */
+    private void discard(P forgotten) {
+        if (forgotten != null) {
+            background.execute(() -> {
+                try {
+                    engine.discard(forgotten);
+                } catch (RuntimeException e) {
+                    view.showError(e); // not expected: the engine reports a removal that failed in its log
+                }
+            });
+        }
     }
 
     /** Renders, then applies an editor save received while the engine was held, once it is free. */
@@ -234,6 +282,10 @@ public final class PlanOperations<P, E> {
         Object op = new Object();
         operation = op;
         Object hold = hold();
+        discard(plan); // the engine may refuse this operation: the old plan's work folder is not left behind
+        if (preparingPlan != plan) {
+            discard(preparingPlan);
+        }
         plan = null;
         preparingPlan = null;
         execution = null;
@@ -276,6 +328,10 @@ public final class PlanOperations<P, E> {
         Object op = new Object();
         operation = op;
         Object hold = hold();
+        discard(plan); // the engine may refuse this operation: the old plan's work folder is not left behind
+        if (preparingPlan != plan) {
+            discard(preparingPlan);
+        }
         plan = null;
         preparingPlan = null;
         model.startStreaming();
@@ -310,8 +366,12 @@ public final class PlanOperations<P, E> {
     private void onPrepared(Object op, Object hold, P prepared) {
         release(hold); // prepare() has returned: the engine is free
         if (op != operation) {
+            discard(prepared); // dropped or left meanwhile: nobody will execute it
             refresh();
             return;
+        }
+        if (left) {
+            discard(prepared); // never copied: the model still reaches PREPARED, the window is no longer busy
         }
         plan = prepared;
         preparingPlan = null;
@@ -334,9 +394,12 @@ public final class PlanOperations<P, E> {
         }
     }
 
-    /** Only from PREPARED; when the engine refuses the plan the view goes back to the prepared plan. */
+    /**
+     * Only from PREPARED, never once the view is left (its plan is discarded); when the engine refuses the plan the
+     * view goes back to the prepared plan.
+     */
     public void copy() {
-        if (plan == null || engineHeld || model.phase() != Phase.PREPARED || !model.canCopy()) {
+        if (left || plan == null || engineHeld || model.phase() != Phase.PREPARED || !model.canCopy()) {
             return;
         }
         Object op = operation;
@@ -377,7 +440,7 @@ public final class PlanOperations<P, E> {
             model.update(engine.runState(run), ordered());
             if (model.isActive()) { // no terminal state will come: the plan is dropped
                 model.reset();
-                plan = null;
+                plan = null; // executed: not discarded, its execution releases what it holds
                 execution = null;
             }
         }
@@ -402,7 +465,13 @@ public final class PlanOperations<P, E> {
             execution = null;
         }
         refresh();
-        view.showError(e);
+        if (left) {
+            discard(toRun); // left while the copy was being accepted: its plan is no longer wanted
+            return; // no dialog over the view shown since
+        }
+        if (op == operation) { // else dropped meanwhile: the refusal of a plan forgotten
+            view.showError(e);
+        }
     }
 
     public void pause() {

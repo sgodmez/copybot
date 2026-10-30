@@ -28,8 +28,9 @@ import java.util.regex.Pattern;
  * A {@code folder} rule sub-folder ({@code <base>_files}) is held until its parent folder is done, where its
  * {@code <base>.html} is decided. A folder is only known to be inside the listing once it has received its own
  * {@code folderDone}: until then a folder with such an ancestor is kept tentatively (the ancestor may lie above the
- * root of the source), and {@link #finish()} decides what stays tentative as ordinary folders. Called by one
- * listing thread: no lock.
+ * root of the source), and {@link #finish()} decides what stays tentative as ordinary folders. When the source tells
+ * its {@link #root root}, only the {@code *_files} folders strictly below it are held, and nothing is kept
+ * tentatively for the folders whose such ancestors are at or above it. Called by one listing thread: no lock.
  */
 public final class Grouper implements ListingSink {
 
@@ -79,6 +80,8 @@ public final class Grouper implements ListingSink {
     private final List<GroupingRule> rules = new ArrayList<>();
     private final ListingSink downstream;
     private final Map<String, List<WorkItem>> buffers = new LinkedHashMap<>();
+    /** Where the source starts, null: unknown (a {@code *_files} folder may then lie inside the listing or above it). */
+    private String root;
     /** The {@code *_files} folders that received their folderDone: proven to be inside the listing. */
     private final Set<String> confirmed = new HashSet<>();
 
@@ -100,8 +103,13 @@ public final class Grouper implements ListingSink {
     }
 
     @Override
+    public void root(String folder) {
+        this.root = folder;
+    }
+
+    @Override
     public void folderDone(String folder) {
-        if (isHeldName(name(folder))) {
+        if (isHeldName(name(folder)) && belowRoot(folder)) {
             confirmed.add(folder); // waits for the end of its parent
         } else if (!hasHeldAncestor(folder)) {
             decide(folder);
@@ -344,11 +352,36 @@ public final class Grouper implements ListingSink {
             return false;
         }
         for (String current = parent(folder); current != null; current = parent(current)) {
-            if (isHeldName(name(current))) {
+            if (isHeldName(name(current)) && belowRoot(current)) {
                 return true;
             }
         }
         return false;
+    }
+
+    /**
+     * Whether the folder lies strictly below the root of the source (true when the root is unknown): only then may its
+     * page be listed beside it. The virtual folder of mergeFolder ("&lt;root&gt;!") stands for the root itself.
+     */
+    private boolean belowRoot(String folder) {
+        if (root == null) {
+            return true;
+        }
+        int end = root.length();
+        while (end > 1 && isSeparator(root.charAt(end - 1))) {
+            end--;
+        }
+        // "C:\" was stripped to "C:" above: it goes through the general case below
+        String base = root.substring(0, end);
+        if (end > 0 && isSeparator(base.charAt(end - 1))) { // root "/" kept: the separator is part of the base
+            return folder.startsWith(base) && folder.length() > end;
+        }
+        return folder.startsWith(base) && folder.length() > end + 1
+                && (isSeparator(folder.charAt(end)) || folder.startsWith("!/", end));
+    }
+
+    private static boolean isSeparator(char c) {
+        return c == '/' || c == '\\';
     }
 
     /** The outermost confirmed {@code folder} root among the folder and its ancestors, null: none. */

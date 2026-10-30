@@ -37,6 +37,12 @@ class GrouperTest {
         return new GroupingRuleConfig(name, null, null, null, null, null, null, null);
     }
 
+    /** A regex rule reading the JSON of a Google Takeout photo (no longer a preset of the core). */
+    private static GroupingRuleConfig takeoutRule() {
+        return new GroupingRuleConfig(null, "regex", List.of("(.+\\.(?:jpe?g|heic|png|gif|mp4|mov))"), null, null,
+                "read", "\\1(?:\\.supplemental-metadata)?\\.json", "name");
+    }
+
     private static GroupingRuleConfig sameBase(List<String> main, Map<String, String> companions) {
         return new GroupingRuleConfig(null, "sameBase", main, companions, null, null, null, null);
     }
@@ -129,7 +135,7 @@ class GrouperTest {
 
     @Test
     void regexTakeout() {
-        Grouper grouper = new Grouper(List.of(preset("takeout")), out);
+        Grouper grouper = new Grouper(List.of(takeoutRule()), out);
         grouper.item(file("/t", "IMG_1.jpg.supplemental-metadata.json"));
         grouper.item(file("/t", "IMG_1.jpg"));
         grouper.item(file("/t", "IMG_2.JPG"));
@@ -141,7 +147,7 @@ class GrouperTest {
 
     @Test
     void regexTakeoutWithPlainJson() {
-        Grouper grouper = new Grouper(List.of(preset("takeout")), out);
+        Grouper grouper = new Grouper(List.of(takeoutRule()), out);
         grouper.item(file("/t", "IMG_2.JPG.json"));
         grouper.item(file("/t", "IMG_2.JPG"));
         grouper.folderDone("/t");
@@ -229,6 +235,54 @@ class GrouperTest {
     }
 
     @Test
+    void sourceBelowAFilesFolderWithKnownRootIsDecidedAtEachFolderDone() {
+        Grouper grouper = new Grouper(List.of(preset("raw-jpeg-xmp"), preset("web-page")), out);
+        grouper.root("/x/Old_files/Photos");
+        grouper.item(file("/x/Old_files/Photos", "IMG_1.CR3"));
+        grouper.item(file("/x/Old_files/Photos", "IMG_1.xmp"));
+        grouper.item(file("/x/Old_files/Photos/sub", "IMG_2.CR3"));
+        grouper.item(file("/x/Old_files/Photos/sub", "IMG_2.xmp"));
+        grouper.folderDone("/x/Old_files/Photos/sub");
+        assertEquals(List.of("item IMG_2.CR3", "done /x/Old_files/Photos/sub"), events);
+        grouper.folderDone("/x/Old_files/Photos");
+        assertEquals(List.of("item IMG_2.CR3", "done /x/Old_files/Photos/sub", "item IMG_1.CR3",
+                "done /x/Old_files/Photos"), events);
+    }
+
+    @Test
+    void rootThatIsAFilesFolderItselfIsNeverHeld() {
+        Grouper grouper = new Grouper(List.of(preset("web-page")), out);
+        grouper.root("/d/page_files");
+        grouper.item(file("/d/page_files", "a.png"));
+        grouper.folderDone("/d/page_files");
+        assertEquals(List.of("item a.png", "done /d/page_files"), events);
+    }
+
+    @Test
+    void folderRuleStillWorksBelowTheRoot() {
+        Grouper grouper = new Grouper(List.of(preset("web-page")), out);
+        grouper.root("/d");
+        grouper.item(file("/d", "page.html"));
+        grouper.item(file("/d/page_files", "a.png"));
+        grouper.folderDone("/d/page_files");
+        assertEquals(List.of(), events);
+        grouper.folderDone("/d");
+        assertEquals(List.of("page.html [a.png:COPY:BASE:_files/a.png]"), described());
+    }
+
+    @Test
+    void folderRuleBelowTheRootWorksInsideAnArchiveOfAMergedFolder() {
+        Grouper grouper = new Grouper(List.of(preset("web-page")), out);
+        grouper.root("C:\\d");
+        grouper.item(file("C:\\d!/DCIM", "p.htm"));
+        grouper.item(file("C:\\d!/DCIM/p_files", "a.css"));
+        grouper.folderDone("C:\\d!/DCIM/p_files");
+        assertEquals(List.of(), events);
+        grouper.folderDone("C:\\d!/DCIM");
+        assertEquals(List.of("p.htm [a.css:COPY:BASE:_files/a.css]"), described());
+    }
+
+    @Test
     void sourceBelowAFilesFolderIsGroupedNormally() {
         Grouper grouper = new Grouper(List.of(preset("raw-jpeg-xmp"), preset("web-page")), out);
         grouper.item(file("/x/Old_files/Photos", "IMG_1.CR3"));
@@ -257,7 +311,7 @@ class GrouperTest {
 
     @Test
     void bigFolderIsNotQuadratic() {
-        Grouper grouper = new Grouper(List.of(preset("raw-jpeg-xmp"), preset("takeout")), out);
+        Grouper grouper = new Grouper(List.of(preset("raw-jpeg-xmp"), takeoutRule()), out);
         org.junit.jupiter.api.Assertions.assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () -> {
             for (int i = 0; i < 7000; i++) {
                 grouper.item(file("/big", "IMG_" + i + ".CR3"));

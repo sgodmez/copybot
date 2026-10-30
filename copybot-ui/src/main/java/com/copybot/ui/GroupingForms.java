@@ -4,6 +4,7 @@ import com.copybot.engine.listing.GroupingPresets;
 import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument;
+import com.copybot.ui.model.PipelineDocument.StreamingNote;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -42,6 +43,7 @@ final class GroupingForms {
     private static final List<String> ROLES = List.of("copy", "read", "ignore");
     private static final List<String> LINKS = List.of("name", "base");
     private static final String WARNING_STYLE = "-fx-text-fill: #c87f0a;";
+    private static final String INFO_STYLE = "-fx-text-fill: #555555;";
 
     private GroupingForms() {
     }
@@ -125,15 +127,30 @@ final class GroupingForms {
         if (document.folderRuleWithNonRecursiveFileRead()) {
             nodes.add(warning(ResourcesEngine.getString("editor.grouping.warning.folder")));
         }
-        if (document.streamingMayWaitForInputs()) {
-            nodes.add(streamingWarning());
-        }
+        document.streamingGroupingWarning().ifPresent(note -> {
+            Label label = wrapped("");
+            showStreamingNote(label, note);
+            nodes.add(label);
+        });
         return nodes;
     }
 
-    /** The streaming warning, also shown by the pipeline form where the execution is chosen. */
-    static Label streamingWarning() {
-        return warning(ResourcesEngine.getString("editor.grouping.warning.streaming"));
+    /**
+     * The streaming note ({@link PipelineDocument#streamingGroupingWarning()}), also shown by the pipeline form
+     * where the execution is chosen: hidden when there is none.
+     */
+    static void showStreamingWarning(Label label, PipelineDocument document) {
+        Optional<StreamingNote> note = document.streamingGroupingWarning();
+        note.ifPresentOrElse(n -> showStreamingNote(label, n), () -> label.setText(""));
+        label.setWrapText(true);
+        label.setVisible(note.isPresent());
+        label.setManaged(note.isPresent());
+    }
+
+    /** The fallback as a warning, folder by folder as an information. */
+    private static void showStreamingNote(Label label, StreamingNote note) {
+        label.setText((note.fallback() ? "⚠ " : "ℹ ") + note.text());
+        label.setStyle(note.fallback() ? WARNING_STYLE : INFO_STYLE);
     }
 
     private static Label warning(String text) {

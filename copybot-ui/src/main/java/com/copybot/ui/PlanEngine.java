@@ -76,6 +76,11 @@ record PlanEngine(Path pipelinePath) implements PlanOperations.Engine<Plan, Exec
     }
 
     @Override
+    public void discard(Plan plan) {
+        plan.discard();
+    }
+
+    @Override
     public PipelineState runState(Execution run) {
         return run.getState();
     }

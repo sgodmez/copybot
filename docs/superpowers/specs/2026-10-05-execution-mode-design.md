@@ -92,7 +92,10 @@ Valeurs inconnues refusées à la lecture (`resume.destination-check.unknown`, `
 `MainExecutor.stream()` : une seule phase, toutes les étapes, chaque élément soumis dès qu'il est listé (pas
 d'attente de la fin du listing). `run()` sans reprise garde la phase unique d'aujourd'hui, mais **attend la fin du
 listing** avant de traiter (l'ancien défaut) : seul `stream()` traite pendant le listing. Le streaming ne se replie
-jamais sur une préparation.
+sur une préparation que dans un cas : des règles de regroupement et une entrée qui ne signale pas ses dossiers
+(`IInAction.signalsFolders()`) ; `stream()` exécute alors `run()` (mode automatique), avec l'avertissement
+`grouping.streaming-fallback`, et `CopybotEngine.executionMode(Path)` donne `AUTO` à la vue. Avec des règles et des
+entrées qui signalent leurs dossiers, le continu traite dossier par dossier (`grouping.streaming-by-folder`).
 
 ### Reprise
 

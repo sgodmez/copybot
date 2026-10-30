@@ -82,6 +82,7 @@ public class FileReadAction extends AbstractActionWithConfig<FileReadConfig> imp
     public void listFiles(ListingSink sink) {
         FileReadConfig config = getConfig();
         Path root = Path.of(config.path());
+        sink.root(root.toString());
         try {
             Files.walkFileTree(root, EnumSet.noneOf(FileVisitOption.class),
                     config.isRecursive() ? Integer.MAX_VALUE : 1, visitor(root, config.isIncludeHidden(), sink));

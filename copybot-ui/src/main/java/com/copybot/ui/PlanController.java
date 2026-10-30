@@ -2,6 +2,7 @@ package com.copybot.ui;
 
 import com.copybot.engine.Execution;
 import com.copybot.engine.Plan;
+import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ResumePoint;
@@ -266,6 +267,11 @@ public class PlanController implements PlanOperations.View {
         reload();
     }
 
+    /** This view is replaced (home screen, another pipeline, a rebuild): its plan is discarded in the engine. */
+    void leave() {
+        ops.leave();
+    }
+
     private PlanViewModel model() {
         return ops.model();
     }
@@ -286,17 +292,18 @@ public class PlanController implements PlanOperations.View {
         showNeeds(List.of());
         Background.run(() -> {
                     PipelineDocument document = PipelineDocument.load(pipelinePath);
+                    ExecutionMode mode = executionMode(document);
                     // the catalog (plugin instances, bundles) is built here too, off the JavaFX thread
                     try {
                         StepCatalog catalog = new StepCatalog(PluginEngine.catalog());
-                        return new Loaded(document, PipelineSummary.of(document, catalog), null,
+                        return new Loaded(document, mode, PipelineSummary.of(document, catalog), null,
                                 catalog.missingPlugins(document));
                     } catch (Throwable t) {
-                        return new Loaded(document, null, t, List.of());
+                        return new Loaded(document, mode, null, t, List.of());
                     }
                 },
                 loaded -> {
-                    onLoaded(token, loaded.document(), loaded.summary(), loaded.summaryFailure());
+                    onLoaded(token, loaded.document(), loaded.mode(), loaded.summary(), loaded.summaryFailure());
                     if (token == loadToken) {
                         showNeeds(loaded.missing());
                     }
@@ -311,12 +318,29 @@ public class PlanController implements PlanOperations.View {
     }
 
     /**
+     * The mode the run really takes (background thread): a streaming pipeline that falls back to the automatic mode
+     * with its grouping rules is prepared then copied like an auto one (spec execution-mode §3). Its declared mode
+     * when the engine cannot tell (missing plugin, invalid step): the run reports it.
+     */
+    private ExecutionMode executionMode(PipelineDocument document) {
+        if (document.executionMode() != ExecutionMode.STREAMING) {
+            return document.executionMode();
+        }
+        try {
+            return CopybotMainUi.ENGINE.executionMode(pipelinePath);
+        } catch (RuntimeException | LinkageError e) { // e.g. a plugin that cannot be loaded: the run reports it
+            return document.executionMode();
+        }
+    }
+
+    /**
      * The pipeline read in the background, and its summary (null with the failure that prevented it).
      *
+     * @param mode    the mode its run really takes ({@link #executionMode(PipelineDocument)})
      * @param missing the plugins its steps name that are not loaded at all
      */
-    private record Loaded(PipelineDocument document, PipelineSummary summary, Throwable summaryFailure,
-                          List<String> missing) {
+    private record Loaded(PipelineDocument document, ExecutionMode mode, PipelineSummary summary,
+                          Throwable summaryFailure, List<String> missing) {
     }
 
     /**
@@ -357,7 +381,8 @@ public class PlanController implements PlanOperations.View {
         }
     }
 
-    private void onLoaded(Object token, PipelineDocument document, PipelineSummary loaded, Throwable failure) {
+    private void onLoaded(Object token, PipelineDocument document, ExecutionMode mode, PipelineSummary loaded,
+                          Throwable failure) {
         if (token != loadToken) {
             return;
         }
@@ -367,7 +392,7 @@ public class PlanController implements PlanOperations.View {
                 ? Optional.of(PipelineDocument.Gap.NO_INPUT.message()) : Optional.empty());
         model.setNothingDoneRefusal(document.gaps().contains(PipelineDocument.Gap.DOES_NOTHING)
                 ? Optional.of(PipelineDocument.Gap.DOES_NOTHING.message()) : Optional.empty());
-        model.setExecutionMode(document.executionMode()); // the box stays a one-shot toggle, unchecked
+        model.setExecutionMode(mode); // the box stays a one-shot toggle, unchecked
         outOnMissingKey = document.outOnMissingKey();
         autoExecuteBox.setSelected(model.isAutoExecute());
         summary = loaded;

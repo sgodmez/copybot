@@ -247,7 +247,8 @@ absent; `sameBase` and `doubleExtension` companions take their roles from the
 | `action-cam` | MP4 | LRV and THM copied |
 | `sony-xml` | MP4 | `<base>M01.XML` read |
 | `web-page` | HTML, HTM | `<base>_files/` copied |
-| `takeout` | JPG, JPEG, HEIC, PNG, GIF, MP4, MOV | `<name>.json` or `<name>.supplemental-metadata.json` read; also turns on `mergeFolder` |
+
+A Google Takeout plugin is planned (photos and their JSON metadata); it is no longer a preset of the core.
 
 A group is **solidary** for conflicts. Each `copy` member is compared with its
 target and the group takes the most severe result. The pipeline's rules apply
@@ -267,10 +268,13 @@ The input filters apply before grouping: an `include` of `*.jpg` drops the
 `.xmp` files, which can no longer be attached. For `file.read` the editor
 warns when a rule aims at an extension its filters exclude, and a button adds
 the companions' extensions. A `folder` rule needs a recursive listing.
-Grouping works by folder and waits for the end of each folder. A source that
-does not signal the end of its folders makes grouping wait for the end of its
-whole listing; in streaming mode nothing is copied until then, and the editor
-says so. `file.read` signals its folders.
+Grouping works by folder and waits for the end of each folder. In streaming
+mode with grouping rules, the files are therefore copied folder by folder, as
+each folder is listed. A source that does not signal the end of its folders
+would make grouping wait for the end of its whole listing: with such a source,
+a streaming pipeline with grouping rules runs in auto mode instead (prepared,
+then copied without confirmation), and a warning says so. The editor shows the
+matching warning. `file.read` signals its folders.
 
 **Archives.** With `unfold`, a listed ZIP is replaced by the files it
 contains, which are then grouped, analysed, planned and checked like any other
@@ -283,7 +287,7 @@ archive.
   default, nested ZIPs are ordinary files.
 - `mergeFolder` makes the archives of one folder a single tree, so that a
   photo in `takeout-001.zip` and its JSON in `takeout-002.zip` meet. Split
-  Takeout exports need it, and the `takeout` preset implies it.
+  Takeout exports need it (a dedicated Takeout plugin is planned).
 - A ZIP that is not a local file (a remote source, or inside an archive) is
   first copied once into a workspace of the run (`copybot-archives` in the
   temporary folder), after a free space check; the preparation shows how many
@@ -302,8 +306,7 @@ archive.
   warning. A resumed run deletes an archive only if it copied all of it.
 
 Known limits: the links inside a saved HTML page are not rewritten when its
-main file is renamed (the `_files` folder follows); Takeout names truncated to
-46 characters are not all matched by the `takeout` preset; only ZIP is
+main file is renamed (the `_files` folder follows); only ZIP is
 supported (no 7z or tar.gz yet).
 
 ## Plugins

@@ -248,6 +248,29 @@ public class FileReadActionTest {
     }
 
     @Test
+    public void announcesItsRootBeforeAnyItem() {
+        List<String> events = new ArrayList<>();
+        action("").listFiles(new ListingSink() {
+            @Override
+            public void root(String folder) {
+                events.add("root:" + folder);
+            }
+
+            @Override
+            public void item(WorkItem item) {
+                events.add("item");
+            }
+
+            @Override
+            public void folderDone(String folder) {
+                events.add("done");
+            }
+        });
+        assertEquals("root:" + card, events.get(0));
+        assertEquals(1, events.stream().filter(e -> e.startsWith("root:")).count());
+    }
+
+    @Test
     public void signalsEachFolderAfterItsSubfolders() {
         assertTrue(action("").signalsFolders());
         List<String> events = events("");

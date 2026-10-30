@@ -67,6 +67,7 @@ public class PlanOperationsTest {
         Consumer<PipelineState> watcher;
         ResumePoint executedOverride;
         int analysed;
+        final List<FakePlan> discarded = new ArrayList<>();
         Optional<String> defaultOutPattern = Optional.empty();
         final List<String> ownPatterns = new ArrayList<>();
 
@@ -158,6 +159,11 @@ public class PlanOperationsTest {
 
         @Override
         public void cancelAnalysis(FakePlan plan) {
+        }
+
+        @Override
+        public void discard(FakePlan plan) {
+            discarded.add(plan);
         }
 
         @Override
@@ -579,4 +585,135 @@ public class PlanOperationsTest {
         assertEquals(Filter.ERRORS, ops.model().filter());
     }
 
+    // ---- plans discarded in the engine ----
+
+    @Test
+    public void droppingThePlanDiscardsItInTheEngineInTheBackground() throws IOException {
+        FakePlan plan = prepared();
+
+        ops.dropPlan(Filter.ALL);
+        assertEquals(List.of(), engine.discarded, "not on the UI thread");
+        runNext();
+
+        assertEquals(List.of(plan), engine.discarded);
+        assertTrue(background.isEmpty());
+    }
+
+    @Test
+    public void droppingWithoutPlanDiscardsNothing() {
+        ops.dropPlan(Filter.ALL);
+        assertTrue(background.isEmpty());
+    }
+
+    @Test
+    public void leavingTheViewDiscardsThePlanBeingPreparedAndTheOneItEndsWith() throws IOException {
+        FakePlan plan = planOf(item("a.jpg"));
+        ops.model().setAutoExecute(true);
+        ops.prepare();
+        uiLater = true;
+        runNext(); // prepare() has run: its plan handed out, then its result, wait for the UI thread
+        uiLater = false;
+        uiQueue.removeFirst().run(); // the plan handed out: being prepared
+        assertTrue(ops.isPreparationStoppable());
+
+        ops.leave();
+        uiQueue.forEach(Runnable::run); // prepare() returned, for the view left
+        runNext();
+        runNext();
+
+        assertEquals(List.of(plan, plan), engine.discarded, "discarded (idempotent in the engine)");
+        assertTrue(background.isEmpty(), "never copied, even with the automatic execution");
+        assertEquals(Phase.PREPARED, ops.model().phase(), "the preparation still reached its end");
+        assertFalse(ops.busy(), "the window is no longer busy");
+    }
+
+    @Test
+    public void leavingTheViewDuringACopyLetsItEndAndBeRecorded() throws IOException {
+        FakePlan plan = prepared();
+        ops.copy();
+        runNext(); // execute() accepted it: its end is awaited in the background
+
+        ops.leave(); // another pipeline opened from the File menu
+        assertEquals(1, background.size(), "only the await: the executed plan is not discarded");
+
+        plan.state.setStatus(PipelineStatus.SUCCESS);
+        engine.watcher.accept(plan.state); // its notifications still reach the model
+        engine.accepted.finish(PipelineStatus.SUCCESS);
+        runNext();
+
+        assertEquals(Phase.FINISHED, ops.model().phase());
+        assertFalse(ops.busy(), "the window is no longer busy once the copy is over");
+        assertTrue(ops.model().consumeFinishedRun(Instant.now()).isPresent(), "the run is recorded");
+        assertEquals(List.of(), engine.discarded);
+        assertTrue(view.errors.isEmpty());
+    }
+
+    @Test
+    public void aCopyRefusedAfterTheViewWasLeftShowsNoErrorAndDiscardsItsPlan() throws IOException {
+        FakePlan plan = prepared();
+        engine.refusal = new IllegalStateException("refused");
+        ops.copy(); // execute() queued
+        ops.leave(); // before it runs
+        assertEquals(1, background.size(), "the plan of a copy about to be accepted is not discarded");
+
+        runNext(); // execute() refused
+
+        assertTrue(view.errors.isEmpty(), "no dialog over the view shown since");
+        runNext();
+        assertEquals(List.of(plan), engine.discarded);
+        assertFalse(ops.busy());
+    }
+
+    @Test
+    public void aCopyRefusedForAPlanDroppedMeanwhileShowsNoError() throws IOException {
+        prepared();
+        engine.refusal = new IllegalStateException("refused");
+        ops.copy();
+        ops.dropPlan(Filter.ALL); // not expected while busy, but a refusal of a plan forgotten is not shown
+
+        runNext(); // execute() refused
+        runNext(); // the discard of the dropped plan
+
+        assertTrue(view.errors.isEmpty());
+    }
+
+    @Test
+    public void preparingAgainDiscardsTheOldPlanEvenWhenTheEngineRefuses() throws IOException {
+        FakePlan old = prepared();
+        engine.refusal = new IllegalStateException("pipeline invalid");
+        ops.prepare();
+        runNext(); // the discard of the old plan, queued before the engine is called
+
+        assertEquals(List.of(old), engine.discarded);
+        assertNull(ops.plan());
+    }
+
+    @Test
+    public void startingStreamingDiscardsTheOldPlanEvenWhenTheEngineRefuses() throws IOException {
+        FakePlan old = prepared();
+        ops.model().setExecutionMode(ExecutionMode.STREAMING);
+        engine.refusal = new IllegalStateException("pipeline invalid");
+        ops.prepare();
+        runNext(); // the discard of the old plan
+
+        assertEquals(List.of(old), engine.discarded);
+        assertNull(ops.plan());
+    }
+
+    @Test
+    public void aPlanOfAPreparationDroppedMeanwhileIsDiscardedWhenItArrives() throws IOException {
+        FakePlan plan = planOf(item("a.jpg"));
+        ops.prepare();
+        uiLater = true;
+        runNext();
+        uiLater = false;
+        ops.dropPlan(Filter.ALL); // before the plan was handed out: nothing to discard yet
+        assertTrue(background.isEmpty());
+
+        uiQueue.forEach(Runnable::run);
+        runNext();
+
+        assertEquals(List.of(plan), engine.discarded);
+        assertNull(ops.plan());
+    }
 }
