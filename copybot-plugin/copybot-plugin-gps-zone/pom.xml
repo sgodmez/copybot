@@ -11,7 +11,7 @@
 
     <artifactId>copybot-plugin-gps-zone</artifactId>
     <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 
     <properties>
         <!-- IPlugin.getPluginCode(): the folder of the release archive -->

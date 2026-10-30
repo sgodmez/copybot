@@ -105,6 +105,22 @@ public class WriteApiTest {
     }
 
     @Test
+    public void theFileWrittenCallbackHasNoEffectByDefaultAndWithProgressKeepsIt() {
+        Path file = Path.of("a.jpg");
+        assertDoesNotThrow(() -> new WriteContext("run").fileWritten(file, "abc", 3));
+        assertDoesNotThrow(() -> new WriteContext("run", null, null).fileWritten(file, "abc", 3));
+        assertDoesNotThrow(() -> WriteContext.newRun().withProgress(ItemProgress.NONE).fileWritten(file, "abc", 3));
+
+        List<String> told = new ArrayList<>();
+        WriteContext context = new WriteContext("run", null, null,
+                (target, sha256, size) -> told.add(target + " " + sha256 + " " + size));
+        context.fileWritten(file, "abc", 3);
+        context.withProgress(ItemProgress.NONE).fileWritten(file, "def", 4);
+
+        assertEquals(List.of(file + " abc 3", file + " def 4"), told);
+    }
+
+    @Test
     public void anActionHasNoConfigWarningsByDefault() {
         assertEquals(List.of(), new MinimalOut().configWarnings());
     }

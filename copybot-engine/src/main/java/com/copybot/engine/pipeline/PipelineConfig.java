@@ -3,6 +3,7 @@ package com.copybot.engine.pipeline;
 import com.copybot.engine.resume.ResumeConfig;
 import com.copybot.engine.resume.ResumeMode;
 import java.util.List;
+import java.util.Objects;
 
 public record PipelineConfig(
 
@@ -28,9 +29,10 @@ public record PipelineConfig(
         ConflictCheck conflictCheck,
 
         /**
-         * The program launched at the end of a copy (spec post-process). Absent: none.
+         * The actions run at the end of a run launched to copy, in order (spec run-end). Absent: none; never null.
+         * A former "postProcess" block is read as its first entry ({@link RunEndMigration}).
          */
-        PostProcessConfig postProcess,
+        List<RunEndStepConfig> runEnd,
 
         /**
          * The rules that attach companion files to a main file at the listing. Absent: no grouping.
@@ -44,11 +46,15 @@ public record PipelineConfig(
 
         ) {
 
+    public PipelineConfig {
+        runEnd = runEnd == null ? List.of() : runEnd.stream().filter(Objects::nonNull).toList();
+    }
+
     /** Without grouping nor archives. */
     public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
                           List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
-                          ResumeConfig resume, ConflictCheck conflictCheck, PostProcessConfig postProcess) {
-        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, conflictCheck, postProcess, null, null);
+                          ResumeConfig resume, ConflictCheck conflictCheck, List<RunEndStepConfig> runEnd) {
+        this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, conflictCheck, runEnd, null, null);
     }
 
     /** Without conflictCheck (quick). */
@@ -58,7 +64,7 @@ public record PipelineConfig(
         this(inSteps, analyseSteps, actionSteps, outStep, execution, resume, null);
     }
 
-    /** Without post-processing. */
+    /** Without run-end actions. */
     public PipelineConfig(List<PipelineStepConfig> inSteps, List<PipelineStepConfig> analyseSteps,
                           List<PipelineStepConfig> actionSteps, PipelineStepConfig outStep, ExecutionMode execution,
                           ResumeConfig resume, ConflictCheck conflictCheck) {

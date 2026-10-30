@@ -147,6 +147,8 @@ public final class PlanViewModel {
     private PipelineStatus status;
     /** The source is still being listed (only meaningful while preparing). */
     private boolean listing;
+    /** The run-end action running now, by its localised name; null outside the run-end actions (spec run-end). */
+    private String runEndStep;
     private List<String> warnings = List.of();
     private ResumeProposal proposal;
     private ResumePoint override;
@@ -282,6 +284,7 @@ public final class PlanViewModel {
         items = List.of();
         status = null;
         listing = false;
+        runEndStep = null;
         warnings = List.of();
         proposal = null;
         override = null;
@@ -311,6 +314,7 @@ public final class PlanViewModel {
     public void update(PipelineState state, List<WorkItemExecution> ordered) {
         status = state.getStatus();
         listing = state.isListingInProgress();
+        runEndStep = state.getRunEndStep();
         listingComplete = state.isListingComplete();
         archivesUnfolded = state.getArchivesUnfolded();
         archivesToDownload = state.getArchivesToDownload();
@@ -1195,8 +1199,14 @@ public final class PlanViewModel {
                 displaySize(p.doneBytes(), 1), displaySize(p.totalBytes(), 1));
     }
 
-    /** The status line under the table: preparation failure, end of the run; empty otherwise (the preparation is told by the bar). */
+    /**
+     * The status line under the table: the run-end action running (the final status comes once they are over),
+     * preparation failure, end of the run; empty otherwise (the preparation is told by the bar).
+     */
     public String statusLine() {
+        if (runEndStep != null) {
+            return ResourcesEngine.getString("plan.run-end", runEndStep);
+        }
         return switch (phase) {
             case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
             // stopped while listing: files may be missing, its rows are not offered (spec manual-point §2)

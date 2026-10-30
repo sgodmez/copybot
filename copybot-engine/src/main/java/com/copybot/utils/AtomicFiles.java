@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileAttribute;
 
 /**
  * Replaces a small file (a state, a configuration) so that a crash or a power cut leaves either the old content or
@@ -34,9 +35,17 @@ public final class AtomicFiles {
      * @throws IOException the directory cannot take the temporary file, the write, the flush or the move failed
      */
     public static void write(Path target, byte[] bytes) throws IOException {
+        write(target, bytes, new FileAttribute<?>[0]);
+    }
+
+    /**
+     * {@link #write(Path, byte[])} with the temporary file, hence the target, created with these attributes (e.g.
+     * owner-only POSIX permissions): the content is never readable with other ones, not even for a moment.
+     */
+    public static void write(Path target, byte[] bytes, FileAttribute<?>... attributes) throws IOException {
         Path absolute = target.toAbsolutePath();
         Path directory = absolute.getParent();
-        Path temp = Files.createTempFile(directory, "." + absolute.getFileName() + ".", ".tmp");
+        Path temp = Files.createTempFile(directory, "." + absolute.getFileName() + ".", ".tmp", attributes);
         try {
             try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
                 ByteBuffer buffer = ByteBuffer.wrap(bytes);

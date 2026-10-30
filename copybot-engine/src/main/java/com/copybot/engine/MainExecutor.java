@@ -1,5 +1,6 @@
 package com.copybot.engine;
 
+import com.copybot.config.SecretReferences;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.ItemStatus;
@@ -25,13 +26,18 @@ import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
+import com.copybot.plugin.api.action.RunOutcome;
+import com.copybot.plugin.api.action.RunReport;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WriteContext;
+import com.copybot.plugin.api.action.WrittenFile;
 import com.copybot.plugin.api.pattern.OutPattern;
 import com.copybot.resources.ResourcesEngine;
 
 import java.nio.file.Path;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -42,6 +48,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.RejectedExecutionException;
@@ -73,17 +80,46 @@ public class MainExecutor implements Runnable {
     /** What the engine did with this plan (executed, abandoned). Guarded by the lock of the engine. */
     private CopybotEngine.PlanFate fate = CopybotEngine.PlanFate.OPEN;
 
+    /** The pipeline file, null for an executor built without one (its run report then has an empty name). */
+    private final Path pipelinePath;
+
+    /** The directories the out step created, for the run report (spec post-process, run-end). */
+    private final Set<Path> createdDirectories = ConcurrentHashMap.newKeySet();
+    /** Every file the out step wrote and verified, in the order of the writes, for the run report. */
+    private final Queue<WrittenFile> writtenFiles = new ConcurrentLinkedQueue<>();
+
     /**
      * Unique per pipeline run (prepare and execute share it), handed to the out step: it names its temporary
      * files and recognises the ones a crashed run left behind (spec safe-write §3).
      */
-    /** The directories the out step created, for the post-processing (spec post-process). */
-    private final Set<Path> createdDirectories = ConcurrentHashMap.newKeySet();
+    private final WriteContext writeContext = new WriteContext(UUID.randomUUID().toString(), null,
+            createdDirectories::add, (target, sha256, size) -> writtenFiles.add(new WrittenFile(target, sha256, size)));
 
-    private final WriteContext writeContext = WriteContext.newRun(createdDirectories::add);
-
-    /** Launched at the end of a copy phase. */
-    private PostProcess postProcess;
+    /**
+     * The end-of-run actions of the pipeline (spec run-end), resolved before the other steps; null until then (an
+     * executor built without pipeline has none, unless a test gives them).
+     */
+    private volatile RunEnd runEnd;
+    /** The resolution of {@link #runEnd} was tried (resolved, or failed: the run's failure). Phase thread only. */
+    private boolean runEndResolutionTried;
+    /** {@link #run()}, {@link #stream()} or {@link #execute}: a run launched to copy, which ends with its actions. */
+    private volatile boolean copyRun;
+    /**
+     * The outcome of the copy run is decided: only its end-of-run actions are left ({@link #finishRun}); cancel()
+     * then stops them, nothing else. Guarded by phaseLock.
+     */
+    private boolean ending;
+    /**
+     * A copy run ended stopped or failed ({@link #endWith}): its status is not published yet, but cancel() and
+     * pause() act as if it were, until {@link #ending}. Guarded by phaseLock.
+     */
+    private boolean outcomeDecided;
+    /** The actions {@link #finishRun} runs, once {@link #ending}. Guarded by phaseLock. */
+    private RunEnd endingActions;
+    /** The start of the run's first phase (the preparation for a plan), for the run report. */
+    private volatile Instant runStarted;
+    /** The start of the copy, null until it begins, for the run report. */
+    private volatile Instant copyStarted;
 
     private List<PipelineStep<IInAction>> inSteps;
     /** volatile: {@link Plan#projectionOf} reads it from another thread while the plan is being prepared */
@@ -206,7 +242,17 @@ public class MainExecutor implements Runnable {
      */
     public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
                         ResumeContext resume) {
+        this(pipelineConfig, watcher, registry, resume, null);
+    }
+
+    /**
+     * @param pipelinePath the pipeline file, named in the run report of the end-of-run actions; null when unknown
+     * @see #MainExecutor(PipelineConfig, Consumer, ResourceRegistry, ResumeContext)
+     */
+    public MainExecutor(PipelineConfig pipelineConfig, Consumer<PipelineState> watcher, ResourceRegistry registry,
+                        ResumeContext resume, Path pipelinePath) {
         this.pipelineConfig = pipelineConfig;
+        this.pipelinePath = pipelinePath;
         this.registry = registry;
         this.resume = resume;
         this.state = new PipelineState();
@@ -216,7 +262,6 @@ public class MainExecutor implements Runnable {
         this.listingPipe = newListingPipe(pipelineConfig);
         this.itemRunner = newItemRunner();
         this.itemRunner.setConflictCheck(pipelineConfig.conflictCheckMode());
-        this.postProcess = PostProcess.of(pipelineConfig.postProcess());
     }
 
     // visible for tests: runs with pre-resolved steps, bypassing PluginEngine, without barrier
@@ -230,6 +275,7 @@ public class MainExecutor implements Runnable {
                  boolean processWhileListing, Consumer<PipelineState> watcher, ResourceRegistry registry,
                  ResumeContext resume) {
         this.pipelineConfig = null;
+        this.pipelinePath = null;
         this.registry = registry;
         this.resume = resume;
         this.inSteps = inSteps;
@@ -242,12 +288,41 @@ public class MainExecutor implements Runnable {
         this.listingPipe = newListingPipe(null);
         this.itemRunner = newItemRunner();
         this.itemRunner.setProcessWhileListing(processWhileListing);
-        this.postProcess = PostProcess.of(null);
     }
 
-    // visible for tests
-    void setPostProcess(PostProcess postProcess) {
-        this.postProcess = postProcess;
+    // visible for tests: the end-of-run actions, instead of the pipeline's
+    void setRunEnd(List<RunEnd.Entry> entries) {
+        this.runEnd = new RunEnd(entries);
+    }
+
+    /**
+     * How long the end-of-run actions of a cancelled run may still take ({@link RunEnd#waitBound}): the ones still to
+     * run once resolved, the pipeline's otherwise (an action without its time limit counted as one without limit);
+     * zero when there is none. Any thread.
+     */
+    Duration cancelledRunEndWait() {
+        RunEnd actions = runEnd;
+        if (actions != null) {
+            return RunEnd.waitBound(actions.remainingTimeouts(RunOutcome.CANCELLED, state.getRunEndStep()));
+        }
+        if (pipelineConfig == null) {
+            return Duration.ZERO;
+        }
+        return RunEnd.waitBound(pipelineConfig.runEnd().stream()
+                .filter(config -> config.outcomes().contains(RunOutcome.CANCELLED))
+                .map(config -> config.timeoutSeconds() == null ? Duration.ZERO : Duration.ofSeconds(config.timeoutSeconds()))
+                .toList());
+    }
+
+    // visible for tests: the end-of-run actions resolved, empty before
+    List<RunEnd.Entry> runEndEntries() {
+        RunEnd actions = runEnd;
+        return actions == null ? List.of() : actions.entries();
+    }
+
+    /** The pipeline file, null when unknown. */
+    Path pipelinePath() {
+        return pipelinePath;
     }
 
     // visible for tests: the grouping rules and archives block of an executor built from pre-resolved steps
@@ -292,10 +367,12 @@ public class MainExecutor implements Runnable {
 
     /**
      * Without resume: one phase, every step, as before. With resume: {@link #prepare()} then, when the
-     * preparation succeeded, {@link #execute(ResumePoint)} with the proposed resume point.
+     * preparation succeeded, {@link #execute(ResumePoint)} with the proposed resume point. A run launched to copy:
+     * it ends with the end-of-run actions, also when its preparation fails or is cancelled.
      */
     @Override
     public void run() {
+        copyRun = true;
         if (resume == null) {
             runSinglePhase();
             return;
@@ -319,6 +396,7 @@ public class MainExecutor implements Runnable {
      * listed before the first copy), with a warning naming that input.
      */
     public void stream() {
+        copyRun = true;
         List<String> silent = inputsWithoutFolderSignal();
         if (silent != null && !silent.isEmpty()) {
             modeWarnings = fallbackWarnings(silent);
@@ -365,12 +443,18 @@ public class MainExecutor implements Runnable {
      * nothing more), then interrupts the current phase, whose listings and items are interrupted in turn,
      * release their permits and go back to PENDING. The pipeline ends CANCELLED and the resume
      * cursor is not written. A phase that has not started yet ends CANCELLED as soon as it starts; a phase
-     * already past its point of no return (all its work done, publishing its outcome) is not affected.
+     * already past its point of no return (all its work done, publishing its outcome) is not affected. Once the
+     * outcome of a copy run is decided, it only stops its end-of-run actions: the one under way is interrupted, the
+     * next ones are skipped, the outcome stays (spec run-end).
      * Idempotent; no effect once the pipeline has terminated. Callable from any thread.
      */
     public void cancel() {
         synchronized (phaseLock) {
-            if (cancelRequested || isTerminated()) {
+            if (ending) {
+                endingActions.cancel();
+                return;
+            }
+            if (cancelRequested || outcomeDecided || isTerminated()) {
                 return;
             }
             cancelRequested = true;
@@ -389,7 +473,7 @@ public class MainExecutor implements Runnable {
      */
     public void pause() {
         synchronized (phaseLock) {
-            if (paused || cancelRequested || isTerminated()) {
+            if (paused || cancelRequested || outcomeDecided || ending || isTerminated()) {
                 return;
             }
             paused = true;
@@ -458,14 +542,16 @@ public class MainExecutor implements Runnable {
      * would return immediately with the flag set, leaving writers to be killed mid-stream by JVM exit).
      * The interrupt sent by cancel() is not restored: it must not leak to the caller (e.g. a UI worker).
      */
-    private void onPhaseInterrupted() {
+    private PipelineStatus onPhaseInterrupted() {
         stopAfterInterrupt(true);
+        return PipelineStatus.CANCELLED;
     }
 
     /**
      * See {@link #onPhaseInterrupted()}.
      *
-     * @param cancelled the pipeline ends CANCELLED; false for the analysis of deferred items, the plan staying PREPARED
+     * @param cancelled the pipeline ends CANCELLED (published at once, or by {@link #finishRun} in a copy run); false
+     *                  for the analysis of deferred items, the plan staying PREPARED
      */
     private void stopAfterInterrupt(boolean cancelled) {
         boolean byCancel;
@@ -479,7 +565,7 @@ public class MainExecutor implements Runnable {
             Thread.interrupted();
         }
         if (cancelled) {
-            state.setStatus(PipelineStatus.CANCELLED);
+            endWith(PipelineStatus.CANCELLED);
         }
         tasks.shutdown();
         if (!byCancel) {
@@ -494,16 +580,104 @@ public class MainExecutor implements Runnable {
      * CANCELLED, its cause still kept in the state.
      *
      * @param duringPreparation the failure happened while preparing (see {@link PipelineState#isPreparationFailed()})
+     * @return the final status: published at once, or by {@link #finishRun} in a copy run
      */
-    private void onPhaseFailed(Throwable failure, boolean duringPreparation) {
+    private PipelineStatus onPhaseFailed(Throwable failure, boolean duringPreparation) {
         if (cancelRequested) {
             state.recordFailureIfAbsent(failure); // the first cause wins; before the status, like below
-            state.setStatus(PipelineStatus.CANCELLED);
-            return;
+            return endWith(PipelineStatus.CANCELLED);
         }
         state.setFailure(failure);
         state.setPreparationFailed(duringPreparation); // before the status, like the cause
-        state.setStatus(PipelineStatus.ERROR);
+        return endWith(PipelineStatus.ERROR);
+    }
+
+    /**
+     * The final status of a phase: published now, unless the phase belongs to a run launched to copy, whose final
+     * status is published by {@link #finishRun} once its end-of-run actions ran (spec run-end, "Déroulé").
+     */
+    private PipelineStatus endWith(PipelineStatus status) {
+        if (!copyRun) {
+            state.setStatus(status);
+            return status;
+        }
+        synchronized (phaseLock) {
+            // as if the status were published: a later cancel() neither interrupts the end of the phase nor turns
+            // the outcome into a stop of its actions (they still run; once they run, a cancel() stops them)
+            outcomeDecided = true;
+            phaseThread = null;
+        }
+        return status;
+    }
+
+    /**
+     * The end of a copy run whose outcome is decided (its cursor saved, its phase stopped or failed): the end-of-run
+     * actions of the outcome with the report of the run, then the final status. A {@link #cancel()} from now on only
+     * stops the actions; one requested since the point of no return of a run that did not end CANCELLED stops them
+     * too. Never throws.
+     */
+    private void finishRun(PipelineStatus status) {
+        RunEnd actions = runEnd;
+        if (actions == null && pipelineConfig != null && !runEndResolutionTried) {
+            // the run ended before its steps were resolved (e.g. cancelled at once): its actions still run
+            runEndResolutionTried = true;
+            try {
+                actions = new RunEnd(RunEnd.resolve(pipelineConfig.runEnd()));
+                runEnd = actions;
+            } catch (RuntimeException | Error e) {
+                LOGGER.log(System.Logger.Level.WARNING, "the end-of-run actions cannot be resolved", e);
+                // the run is not in error for it (its outcome is decided): a warning, like a failed action
+                addWarnings(List.of(ResourcesEngine.getString("run-end.unresolved",
+                        e.getMessage() != null ? e.getMessage() : e.getClass().getName())));
+            }
+        }
+        if (actions == null) {
+            actions = new RunEnd(List.of());
+        }
+        synchronized (phaseLock) {
+            ending = true;
+            endingActions = actions;
+            if (cancelRequested && status != PipelineStatus.CANCELLED) {
+                actions.cancel(); // requested after the point of no return: it can only stop the actions
+            }
+        }
+        // a pending interrupt (an external stop of the phase, already turned into CANCELLED) must not stop the
+        // actions of that outcome before they start; one coming while they run does stop them
+        boolean interrupted = Thread.interrupted();
+        try {
+            RunOutcome outcome = switch (status) {
+                case SUCCESS -> RunOutcome.SUCCESS;
+                case CANCELLED -> RunOutcome.CANCELLED;
+                default -> RunOutcome.ERROR;
+            };
+            RunReport report = RunReports.of(pipelinePath, outcome, runStarted, copyStarted, Instant.now(),
+                    state.getWorkItems(), List.copyOf(writtenFiles), createdDirectories, state.getWarnings(),
+                    state.getFailure(), getRunId());
+            actions.run(outcome, report, new RunEnd.Run() {
+                @Override
+                public List<String> warnings() {
+                    return state.getWarnings();
+                }
+
+                @Override
+                public void warn(String warning) {
+                    addWarnings(List.of(warning));
+                }
+
+                @Override
+                public void running(String name) {
+                    state.setRunEndStep(name);
+                    notifier.changed();
+                }
+            });
+        } catch (RuntimeException | Error e) {
+            LOGGER.log(System.Logger.Level.WARNING, "the end-of-run actions could not run", e);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        state.setStatus(status);
     }
 
     private void runSinglePhase() {
@@ -513,8 +687,11 @@ public class MainExecutor implements Runnable {
         markRunning();
         state.setListingInProgress(true);
         archives.reset();
+        runStarted = Instant.now();
+        copyStarted = null;
         startPhase();
         boolean preparing = true;
+        PipelineStatus finalStatus = null;
         try {
             checkCancelled();
             // Step resolution is INSIDE the try: a missing plugin/action must be reported as a
@@ -526,31 +703,34 @@ public class MainExecutor implements Runnable {
             beginActions(inSteps); // nothing written yet: a failure of beforeAll is a preparation failure
             beginActions(itemSteps);
             preparing = false;
+            copyStarted = Instant.now();
             phaseEnd = itemSteps.size();
             itemRunner.setFinalPhase(true);
             runListings();
             addWarnings(archives.warnings());
             endActions();
             commitPhase();
-            // like execute(): the final status is published once, after the cursor save
-            PipelineStatus finalStatus = resolveFinalStatus();
+            // like execute(): the final status is published once, after the cursor save and the end-of-run actions
+            PipelineStatus status = resolveFinalStatus();
             if (streamed != null) {
                 orderedItems = ResumeResolver.order(listedItems); // the keys are frozen since the listing
                 if (!listingPipe.failed() && !saveCursor(streamed.point(), streamed.source())) {
-                    finalStatus = PipelineStatus.ERROR;
+                    status = PipelineStatus.ERROR;
                 }
             }
-            runPostProcess();
             addWarnings(archives.keptWarnings());
-            state.setStatus(finalStatus);
+            finalStatus = status;
         } catch (InterruptedException e) {
-            onPhaseInterrupted();
+            finalStatus = onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            onPhaseFailed(e, preparing);
+            finalStatus = onPhaseFailed(e, preparing);
         } finally {
             listingPoint = null;
             state.setListingInProgress(false);
             endActionsQuietly(true);
+            if (finalStatus != null) {
+                finishRun(finalStatus);
+            }
             archives.releaseAtPhaseEnd();
             endPhase();
         }
@@ -621,7 +801,10 @@ public class MainExecutor implements Runnable {
         markRunning();
         state.setListingInProgress(true);
         archives.reset(); // a new preparation replaces the plan
+        runStarted = Instant.now();
+        copyStarted = null;
         startPhase();
+        PipelineStatus endStatus = null; // a run launched to copy that ends here: published by finishRun
         try {
             checkCancelled();
             PipelineConfig declared = listingPipe.config();
@@ -656,7 +839,7 @@ public class MainExecutor implements Runnable {
             addWarnings(archives.warnings());
             commitPhase();
             if (listingPipe.failed()) {
-                state.setStatus(PipelineStatus.ERROR);
+                endStatus = endWith(PipelineStatus.ERROR);
                 return;
             }
             orderedItems = ResumeResolver.order(state.getWorkItems());
@@ -684,9 +867,9 @@ public class MainExecutor implements Runnable {
             }
             state.setStatus(PipelineStatus.PREPARED);
         } catch (InterruptedException e) {
-            onPhaseInterrupted();
+            endStatus = onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            onPhaseFailed(e, true);
+            endStatus = onPhaseFailed(e, true);
         } finally {
             itemRunner.setDryRunSteps(null);
             listingPoint = null;
@@ -696,6 +879,9 @@ public class MainExecutor implements Runnable {
                 preparationStoppable = false;
             }
             endActionsQuietly(true);
+            if (copyRun && endStatus != null) {
+                finishRun(endStatus); // a run launched to copy ends here: never a preparation of a plan
+            }
             PipelineStatus status = state.getStatus();
             if (status != PipelineStatus.PREPARED
                     && !(status == PipelineStatus.CANCELLED && state.isListingComplete())) {
@@ -803,6 +989,14 @@ public class MainExecutor implements Runnable {
      */
     void chooseResumePoint(ResumePoint point) {
         chosenPoint = point;
+    }
+
+    /**
+     * The next {@link #prepare()} belongs to a run launched to copy ({@link CopybotEngine#prepareForCopy}): failed or
+     * cancelled, it ends with the end-of-run actions of its outcome, like a preparation run by {@link #run()}.
+     */
+    void markCopyRun() {
+        copyRun = true;
     }
 
     /**
@@ -1259,14 +1453,20 @@ public class MainExecutor implements Runnable {
         synchronized (phaseLock) {
             lastPhaseWasPreparation = false; // a stopped execution is not a stopped preparation
         }
+        copyRun = true;
+        if (runStarted == null) {
+            runStarted = Instant.now();
+        }
         markRunning();
         startPhase();
+        PipelineStatus finalStatus = null;
         try {
             checkCancelled();
             itemRunner.setFinalPhase(true);
             boolean analysesToo = orderedItems.stream()
                     .anyMatch(exec -> exec.getStatus() == ItemStatus.PENDING && exec.isAnalysisDeferred());
             beginActions(itemSteps.subList(analysesToo ? 0 : barrierIndex, itemSteps.size()));
+            copyStarted = Instant.now();
             for (WorkItemExecution exec : orderedItems) {
                 if (exec.getStatus() == ItemStatus.PENDING) {
                     // an item skipped at the listing, selected again by a manual point, is analysed first
@@ -1276,21 +1476,23 @@ public class MainExecutor implements Runnable {
             tasks.awaitCompletion();
             endActions();
             commitPhase(); // a cancelled run never writes the cursor, a later cancel never interrupts its write
-            // The final status is published once, after the cursor save: a cursor write failure
-            // must never be seen by watchers as SUCCESS followed by ERROR.
-            PipelineStatus finalStatus = resolveFinalStatus();
+            // The final status is published once, after the cursor save and the end-of-run actions: a cursor
+            // write failure must never be seen by watchers as SUCCESS followed by ERROR.
+            PipelineStatus status = resolveFinalStatus();
             if (!saveCursor(point, source)) {
-                finalStatus = PipelineStatus.ERROR;
+                status = PipelineStatus.ERROR;
             }
-            runPostProcess();
             addWarnings(archives.keptWarnings());
-            state.setStatus(finalStatus);
+            finalStatus = status;
         } catch (InterruptedException e) {
-            onPhaseInterrupted();
+            finalStatus = onPhaseInterrupted();
         } catch (RuntimeException | Error e) {
-            onPhaseFailed(e, false);
+            finalStatus = onPhaseFailed(e, false);
         } finally {
             endActionsQuietly(true);
+            if (finalStatus != null) {
+                finishRun(finalStatus);
+            }
             archives.releaseAtPhaseEnd();
             endPhase();
         }
@@ -1377,14 +1579,6 @@ public class MainExecutor implements Runnable {
         }
     }
 
-    /**
-     * At the end of a copy phase that was not stopped, before its final status (spec post-process): a failed
-     * launch is a warning, the status stays the copy's.
-     */
-    private void runPostProcess() {
-        postProcess.run(createdDirectories).ifPresent(warning -> addWarnings(List.of(warning)));
-    }
-
     /** @return false when the cursor could not be written */
     private boolean saveCursor(ResumePoint point, ResumeSource source) {
         if (resume.mode() == ResumeMode.NONE) {
@@ -1406,17 +1600,22 @@ public class MainExecutor implements Runnable {
             return;
         }
         List<String> warnings = new ArrayList<>();
-        inSteps.forEach(step -> addWarnings(warnings, step.getAction()));
-        itemSteps.forEach(step -> addWarnings(warnings, step.getAction()));
+        inSteps.forEach(step -> addWarnings(warnings, step.getAction(), step.getRedactor()));
+        itemSteps.forEach(step -> addWarnings(warnings, step.getAction(), step.getRedactor()));
+        RunEnd actions = runEnd; // resolved before the steps
+        if (actions != null) {
+            actions.entries().forEach(entry -> addWarnings(warnings, entry.action(), entry.redactor()));
+        }
         warnings.addAll(modeWarnings);
         state.setWarnings(warnings);
         warningsCollected = true;
     }
 
-    private static void addWarnings(List<String> warnings, IAction action) {
+    /** The configuration warnings of the action, without the secret values it was configured with. */
+    private static void addWarnings(List<String> warnings, IAction action, SecretReferences.Redactor redactor) {
         List<String> actionWarnings = action.configWarnings();
         if (actionWarnings != null) { // a plugin returning null has nothing to say
-            warnings.addAll(actionWarnings);
+            actionWarnings.forEach(warning -> warnings.add(redactor.text(warning)));
         }
     }
 
@@ -1435,6 +1634,8 @@ public class MainExecutor implements Runnable {
     /**
      * Resolves the steps of the pipeline once: all of them, or none when one cannot be resolved. A failure met before
      * the phase (the decision of {@link #stream()}) is thrown again here, inside the phase, without resolving twice.
+     * The end-of-run actions are resolved first, and kept: a run failing to resolve another step still runs them
+     * (spec run-end, "Configuration").
      */
     private void resolveSteps() {
         Throwable failure = stepsFailure;
@@ -1444,6 +1645,10 @@ public class MainExecutor implements Runnable {
                 throw error;
             }
             throw (RuntimeException) failure;
+        }
+        if (pipelineConfig != null && runEnd == null) {
+            runEndResolutionTried = true; // its failure is the run's: not tried again at the end
+            runEnd = new RunEnd(RunEnd.resolve(pipelineConfig.runEnd()));
         }
         if (pipelineConfig != null && inSteps == null) {
             List<PipelineStep<IInAction>> in = StepResolver.in(pipelineConfig);

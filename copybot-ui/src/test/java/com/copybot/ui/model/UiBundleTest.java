@@ -103,7 +103,14 @@ public class UiBundleTest {
             "plugins.filter.ALL", "plugins.filter.INSTALLED", "plugins.filter.AVAILABLE", "plugins.card.none",
             "plugins.state.update-to", "plugins.card.failed", "plugins.card.unofficial", "plugins.card.depends-on",
             "plugins.card.missing", "plugins.card.pipeline-plugin", "plugins.card.license", "plugins.card.details",
-            "plugins.embedded", "plugins.dev-path");
+            "plugins.embedded", "plugins.dev-path",
+            "editor.section.RUN_END", "editor.run-end.when", "editor.run-end.when.success", "editor.run-end.when.error",
+            "editor.run-end.when.cancelled", "editor.run-end.when.help", "editor.advanced.timeoutSeconds",
+            "editor.advanced.timeoutSeconds.description", "editor.secret.new", "editor.secret.prompt",
+            "menu.edit.secrets", "secrets.title", "secrets.help", "secrets.empty", "secrets.add", "secrets.change",
+            "secrets.delete", "secrets.name", "secrets.value", "secrets.invalid-name", "secrets.empty-value",
+            "secrets.replace", "secrets.delete.confirm", "secrets.unreadable", "plan.run-end", "editor.secret.unknown",
+            "editor.secret.plain", "editor.secret.to-store", "editor.unknown-secrets");
 
     /** The keys formatted with a number. */
     private static final List<String> NUMBER_KEYS = List.of("plugins.pending",

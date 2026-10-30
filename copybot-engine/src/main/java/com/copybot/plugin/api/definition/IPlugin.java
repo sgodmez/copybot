@@ -53,4 +53,8 @@ public interface IPlugin {
         return List.of();
     }
 
+    default List<ActionDefinition<? extends IRunEndAction>> getRunEndActions() {
+        return List.of();
+    }
+
 }

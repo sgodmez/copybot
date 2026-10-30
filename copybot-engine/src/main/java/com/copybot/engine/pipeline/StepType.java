@@ -6,7 +6,9 @@ public enum StepType {
     IN(IInAction.class),
     ANALYZE(IAnalyzeAction.class),
     PROCESS(IProcessAction.class),
-    OUT(IOutAction.class);
+    OUT(IOutAction.class),
+    /** An action of the pipeline's "runEnd" list, run once at the end of a run launched to copy. */
+    RUN_END(IRunEndAction.class);
 
     private final Class<? extends IAction> actionClass;
 

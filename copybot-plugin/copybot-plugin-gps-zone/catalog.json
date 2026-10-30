@@ -7,9 +7,9 @@
     "it": "Trova il fuso orario di una foto dalla sua posizione GPS, offline, per controllare il fuso della fotocamera."
   },
   "changes": {
-    "en": "Smaller archive (an unused library is gone); the messages of its library now go to Copybot's logs.",
-    "fr": "Archive plus petite (une bibliothèque inutilisée en moins) ; les messages de sa bibliothèque vont maintenant dans les journaux de Copybot.",
-    "it": "Archivio più piccolo (una libreria inutilizzata in meno); i messaggi della sua libreria ora vanno nei log di Copybot."
+    "en": "Texts in Italian.",
+    "fr": "Textes en italien.",
+    "it": "Testi in italiano."
   },
   "license": {
     "name": "ODbL",

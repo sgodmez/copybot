@@ -14,8 +14,18 @@ import java.util.function.Consumer;
  *                           outside the engine
  * @param createdDirectories receives each directory the write creates (spec post-process): the engine hands them to
  *                           the post-processing; ignored outside the engine
+ * @param fileWritten        receives each file the write has written and verified, main or companion, with its
+ *                           SHA-256 and size: the engine builds the run report of the end-of-run actions from them;
+ *                           no effect outside the engine
  */
-public record WriteContext(String runId, ItemProgress progress, Consumer<Path> createdDirectories) {
+public record WriteContext(String runId, ItemProgress progress, Consumer<Path> createdDirectories,
+                           FileWritten fileWritten) {
+
+    /** The callback of {@link WriteContext#fileWritten()}. */
+    @FunctionalInterface
+    public interface FileWritten {
+        void fileWritten(Path target, String sha256, long size);
+    }
 
     public WriteContext {
         Objects.requireNonNull(runId, "runId");
@@ -25,6 +35,13 @@ public record WriteContext(String runId, ItemProgress progress, Consumer<Path> c
         progress = progress == null ? ItemProgress.NONE : progress;
         createdDirectories = createdDirectories == null ? dir -> {
         } : createdDirectories;
+        fileWritten = fileWritten == null ? (target, sha256, size) -> {
+        } : fileWritten;
+    }
+
+    /** A context nobody tells the written files. */
+    public WriteContext(String runId, ItemProgress progress, Consumer<Path> createdDirectories) {
+        this(runId, progress, createdDirectories, null);
     }
 
     /** A context nobody tells the created directories. */
@@ -49,11 +66,16 @@ public record WriteContext(String runId, ItemProgress progress, Consumer<Path> c
 
     /** The same run, reporting the progress of one item there. */
     public WriteContext withProgress(ItemProgress itemProgress) {
-        return new WriteContext(runId, itemProgress, createdDirectories);
+        return new WriteContext(runId, itemProgress, createdDirectories, fileWritten);
     }
 
     /** Tells the run that the write created this directory (it did not exist before). */
     public void directoryCreated(Path dir) {
         createdDirectories.accept(dir);
+    }
+
+    /** Tells the run that the write has written and verified this file (main or companion). */
+    public void fileWritten(Path target, String sha256, long size) {
+        fileWritten.fileWritten(target, sha256, size);
     }
 }

@@ -39,7 +39,7 @@ public record ConfigSchema(List<ConfigField> fields) {
 
     /**
      * The fields of this record, in component order: String and Path (PATH with {@link DirectoryPath} /
-     * {@link FilePath}, ENUM with {@link AllowedValues}), booleans, integers, decimals, enums (constant
+     * {@link FilePath}, STRING with {@link Secret}, ENUM with {@link AllowedValues}), booleans, integers, decimals, enums (constant
      * names), records (RECORD, recursively) and List / Set / Collection (LIST, of String when raw). A
      * component of another type (Map, JsonElement...) or of a record type being introspected (a cycle) is
      * left out: the editor keeps its JSON value untouched. The annotations of a list component describe the
@@ -103,6 +103,9 @@ public record ConfigSchema(List<ConfigField> fields) {
             }
             if (annotated(component, PatternField.class)) {
                 hints.add(FieldHint.PATTERN);
+            }
+            if (annotated(component, Secret.class)) {
+                hints.add(FieldHint.SECRET);
             }
             AllowedValues allowed = component == null ? null : component.getAnnotation(AllowedValues.class);
             if (allowed != null) {

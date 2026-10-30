@@ -240,6 +240,16 @@ public class MainController {
         }
     }
 
+    /** The secrets of this user, which the pipelines name (spec run-end, Secrets). */
+    @FXML
+    protected void onSecretsClick() {
+        try {
+            SecretsDialog.show(CopybotMainUi.STAGE);
+        } catch (RuntimeException e) {
+            PopinUtil.showError(e);
+        }
+    }
+
     /** Opens the plugins window, or refreshes it when open. */
     @FXML
     protected void onPluginsClick() {

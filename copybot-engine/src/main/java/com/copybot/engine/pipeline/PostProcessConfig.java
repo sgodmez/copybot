@@ -1,16 +1,25 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.plugin.api.config.FilePath;
+import com.copybot.plugin.api.config.Required;
+
 import java.util.List;
 import java.util.Objects;
 
 /**
- * The program launched at the end of a copy (spec post-process).
+ * The "actionConfig" of the embedded run-end action post.process (formerly the "postProcess" block): the program
+ * launched at the end of a copy. The annotations describe the fields to the pipeline editor.
  *
- * @param command the program; absent or blank: no post-processing
+ * @param command the program; absent or blank: nothing is launched
  * @param args    its arguments, passed as they are; one equal to {@link #CREATED_DIRS} (spaces around ignored) stands
  *                for the directories the copy created, one argument each
  */
-public record PostProcessConfig(String command, List<String> args) {
+public record PostProcessConfig(
+        @Required @FilePath
+        String command,
+
+        List<String> args
+) {
 
     public static final String CREATED_DIRS = "{createdDirs}";
 

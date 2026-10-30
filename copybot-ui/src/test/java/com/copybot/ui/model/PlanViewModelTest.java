@@ -368,6 +368,25 @@ public class PlanViewModelTest {
         assertTranslated(model.statusLine());
     }
 
+    /** Spec run-end: the final status comes once the end-of-run actions are over; meanwhile the bar names the one running. */
+    @Test
+    public void theStatusLineNamesTheRunEndActionRunning() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        PlanViewModel model = prepared(false, a);
+        model.startExecuting();
+        a.setDone();
+
+        PipelineState actions = state(PipelineStatus.RUNNING, a);
+        actions.setRunEndStep("Send an e-mail");
+        model.update(actions, List.of(a));
+        assertEquals(Phase.RUNNING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.run-end", "Send an e-mail"), model.statusLine());
+
+        model.update(state(PipelineStatus.SUCCESS, a), List.of(a));
+        assertEquals(Phase.FINISHED, model.phase());
+        assertFalse(model.statusLine().contains("Send an e-mail"), model.statusLine());
+    }
+
     @Test
     public void nothingToCopyDisablesTheCopy() throws IOException {
         WorkItemExecution a = item("a.jpg", 1);

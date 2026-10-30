@@ -54,6 +54,18 @@ public class ConfigSchemaTest {
     record Loop(String name, Loop next) {
     }
 
+    record Credentials(String user, @Secret String password) {
+    }
+
+    @Test
+    public void aSecretStringIsAStringFieldWithTheSecretHint() {
+        ConfigSchema schema = ConfigSchema.of(Credentials.class);
+
+        assertEquals(FieldKind.STRING, field(schema, "password").kind());
+        assertEquals(Set.of(FieldHint.SECRET), field(schema, "password").hints());
+        assertEquals(Set.of(), field(schema, "user").hints());
+    }
+
     record Ping(String name, Pong pong) {
     }
 

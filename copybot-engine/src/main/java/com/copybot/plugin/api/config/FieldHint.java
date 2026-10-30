@@ -7,5 +7,7 @@ public enum FieldHint {
     /** {@link FilePath}: a file chooser */
     FILE,
     /** {@link PatternField}: the known pattern variables are listed */
-    PATTERN
+    PATTERN,
+    /** {@link Secret}: a choice of secret instead of a typed value */
+    SECRET
 }

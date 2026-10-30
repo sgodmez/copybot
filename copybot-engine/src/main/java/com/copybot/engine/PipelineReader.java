@@ -1,6 +1,8 @@
 package com.copybot.engine;
 
+import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.RunEndMigration;
 import com.copybot.exception.CopybotException;
 import com.copybot.utils.GsonUtil;
 import com.google.gson.JsonElement;
@@ -11,14 +13,17 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-/** Reads a pipeline file into its configuration, refusing the enum members Gson would silently read as null. */
-final class PipelineReader {
+/**
+ * Reads a pipeline file into its configuration, refusing the enum members Gson would silently read as null; a former
+ * "postProcess" block is read as the first run-end entry, and invalid run-end conditions are refused.
+ */
+public final class PipelineReader {
 
     private PipelineReader() {
     }
 
     /** @throws CopybotException pipeline.not-found / pipeline.not-json, or an unknown enum name */
-    static PipelineConfig read(Path pipelinePath) {
+    public static PipelineConfig read(Path pipelinePath) {
         if (!Files.isReadable(pipelinePath)) {
             throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
         }
@@ -35,6 +40,9 @@ final class PipelineReader {
         checkEnumType(tree, "conflictCheck", "conflict-check.unknown");
         checkEnumType(resume, "destinationCheck", "resume.destination-check.unknown");
         checkEnumType(resume, "destinationMatch", "resume.destination-match.unknown");
+        if (tree.isJsonObject()) {
+            RunEndMigration.migrate(tree.getAsJsonObject());
+        }
         PipelineConfig pipelineConfig;
         try {
             pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
@@ -54,6 +62,9 @@ final class PipelineReader {
         checkEnumName(resume, "destinationMatch",
                 pipelineConfig.resume() == null ? null : pipelineConfig.resume().destinationMatch(),
                 "resume.destination-match.unknown");
+        PipelineChecks.runEndRefusal(pipelineConfig).ifPresent(message -> {
+            throw CopybotException.of(message);
+        });
         return pipelineConfig;
     }
 

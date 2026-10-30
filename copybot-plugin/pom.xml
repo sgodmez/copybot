@@ -16,6 +16,9 @@
     <modules>
         <module>copybot-plugin-metadata-extractor</module>
         <module>copybot-plugin-gps-zone</module>
+        <module>copybot-plugin-notify-webhook</module>
+        <module>copybot-plugin-notify-email</module>
+        <module>copybot-plugin-archive</module>
     </modules>
 
     <dependencies>

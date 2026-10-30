@@ -33,3 +33,13 @@ Plugin metadata-extractor (copybot-plugin/copybot-plugin-metadata-extractor)
 
   metadata-extractor (com.drewnoakes)     Apache License 2.0
   Apache Commons Imaging                  Apache License 2.0
+
+-------------------------------------------------------------------------------
+Plugin notify-email (copybot-plugin/copybot-plugin-notify-email)
+-------------------------------------------------------------------------------
+
+Libraries shipped in the lib/ folder of the plugin:
+  Jakarta Mail API 2.1.5 (jakarta.mail)          EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Angus Mail 2.0.5 (org.eclipse.angus)           EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Jakarta Activation API 2.1.4 (jakarta.activation)  EDL 1.0 (BSD 3-Clause)
+  Angus Activation 2.0.3 (org.eclipse.angus)     EDL 1.0 (BSD 3-Clause)

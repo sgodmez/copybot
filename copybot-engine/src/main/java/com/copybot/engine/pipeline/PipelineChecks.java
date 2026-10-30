@@ -55,6 +55,34 @@ public final class PipelineChecks {
         });
     }
 
+    /**
+     * The reason why the run-end list cannot be used, empty when it can: an entry whose "when" is empty or holds an
+     * unknown value (an absent "when" is the default), or whose time limit is negative.
+     */
+    public static Optional<String> runEndRefusal(PipelineConfig config) {
+        int index = 0;
+        for (RunEndStepConfig entry : config.runEnd()) {
+            index++;
+            if (entry.timeoutSeconds() != null && entry.timeoutSeconds() < 0) {
+                return Optional.of(ResourcesEngine.getString("run-end.timeout.negative", index, entry.action(),
+                        String.valueOf(entry.timeoutSeconds())));
+            }
+            if (entry.when() == null) {
+                continue;
+            }
+            if (entry.when().isEmpty()) {
+                return Optional.of(ResourcesEngine.getString("run-end.when.empty", index, entry.action()));
+            }
+            for (String value : entry.when()) {
+                if (RunEndStepConfig.outcome(value).isEmpty()) {
+                    return Optional.of(ResourcesEngine.getString("run-end.when.unknown", index, entry.action(),
+                            value));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
     private static final Set<String> RULE_TYPES = Set.of("sameBase", "doubleExtension", "folder", "regex");
     private static final Set<String> ROLES = Set.of("copy", "read", "ignore");
     private static final Set<String> LINKS = Set.of("base", "name");

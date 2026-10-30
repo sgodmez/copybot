@@ -3,6 +3,7 @@ package com.copybot.engine;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -48,6 +49,14 @@ public final class Execution {
      */
     public void cancel() {
         executor.cancel();
+    }
+
+    /**
+     * How long, at most, the end-of-run actions of a cancelled run may still take: the sum of the time limits of the
+     * ones still to run (an action without limit counted as 120 s) plus a margin; zero when there is none.
+     */
+    public Duration cancelledRunEndWait() {
+        return executor.cancelledRunEndWait();
     }
 
     /** No new step starts (status PAUSED) until {@link #resume()}; running steps finish normally. */

@@ -2,7 +2,6 @@ package com.copybot.ui;
 
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
-import com.copybot.engine.pipeline.PostProcessConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.engine.plugin.PluginEngine;
@@ -19,7 +18,6 @@ import com.copybot.ui.plugins.PluginRow;
 import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.plugins.PluginState;
 import com.copybot.ui.util.Background;
-import com.copybot.ui.util.Choosers;
 import com.copybot.ui.util.PopinUtil;
 import com.copybot.ui.util.Views;
 import com.google.gson.JsonElement;
@@ -40,7 +38,6 @@ import javafx.scene.control.ListCell;
 import javafx.scene.control.ListView;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.TextInputControl;
-import javafx.scene.control.TextField;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.TreeCell;
@@ -49,8 +46,6 @@ import javafx.scene.control.TreeView;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyCodeCombination;
 import javafx.scene.input.KeyCombination;
-import javafx.scene.layout.HBox;
-import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
 import javafx.stage.FileChooser;
 import javafx.stage.Modality;
@@ -81,14 +76,13 @@ public class EditorController {
 
     private static final System.Logger LOG = System.getLogger(EditorController.class.getName());
 
-    enum Kind { PIPELINE, SECTION, STEP, POST_PROCESS, GROUPING, ARCHIVES }
+    enum Kind { PIPELINE, SECTION, STEP, GROUPING, ARCHIVES }
 
-    /** A node of the tree: the pipeline, a section, the step at index of a section, or the program launched after the copy. */
+    /** A node of the tree: the pipeline, a section, the step at index of a section, the grouping or the archives. */
     record EditorNode(Kind kind, Section section, int index) {
     }
 
     private static final EditorNode PIPELINE_NODE = new EditorNode(Kind.PIPELINE, null, -1);
-    private static final EditorNode POST_PROCESS_NODE = new EditorNode(Kind.POST_PROCESS, null, -1);
     private static final EditorNode GROUPING_NODE = new EditorNode(Kind.GROUPING, null, -1);
     private static final EditorNode ARCHIVES_NODE = new EditorNode(Kind.ARCHIVES, null, -1);
 
@@ -357,11 +351,6 @@ public class EditorController {
                 }
             }
         }
-        TreeItem<EditorNode> postProcessItem = new TreeItem<>(POST_PROCESS_NODE); // after the out step, like the run
-        if (POST_PROCESS_NODE.equals(select)) {
-            selected = postProcessItem;
-        }
-        root.getChildren().add(postProcessItem);
         tree.setRoot(root);
         tree.getSelectionModel().select(selected);
     }
@@ -369,7 +358,6 @@ public class EditorController {
     private String label(EditorNode node) {
         return switch (node.kind()) {
             case PIPELINE -> ResourcesEngine.getString("editor.section.PIPELINE");
-            case POST_PROCESS -> ResourcesEngine.getString("editor.post-process");
             case GROUPING -> ResourcesEngine.getString("editor.grouping");
             case ARCHIVES -> ResourcesEngine.getString("editor.archives");
             case SECTION -> ResourcesEngine.getString("editor.section." + node.section().name());
@@ -480,8 +468,6 @@ public class EditorController {
         }
         if (node.kind() == Kind.PIPELINE) {
             pipelineForm();
-        } else if (node.kind() == Kind.POST_PROCESS) {
-            formBox.getChildren().add(postProcessForm());
         } else if (node.kind() == Kind.GROUPING) {
             formBox.getChildren().add(GroupingForms.groupingForm(document, stage, () -> showForm(node)));
         } else if (node.kind() == Kind.ARCHIVES) {
@@ -594,31 +580,6 @@ public class EditorController {
                 new VBox(3, new Label(ResourcesEngine.getString("editor.destination-match")), destinationMatch));
     }
 
-    /** The program launched at the end of a copy and its arguments, one per line (spec post-process). */
-    private Node postProcessForm() {
-        TextField command = new TextField(document.postProcessCommand());
-        TextArea args = new TextArea(String.join("\n", document.postProcessArgs()));
-        args.setPrefRowCount(3);
-        Runnable apply = () -> document.setPostProcess(command.getText(), args.getText().lines().toList());
-        command.textProperty().addListener((obs, old, text) -> apply.run());
-        args.textProperty().addListener((obs, old, text) -> apply.run());
-        Button browse = new Button(ResourcesEngine.getString("editor.browse"));
-        browse.setOnAction(e -> Choosers.inFolderOf(browse, command.getText(), folder -> {
-            FileChooser chooser = new FileChooser();
-            chooser.setInitialDirectory(folder);
-            File chosen = chooser.showOpenDialog(formBox.getScene().getWindow());
-            if (chosen != null) {
-                command.setText(chosen.getPath());
-            }
-        }));
-        HBox.setHgrow(command, Priority.ALWAYS);
-        Label help = new Label(ResourcesEngine.getString("editor.post-process.help", PostProcessConfig.CREATED_DIRS));
-        help.setWrapText(true);
-        return new VBox(3, title(ResourcesEngine.getString("editor.post-process")),
-                new Label(ResourcesEngine.getString("editor.post-process.command")), new HBox(6, command, browse),
-                new Label(ResourcesEngine.getString("editor.post-process.args")), args, help);
-    }
-
     /** The resume modes that look at the destination: destination, and stateThenDestination without cursor. */
     private static boolean destinationBased(String resumeMode) {
         return "destination".equals(resumeMode) || "stateThenDestination".equals(resumeMode);
@@ -688,8 +649,11 @@ public class EditorController {
             formBox.getChildren().addAll(new Label(ResourcesEngine.getString("editor.no-schema")),
                     readOnly(PipelineDocument.json(step.get("actionConfig"))));
         }
-        TitledPane advanced = new TitledPane(ResourcesEngine.getString("editor.advanced"),
-                ConfigForm.build(PipelineDocument.ADVANCED_FIELDS, advancedAccess(node, step), stage, invalid));
+        if (node.section() == Section.RUN_END) {
+            formBox.getChildren().add(RunEndForms.conditions(document, step));
+        }
+        TitledPane advanced = new TitledPane(ResourcesEngine.getString("editor.advanced"), ConfigForm.build(
+                PipelineDocument.advancedFields(node.section()), advancedAccess(node, step), stage, invalid));
         advanced.setExpanded(false);
         formBox.getChildren().add(advanced);
     }
@@ -813,7 +777,7 @@ public class EditorController {
 
     @FXML
     protected void onSaveClick() {
-        if (saving || !canSave() || !confirmIncomplete()) {
+        if (saving || !canSave() || !confirmIncomplete() || !confirmUnknownSecrets()) {
             return;
         }
         if (path == null) {
@@ -825,10 +789,28 @@ public class EditorController {
 
     @FXML
     protected void onSaveAsClick() {
-        if (saving || !canSave() || !confirmIncomplete()) {
+        if (saving || !canSave() || !confirmIncomplete() || !confirmUnknownSecrets()) {
             return;
         }
         chooseTarget().ifPresent(this::saveTo);
+    }
+
+    /**
+     * Like {@link #confirmIncomplete()} for the secrets the pipeline refers to that are not defined on this machine
+     * (not blocking: it may be meant for another machine). Asked on every save, before any file chooser.
+     */
+    private boolean confirmUnknownSecrets() {
+        List<PipelineDocument.UnknownSecret> unknown = document.unknownSecrets(SecretsDialog.names());
+        if (unknown.isEmpty()) {
+            return true;
+        }
+        String lines = unknown.stream().map(secret -> ResourcesEngine.getString("editor.section." + secret.section().name())
+                + " #" + (secret.index() + 1) + " : " + secret.name()).collect(Collectors.joining("\n"));
+        ButtonType saveAnyway = new ButtonType(ResourcesEngine.getString("editor.save-anyway"), ButtonBar.ButtonData.OK_DONE);
+        Alert alert = new Alert(Alert.AlertType.WARNING, ResourcesEngine.getString("editor.unknown-secrets", lines),
+                saveAnyway, ButtonType.CANCEL);
+        alert.initOwner(stage);
+        return alert.showAndWait().filter(choice -> choice == saveAnyway).isPresent();
     }
 
     /**
@@ -995,6 +977,9 @@ public class EditorController {
     }
 
     private String fieldLabel(Problem problem) {
+        if (problem.section() == Section.RUN_END && "when".equals(problem.fieldPath())) {
+            return ResourcesEngine.getString("editor.run-end.when");
+        }
         JsonObject step = document.steps(problem.section()).get(problem.index());
         return catalog.find(problem.section(), step)
                 .flatMap(action -> action.configSchema()

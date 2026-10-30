@@ -7,7 +7,8 @@ import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.GroupingConfig;
 import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.PipelineConfig;
-import com.copybot.engine.pipeline.PostProcessConfig;
+import com.copybot.engine.pipeline.RunEndMigration;
+import com.copybot.engine.pipeline.RunEndStepConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
@@ -61,7 +62,9 @@ public final class PipelineDocument {
         ANALYZE("analyseSteps", StepType.ANALYZE),
         PROCESS("actionSteps", StepType.PROCESS),
         /** at most one step, the "outStep" object */
-        OUT("outStep", StepType.OUT);
+        OUT("outStep", StepType.OUT),
+        /** the actions run once the copy is over (spec run-end), like the run, after the out step */
+        RUN_END(RunEndMigration.RUN_END, StepType.RUN_END);
 
         private final String jsonName;
         private final StepType stepType;
@@ -105,6 +108,23 @@ public final class PipelineDocument {
             advanced("resources", FieldKind.LIST, advanced("resources", FieldKind.STRING, null)),
             advanced("priority", FieldKind.INTEGER, null),
             advanced("version", FieldKind.STRING, null));
+
+    /** The member of a run-end action that bounds its time, in seconds (absent: its default, 0: no limit). */
+    private static final String TIMEOUT = "timeoutSeconds";
+
+    /**
+     * The "Advanced" fields of a run-end action: an entry of "runEnd" has no concurrency, resources nor priority (it
+     * runs alone, after the copy), but a time limit.
+     */
+    private static final List<ConfigField> RUN_END_ADVANCED_FIELDS = List.of(
+            advanced(TIMEOUT, FieldKind.INTEGER, null),
+            advanced("version", FieldKind.STRING, null));
+
+    /** The outcomes of a run a run-end action can run for ("when"), in the order the editor writes them. */
+    public static final List<String> RUN_END_OUTCOMES = List.of(
+            RunEndStepConfig.SUCCESS, RunEndStepConfig.ERROR, RunEndStepConfig.CANCELLED);
+
+    private static final String WHEN = "when";
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().disableHtmlEscaping().create();
 
@@ -185,6 +205,9 @@ public final class PipelineDocument {
             throw new IllegalArgumentException(ResourcesEngine.getString("pipeline.document.not-object"));
         }
         JsonObject root = tree.getAsJsonObject();
+        // the former "postProcess" block becomes the first run-end action, as the engine reads it: the same pipeline,
+        // so the document is not marked modified (closing asks nothing), but the next save writes the new form
+        RunEndMigration.migrate(root);
         for (Section section : Section.values()) {
             JsonElement value = root.get(section.jsonName());
             boolean valid = value == null || value.isJsonNull()
@@ -444,55 +467,60 @@ public final class PipelineDocument {
         return value != null && value.isJsonPrimitive() ? value.getAsString() : "error";
     }
 
-    /** The program of "postProcess" (spec post-process), "" when absent. */
-    public String postProcessCommand() {
-        JsonElement command = postProcess().map(block -> block.get("command")).orElse(null);
-        return command != null && command.isJsonPrimitive() ? command.getAsString() : "";
-    }
+    // ---- run-end actions (spec run-end) ----
 
-    /** Its arguments, the non-text ones left out. */
-    public List<String> postProcessArgs() {
-        JsonElement args = postProcess().map(block -> block.get("args")).orElse(null);
-        if (args == null || !args.isJsonArray()) {
-            return List.of();
+    /**
+     * The outcomes a run-end action runs for ("when"), in the order of {@link #RUN_END_OUTCOMES}: those of the former
+     * post-processing when absent; the unknown values are left out (the engine refuses them).
+     */
+    public List<String> runEndWhen(JsonObject step) {
+        JsonElement when = step.get(WHEN);
+        if (when == null || when.isJsonNull()) {
+            return RunEndStepConfig.DEFAULT_WHEN;
         }
-        List<String> list = new ArrayList<>();
-        for (JsonElement arg : args.getAsJsonArray()) {
-            if (arg.isJsonPrimitive()) {
-                list.add(arg.getAsString());
-            }
-        }
-        return list;
-    }
-
-    private Optional<JsonObject> postProcess() {
-        JsonElement block = root.get("postProcess");
-        return block != null && block.isJsonObject() ? Optional.of(block.getAsJsonObject()) : Optional.empty();
+        List<String> values = stringList(when);
+        return RUN_END_OUTCOMES.stream().filter(values::contains).toList();
     }
 
     /**
-     * A blank program removes the block; otherwise the program (without the quotes of Explorer's "copy as path") and
-     * the arguments (trimmed, blank ones dropped) are written.
+     * Writes the outcomes the action runs for, in the order of {@link #RUN_END_OUTCOMES}; the same ones as now rewrite
+     * nothing.
+     *
+     * @throws IllegalArgumentException none, or an unknown one: nothing is written
      */
-    public void setPostProcess(String command, List<String> args) {
-        String program = PostProcessConfig.unquote(command);
-        if (program.isEmpty()) {
-            if (root.remove("postProcess") != null) {
-                modified = true;
-            }
+    public void setRunEndWhen(JsonObject step, Collection<String> outcomes) {
+        if (outcomes.isEmpty() || !RUN_END_OUTCOMES.containsAll(outcomes)) {
+            throw new IllegalArgumentException("run-end conditions " + outcomes);
+        }
+        List<String> ordered = RUN_END_OUTCOMES.stream().filter(outcomes::contains).toList();
+        JsonArray when = new JsonArray();
+        ordered.forEach(when::add);
+        JsonElement current = step.get(WHEN);
+        boolean same = current == null || current.isJsonNull()
+                ? ordered.equals(RunEndStepConfig.DEFAULT_WHEN) // absent: those of the former post-processing
+                : when.equals(current);
+        if (same) {
             return;
         }
-        List<String> kept = args.stream().map(String::strip).filter(arg -> !arg.isEmpty()).toList();
-        if (program.equals(postProcessCommand()) && kept.equals(postProcessArgs())) {
-            return;
-        }
-        JsonObject block = new JsonObject();
-        block.addProperty("command", program);
-        JsonArray array = new JsonArray();
-        kept.forEach(array::add);
-        block.add("args", array);
-        root.add("postProcess", block);
+        step.add(WHEN, when);
         modified = true;
+    }
+
+    /** A "when" written in the file that the engine refuses: not a list, empty, or with an unknown value. */
+    private static boolean invalidWhen(JsonObject step) {
+        JsonElement when = step.get(WHEN);
+        if (when == null || when.isJsonNull()) {
+            return false;
+        }
+        if (!when.isJsonArray() || when.getAsJsonArray().isEmpty()) {
+            return true;
+        }
+        for (JsonElement value : when.getAsJsonArray()) {
+            if (!value.isJsonPrimitive() || !RUN_END_OUTCOMES.contains(value.getAsString())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // ---- grouping and archives (spec grouping-archives) ----
@@ -1046,9 +1074,24 @@ public final class PipelineDocument {
         return text(get(step, List.of(field.name())), field);
     }
 
-    /** Like {@link #setConfigText}; an integer stays within the int range (an Integer of PipelineStepConfig). */
+    /**
+     * Like {@link #setConfigText}; an integer stays within the int range (an Integer of PipelineStepConfig).
+     *
+     * @throws IllegalArgumentException also for a negative time limit (the engine refuses it)
+     */
     public void setAdvancedText(JsonObject step, ConfigField field, String text) {
+        if (TIMEOUT.equals(field.name()) && text != null && !text.isBlank()) {
+            JsonElement value = valueOf(field, text, true); // a number, or the exception of one that is not
+            if (value.getAsBigDecimal().signum() < 0) {
+                throw new IllegalArgumentException(text);
+            }
+        }
         setText(step, List.of(field.name()), field, text, true);
+    }
+
+    /** The "Advanced" fields of a step of the section: {@link #ADVANCED_FIELDS}, but a time limit for a run-end action. */
+    public static List<ConfigField> advancedFields(Section section) {
+        return section == Section.RUN_END ? RUN_END_ADVANCED_FIELDS : ADVANCED_FIELDS;
     }
 
     /** The JSON value of a schema field of the step's actionConfig, null when absent. */
@@ -1200,7 +1243,7 @@ public final class PipelineDocument {
     /**
      * The required fields left empty (spec desktop-ui §3), for the steps whose action is loaded: a required
      * field of a record counts only when the record is present. A step without action is a problem too
-     * (field path "action").
+     * (field path "action"), and so are the conditions of a run-end action the engine refuses (field path "when").
      */
     public List<Problem> validate(StepCatalog catalog) {
         List<Problem> problems = new ArrayList<>();
@@ -1216,9 +1259,50 @@ public final class PipelineDocument {
                 int index = i;
                 catalog.find(section, step).flatMap(CatalogAction::configSchema).ifPresent(schema ->
                         checkRequired(step, schema.fields(), section, index, problems));
+                if (section == Section.RUN_END && invalidWhen(step)) {
+                    problems.add(new Problem(section, i, WHEN));
+                }
             }
         }
         return problems;
+    }
+
+    /** A reference to a secret not defined on this machine: the step at index of the section, the secret's name. */
+    public record UnknownSecret(Section section, int index, String name) {
+    }
+
+    /**
+     * The secrets the action configurations refer to ({@code ${secret:name}} in any text value) that are not among
+     * these names: not blocking (a pipeline may be shared with a machine where they are defined), the save only warns.
+     */
+    public List<UnknownSecret> unknownSecrets(Collection<String> definedNames) {
+        List<UnknownSecret> unknown = new ArrayList<>();
+        for (Section section : Section.values()) {
+            List<JsonObject> steps = steps(section);
+            for (int i = 0; i < steps.size(); i++) {
+                Set<String> names = new LinkedHashSet<>();
+                collectSecretNames(steps.get(i).get("actionConfig"), names);
+                for (String name : names) {
+                    if (!definedNames.contains(name)) {
+                        unknown.add(new UnknownSecret(section, i, name));
+                    }
+                }
+            }
+        }
+        return unknown;
+    }
+
+    private static void collectSecretNames(JsonElement element, Set<String> names) {
+        if (element == null || element.isJsonNull()) {
+            return;
+        }
+        if (element.isJsonObject()) {
+            element.getAsJsonObject().entrySet().forEach(member -> collectSecretNames(member.getValue(), names));
+        } else if (element.isJsonArray()) {
+            element.getAsJsonArray().forEach(item -> collectSecretNames(item, names));
+        } else if (element.getAsJsonPrimitive().isString()) {
+            names.addAll(SecretField.secretNames(element.getAsString()));
+        }
     }
 
     private static void checkRequired(JsonObject step, List<ConfigField> fields, Section section, int index,

@@ -1,11 +1,16 @@
 package com.copybot.engine.plugin;
 
+import com.copybot.config.SecretStore;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.AbstractAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.IProcessAction;
+import com.copybot.plugin.api.action.IRunEndAction;
 import com.copybot.resources.ResourcesEngine;
+import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -14,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.logging.Handler;
@@ -185,5 +191,69 @@ public class PluginEngineTest {
         List<String> ids = PluginEngine.getLoadedPlugins().stream().map(p -> p.getName() + ":" + p.getVersion()).toList();
         assertFalse(ids.isEmpty(), "at least the embedded plugin is loaded");
         assertEquals(ids.size(), new HashSet<>(ids).size(), "no plugin is loaded twice: " + ids);
+    }
+
+    private static PipelineStepConfig step(String action, String config) {
+        return new PipelineStepConfig(null, action, null, null, null, null, null, JsonParser.parseString(config));
+    }
+
+    private SecretStore secrets() throws Exception {
+        SecretStore store = SecretStore.at(tempDir.resolve("secrets.json"));
+        store.set("src", tempDir.resolve("card").toString());
+        store.set("gb", "hunter2");
+        return store;
+    }
+
+    @Test
+    public void aSecretReferenceIsResolvedJustBeforeLoadConfig() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of());
+        PluginEngine.useSecretsForTest(secrets());
+        try {
+            PipelineStepConfig read = step("file.read", "{\"path\":\"${secret:src}\"}");
+
+            PipelineStep<IInAction> step = PluginEngine.resolve(read, IInAction.class);
+
+            assertEquals(Set.of(tempDir.resolve("card")), step.getAction().touchedPaths(null));
+            assertEquals("{\"path\":\"${secret:src}\"}", step.getConfig().actionConfig().toString(),
+                    "the step keeps the reference, never the value");
+        } finally {
+            PluginEngine.useSecretsForTest(null);
+        }
+    }
+
+    @Test
+    public void aMissingSecretRefusesTheStepWhateverItsType() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of());
+        PluginEngine.useSecretsForTest(secrets());
+        try {
+            String refusal = ResourcesEngine.getString("secret.missing", "nope");
+            assertEquals(refusal, assertThrows(CopybotException.class, () -> PluginEngine.resolve(
+                    step("file.read", "{\"path\":\"${secret:nope}\"}"), IInAction.class)).getMessage());
+            assertEquals(refusal, assertThrows(CopybotException.class, () -> PluginEngine.resolve(
+                    step("file.buffer", "{\"folder\":\"${secret:nope}\"}"), IProcessAction.class)).getMessage());
+            assertEquals(refusal, assertThrows(CopybotException.class, () -> PluginEngine.resolve(
+                    step("file.write", "{\"outPattern\":\"${secret:nope}/{name}\"}"), IOutAction.class)).getMessage());
+            assertEquals(refusal, assertThrows(CopybotException.class, () -> PluginEngine.resolve(
+                    step("post.process", "{\"command\":\"${secret:nope}\"}"), IRunEndAction.class)).getMessage());
+        } finally {
+            PluginEngine.useSecretsForTest(null);
+        }
+    }
+
+    @Test
+    public void anInvalidConfigurationNeverShowsTheSecretValue() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of());
+        PluginEngine.useSecretsForTest(secrets());
+        try {
+            RuntimeException e = assertThrows(RuntimeException.class, () -> PluginEngine.resolve(
+                    step("file.buffer", "{\"keepFreeGb\":\"${secret:gb}\"}"), IProcessAction.class));
+
+            for (Throwable t = e; t != null; t = t.getCause()) {
+                assertFalse(String.valueOf(t.getMessage()).contains("hunter2"), t.toString());
+            }
+            assertTrue(e.getMessage().contains("${secret:gb}"), "the reference tells which value: " + e.getMessage());
+        } finally {
+            PluginEngine.useSecretsForTest(null);
+        }
     }
 }

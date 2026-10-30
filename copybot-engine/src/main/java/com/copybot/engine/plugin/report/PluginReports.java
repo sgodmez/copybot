@@ -79,6 +79,7 @@ public final class PluginReports {
         add(actions, plugin, StepType.ANALYZE, plugin.getAnalyzeActions());
         add(actions, plugin, StepType.PROCESS, plugin.getProcessActions());
         add(actions, plugin, StepType.OUT, plugin.getOutActions());
+        add(actions, plugin, StepType.RUN_END, plugin.getRunEndActions());
         return actions;
     }
 

@@ -18,6 +18,7 @@ import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
 
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -145,9 +146,11 @@ final class ItemRunner {
                 }
             }
             if (outcome.skipReason() != null) {
-                exec.setSkipped(outcome.skipReason());
-            } else if (!outcome.continueItem() || (toStep == steps.size() && finalPhase)) {
-                exec.setDone();
+                exec.setSkippedByOutput(outcome.skipReason(), outcome.target());
+            } else if (!outcome.continueItem()) {
+                exec.setFiltered();
+            } else if (toStep == steps.size() && finalPhase) {
+                exec.setWritten(outcome.target());
             } else {
                 exec.setReady();
                 if (!finalPhase) {
@@ -264,14 +267,20 @@ final class ItemRunner {
      *
      * @param continueItem false when the item stops here
      * @param skipReason   non null when the out step skipped the item: it ends SKIPPED with this reason
+     * @param target       where the out step wrote the item, or the existing target that made it skip it; null when
+     *                     it cannot tell (or for another step)
      */
-    private record StepOutcome(boolean continueItem, String skipReason) {
-        static final StepOutcome CONTINUE = new StepOutcome(true, null);
+    private record StepOutcome(boolean continueItem, String skipReason, Path target) {
+        static final StepOutcome CONTINUE = new StepOutcome(true, null, null);
         /** Filtered out by a process step: the item ends DONE. */
-        static final StepOutcome FILTERED = new StepOutcome(false, null);
+        static final StepOutcome FILTERED = new StepOutcome(false, null, null);
 
-        static StepOutcome skipped(String reason) {
-            return new StepOutcome(false, reason);
+        static StepOutcome skipped(String reason, Path target) {
+            return new StepOutcome(false, reason, target);
+        }
+
+        static StepOutcome written(Path target) {
+            return new StepOutcome(true, null, target);
         }
     }
 
@@ -290,7 +299,11 @@ final class ItemRunner {
         return ItemProgress.callWith(progress, () -> {
             WorkItem item = exec.getWorkItem();
             exec.stepBegan(stepIndex, item);
-            action.beforeEach(item);
+            try {
+                action.beforeEach(item);
+            } catch (RuntimeException e) {
+                throw redacted(step, e);
+            }
             StepOutcome outcome;
             try {
                 outcome = runStep(exec, step, stepIndex, toStep, progress);
@@ -300,11 +313,30 @@ final class ItemRunner {
                 } catch (Throwable after) {
                     t.addSuppressed(after); // the failure of the step is the one to report
                 }
+                if (t instanceof RuntimeException e) {
+                    throw redacted(step, e);
+                }
                 throw t;
             }
-            action.afterEach(item);
+            try {
+                action.afterEach(item);
+            } catch (RuntimeException e) {
+                throw redacted(step, e);
+            }
             return outcome;
         });
+    }
+
+    /**
+     * The failure of the step's action without the secret values it was configured with: the error of the item never
+     * shows one. The engine's own control exceptions are left as they are, whatever their text: the callers tell them
+     * apart by their type.
+     */
+    static RuntimeException redacted(PipelineStep<?> step, RuntimeException e) {
+        if (e instanceof PhaseStopped || e instanceof RejectedExecutionException) {
+            return e;
+        }
+        return step.getRedactor().redact(e);
     }
 
     /**
@@ -346,9 +378,9 @@ final class ItemRunner {
         if (action instanceof IOutAction out) {
             WriteResult result = out.write(item, writeContext.withProgress(progress));
             if (result != null && result.isSkipped()) {
-                return StepOutcome.skipped(result.reason()); // the steps after it, if any, do not run
+                return StepOutcome.skipped(result.reason(), result.target()); // the steps after it, if any, do not run
             }
-            return StepOutcome.CONTINUE;
+            return StepOutcome.written(result == null ? null : result.target());
         }
         throw new UnsupportedOperationException("Unsupported action type: " + action.getClass());
     }

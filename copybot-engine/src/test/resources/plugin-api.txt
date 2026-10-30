@@ -81,6 +81,16 @@ com.copybot.plugin.api.action.IOutAction type public abstract interface com.copy
 com.copybot.plugin.api.action.IProcessAction method public abstract java.util.List<com.copybot.plugin.api.action.WorkItem> doProcess(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.IProcessAction method public default java.util.Optional<java.util.List<com.copybot.plugin.api.action.WorkItem>> dryRun(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.IProcessAction type public abstract interface com.copybot.plugin.api.action.IProcessAction extends com.copybot.plugin.api.action.IAction
+com.copybot.plugin.api.action.IRunEndAction method public abstract void runEnded(com.copybot.plugin.api.action.RunReport,com.copybot.plugin.api.action.RunEndContext)
+com.copybot.plugin.api.action.IRunEndAction method public default java.time.Duration defaultTimeout()
+com.copybot.plugin.api.action.IRunEndAction type public abstract interface com.copybot.plugin.api.action.IRunEndAction extends com.copybot.plugin.api.action.IAction
+com.copybot.plugin.api.action.ItemOutcome field public static final com.copybot.plugin.api.action.ItemOutcome ERROR
+com.copybot.plugin.api.action.ItemOutcome field public static final com.copybot.plugin.api.action.ItemOutcome FILTERED
+com.copybot.plugin.api.action.ItemOutcome field public static final com.copybot.plugin.api.action.ItemOutcome SKIPPED
+com.copybot.plugin.api.action.ItemOutcome field public static final com.copybot.plugin.api.action.ItemOutcome WRITTEN
+com.copybot.plugin.api.action.ItemOutcome method public static com.copybot.plugin.api.action.ItemOutcome valueOf(java.lang.String)
+com.copybot.plugin.api.action.ItemOutcome method public static com.copybot.plugin.api.action.ItemOutcome[] values()
+com.copybot.plugin.api.action.ItemOutcome type public final enum com.copybot.plugin.api.action.ItemOutcome extends java.lang.Enum<com.copybot.plugin.api.action.ItemOutcome>
 com.copybot.plugin.api.action.ItemProgress field public static final com.copybot.plugin.api.action.ItemProgress NONE
 com.copybot.plugin.api.action.ItemProgress method public abstract void report(com.copybot.plugin.api.action.WorkStatus)
 com.copybot.plugin.api.action.ItemProgress method public default void percent(int)
@@ -91,6 +101,54 @@ com.copybot.plugin.api.action.ListingSink method public abstract void folderDone
 com.copybot.plugin.api.action.ListingSink method public abstract void item(com.copybot.plugin.api.action.WorkItem)
 com.copybot.plugin.api.action.ListingSink method public default void root(java.lang.String)
 com.copybot.plugin.api.action.ListingSink type public abstract interface com.copybot.plugin.api.action.ListingSink
+com.copybot.plugin.api.action.RunCounts constructor public <init>(int,int,int,int)
+com.copybot.plugin.api.action.RunCounts method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.action.RunCounts method public final int hashCode()
+com.copybot.plugin.api.action.RunCounts method public final java.lang.String toString()
+com.copybot.plugin.api.action.RunCounts method public int errors()
+com.copybot.plugin.api.action.RunCounts method public int filtered()
+com.copybot.plugin.api.action.RunCounts method public int skipped()
+com.copybot.plugin.api.action.RunCounts method public int written()
+com.copybot.plugin.api.action.RunCounts type public final record com.copybot.plugin.api.action.RunCounts extends java.lang.Record
+com.copybot.plugin.api.action.RunEndContext method public abstract void publish(java.lang.String,java.lang.String)
+com.copybot.plugin.api.action.RunEndContext method public abstract void warn(java.lang.String)
+com.copybot.plugin.api.action.RunEndContext type public abstract interface com.copybot.plugin.api.action.RunEndContext
+com.copybot.plugin.api.action.RunItem constructor public <init>(java.lang.String,java.lang.String,com.copybot.plugin.api.action.ItemOutcome,java.nio.file.Path,java.lang.String)
+com.copybot.plugin.api.action.RunItem method public com.copybot.plugin.api.action.ItemOutcome outcome()
+com.copybot.plugin.api.action.RunItem method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.action.RunItem method public final int hashCode()
+com.copybot.plugin.api.action.RunItem method public final java.lang.String toString()
+com.copybot.plugin.api.action.RunItem method public java.lang.String name()
+com.copybot.plugin.api.action.RunItem method public java.lang.String reason()
+com.copybot.plugin.api.action.RunItem method public java.lang.String source()
+com.copybot.plugin.api.action.RunItem method public java.nio.file.Path target()
+com.copybot.plugin.api.action.RunItem type public final record com.copybot.plugin.api.action.RunItem extends java.lang.Record
+com.copybot.plugin.api.action.RunOutcome field public static final com.copybot.plugin.api.action.RunOutcome CANCELLED
+com.copybot.plugin.api.action.RunOutcome field public static final com.copybot.plugin.api.action.RunOutcome ERROR
+com.copybot.plugin.api.action.RunOutcome field public static final com.copybot.plugin.api.action.RunOutcome SUCCESS
+com.copybot.plugin.api.action.RunOutcome method public static com.copybot.plugin.api.action.RunOutcome valueOf(java.lang.String)
+com.copybot.plugin.api.action.RunOutcome method public static com.copybot.plugin.api.action.RunOutcome[] values()
+com.copybot.plugin.api.action.RunOutcome type public final enum com.copybot.plugin.api.action.RunOutcome extends java.lang.Enum<com.copybot.plugin.api.action.RunOutcome>
+com.copybot.plugin.api.action.RunReport constructor public <init>(java.lang.String,java.nio.file.Path,com.copybot.plugin.api.action.RunOutcome,java.time.Instant,java.time.Instant,java.time.Instant,com.copybot.plugin.api.action.RunCounts,java.util.List<com.copybot.plugin.api.action.RunItem>,java.util.List<com.copybot.plugin.api.action.WrittenFile>,java.util.List<java.nio.file.Path>,java.util.List<java.lang.String>,java.lang.String,java.lang.String,java.util.Map<java.lang.String, java.lang.String>)
+com.copybot.plugin.api.action.RunReport method public com.copybot.plugin.api.action.RunCounts counts()
+com.copybot.plugin.api.action.RunReport method public com.copybot.plugin.api.action.RunOutcome outcome()
+com.copybot.plugin.api.action.RunReport method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.action.RunReport method public final int hashCode()
+com.copybot.plugin.api.action.RunReport method public final java.lang.String toString()
+com.copybot.plugin.api.action.RunReport method public java.lang.String failure()
+com.copybot.plugin.api.action.RunReport method public java.lang.String pipelineName()
+com.copybot.plugin.api.action.RunReport method public java.lang.String runId()
+com.copybot.plugin.api.action.RunReport method public java.nio.file.Path pipelinePath()
+com.copybot.plugin.api.action.RunReport method public java.time.Duration duration()
+com.copybot.plugin.api.action.RunReport method public java.time.Instant copyStarted()
+com.copybot.plugin.api.action.RunReport method public java.time.Instant ended()
+com.copybot.plugin.api.action.RunReport method public java.time.Instant started()
+com.copybot.plugin.api.action.RunReport method public java.util.List<com.copybot.plugin.api.action.RunItem> items()
+com.copybot.plugin.api.action.RunReport method public java.util.List<com.copybot.plugin.api.action.WrittenFile> writtenFiles()
+com.copybot.plugin.api.action.RunReport method public java.util.List<java.lang.String> warnings()
+com.copybot.plugin.api.action.RunReport method public java.util.List<java.nio.file.Path> createdDirectories()
+com.copybot.plugin.api.action.RunReport method public java.util.Map<java.lang.String, java.lang.String> outputs()
+com.copybot.plugin.api.action.RunReport type public final record com.copybot.plugin.api.action.RunReport extends java.lang.Record
 com.copybot.plugin.api.action.SourceDeleter method public abstract void delete() throws java.io.IOException
 com.copybot.plugin.api.action.SourceDeleter type public abstract interface com.copybot.plugin.api.action.SourceDeleter
 com.copybot.plugin.api.action.TargetCheck constructor public <init>(com.copybot.plugin.api.action.TargetCheck$Kind,java.nio.file.Path,java.lang.String)
@@ -177,8 +235,10 @@ com.copybot.plugin.api.action.WorkStatus type public final record com.copybot.pl
 com.copybot.plugin.api.action.WriteContext constructor public <init>(java.lang.String)
 com.copybot.plugin.api.action.WriteContext constructor public <init>(java.lang.String,com.copybot.plugin.api.action.ItemProgress)
 com.copybot.plugin.api.action.WriteContext constructor public <init>(java.lang.String,com.copybot.plugin.api.action.ItemProgress,java.util.function.Consumer<java.nio.file.Path>)
+com.copybot.plugin.api.action.WriteContext constructor public <init>(java.lang.String,com.copybot.plugin.api.action.ItemProgress,java.util.function.Consumer<java.nio.file.Path>,com.copybot.plugin.api.action.WriteContext$FileWritten)
 com.copybot.plugin.api.action.WriteContext method public com.copybot.plugin.api.action.ItemProgress progress()
 com.copybot.plugin.api.action.WriteContext method public com.copybot.plugin.api.action.WriteContext withProgress(com.copybot.plugin.api.action.ItemProgress)
+com.copybot.plugin.api.action.WriteContext method public com.copybot.plugin.api.action.WriteContext$FileWritten fileWritten()
 com.copybot.plugin.api.action.WriteContext method public final boolean equals(java.lang.Object)
 com.copybot.plugin.api.action.WriteContext method public final int hashCode()
 com.copybot.plugin.api.action.WriteContext method public final java.lang.String toString()
@@ -187,7 +247,10 @@ com.copybot.plugin.api.action.WriteContext method public java.util.function.Cons
 com.copybot.plugin.api.action.WriteContext method public static com.copybot.plugin.api.action.WriteContext newRun()
 com.copybot.plugin.api.action.WriteContext method public static com.copybot.plugin.api.action.WriteContext newRun(java.util.function.Consumer<java.nio.file.Path>)
 com.copybot.plugin.api.action.WriteContext method public void directoryCreated(java.nio.file.Path)
+com.copybot.plugin.api.action.WriteContext method public void fileWritten(java.nio.file.Path,java.lang.String,long)
 com.copybot.plugin.api.action.WriteContext type public final record com.copybot.plugin.api.action.WriteContext extends java.lang.Record
+com.copybot.plugin.api.action.WriteContext$FileWritten method public abstract void fileWritten(java.nio.file.Path,java.lang.String,long)
+com.copybot.plugin.api.action.WriteContext$FileWritten type public abstract static interface com.copybot.plugin.api.action.WriteContext$FileWritten
 com.copybot.plugin.api.action.WriteResult constructor public <init>(com.copybot.plugin.api.action.WriteResult$Outcome,java.nio.file.Path,java.lang.String)
 com.copybot.plugin.api.action.WriteResult method public boolean isSkipped()
 com.copybot.plugin.api.action.WriteResult method public com.copybot.plugin.api.action.WriteResult$Outcome outcome()
@@ -204,6 +267,14 @@ com.copybot.plugin.api.action.WriteResult$Outcome field public static final com.
 com.copybot.plugin.api.action.WriteResult$Outcome method public static com.copybot.plugin.api.action.WriteResult$Outcome valueOf(java.lang.String)
 com.copybot.plugin.api.action.WriteResult$Outcome method public static com.copybot.plugin.api.action.WriteResult$Outcome[] values()
 com.copybot.plugin.api.action.WriteResult$Outcome type public static final enum com.copybot.plugin.api.action.WriteResult$Outcome extends java.lang.Enum<com.copybot.plugin.api.action.WriteResult$Outcome>
+com.copybot.plugin.api.action.WrittenFile constructor public <init>(java.nio.file.Path,java.lang.String,long)
+com.copybot.plugin.api.action.WrittenFile method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.action.WrittenFile method public final int hashCode()
+com.copybot.plugin.api.action.WrittenFile method public final java.lang.String toString()
+com.copybot.plugin.api.action.WrittenFile method public java.lang.String sha256()
+com.copybot.plugin.api.action.WrittenFile method public java.nio.file.Path target()
+com.copybot.plugin.api.action.WrittenFile method public long size()
+com.copybot.plugin.api.action.WrittenFile type public final record com.copybot.plugin.api.action.WrittenFile extends java.lang.Record
 com.copybot.plugin.api.config.AllowedValues method public abstract java.lang.String[] value()
 com.copybot.plugin.api.config.AllowedValues type public abstract @interface com.copybot.plugin.api.config.AllowedValues extends java.lang.annotation.Annotation
 com.copybot.plugin.api.config.ConfigField constructor public <init>(java.lang.String,java.lang.String,com.copybot.plugin.api.config.FieldKind,boolean,java.lang.String,java.util.Set<com.copybot.plugin.api.config.FieldHint>,java.lang.String,java.lang.String,java.util.List<com.copybot.plugin.api.config.ConfigField>,java.util.List<java.lang.String>,com.copybot.plugin.api.config.ConfigField)
@@ -242,6 +313,7 @@ com.copybot.plugin.api.config.DirectoryPath type public abstract @interface com.
 com.copybot.plugin.api.config.FieldHint field public static final com.copybot.plugin.api.config.FieldHint DIRECTORY
 com.copybot.plugin.api.config.FieldHint field public static final com.copybot.plugin.api.config.FieldHint FILE
 com.copybot.plugin.api.config.FieldHint field public static final com.copybot.plugin.api.config.FieldHint PATTERN
+com.copybot.plugin.api.config.FieldHint field public static final com.copybot.plugin.api.config.FieldHint SECRET
 com.copybot.plugin.api.config.FieldHint method public static com.copybot.plugin.api.config.FieldHint valueOf(java.lang.String)
 com.copybot.plugin.api.config.FieldHint method public static com.copybot.plugin.api.config.FieldHint[] values()
 com.copybot.plugin.api.config.FieldHint type public final enum com.copybot.plugin.api.config.FieldHint extends java.lang.Enum<com.copybot.plugin.api.config.FieldHint>
@@ -259,6 +331,7 @@ com.copybot.plugin.api.config.FieldKind type public final enum com.copybot.plugi
 com.copybot.plugin.api.config.FilePath type public abstract @interface com.copybot.plugin.api.config.FilePath extends java.lang.annotation.Annotation
 com.copybot.plugin.api.config.PatternField type public abstract @interface com.copybot.plugin.api.config.PatternField extends java.lang.annotation.Annotation
 com.copybot.plugin.api.config.Required type public abstract @interface com.copybot.plugin.api.config.Required extends java.lang.annotation.Annotation
+com.copybot.plugin.api.config.Secret type public abstract @interface com.copybot.plugin.api.config.Secret extends java.lang.annotation.Annotation
 com.copybot.plugin.api.definition.AbstractPlugin constructor public <init>()
 com.copybot.plugin.api.definition.AbstractPlugin method public com.copybot.resources.CombinedResourceBundle getResourceBundle()
 com.copybot.plugin.api.definition.AbstractPlugin method public java.lang.Iterable<java.lang.String> getI18nBundleNames()
@@ -274,6 +347,7 @@ com.copybot.plugin.api.definition.IPlugin method public default java.util.List<c
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IInAction>> getInActions()
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IOutAction>> getOutActions()
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IProcessAction>> getProcessActions()
+com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IRunEndAction>> getRunEndActions()
 com.copybot.plugin.api.definition.IPlugin method public default void loadConfig(com.google.gson.JsonElement)
 com.copybot.plugin.api.definition.IPlugin type public abstract interface com.copybot.plugin.api.definition.IPlugin
 com.copybot.plugin.api.pattern.OutPattern method public boolean directoryVaries()
@@ -310,6 +384,7 @@ com.copybot.resources.ResourcesEngine method public static void loadLanguage(jav
 com.copybot.resources.ResourcesEngine method public static void registerBundle(java.lang.String)
 com.copybot.resources.ResourcesEngine type public final class com.copybot.resources.ResourcesEngine
 com.copybot.utils.AtomicFiles method public static void write(java.nio.file.Path,byte[]) throws java.io.IOException
+com.copybot.utils.AtomicFiles method public static void write(java.nio.file.Path,byte[],java.nio.file.attribute.FileAttribute<?>...) throws java.io.IOException
 com.copybot.utils.AtomicFiles method public static void write(java.nio.file.Path,java.lang.String) throws java.io.IOException
 com.copybot.utils.AtomicFiles type public final class com.copybot.utils.AtomicFiles
 com.copybot.utils.FileUtil constructor public <init>()

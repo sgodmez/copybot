@@ -1,5 +1,7 @@
 package com.copybot.engine.plugin;
 
+import com.copybot.config.SecretReferences;
+import com.copybot.config.SecretStore;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.StepType;
@@ -26,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Supplier;
 
 public final class PluginEngine {
 
@@ -39,6 +42,9 @@ public final class PluginEngine {
 
     /** The broken plugins and actions already warned of by the catalog, built again at each editor opening. */
     private static final Set<String> CATALOG_WARNED = ConcurrentHashMap.newKeySet();
+
+    /** The store of the {@code ${secret:name}} references of the action configurations. */
+    private static volatile Supplier<SecretStore> secrets = SecretStore::forCurrentUser;
 
     /** Directories of the first (and only) load, null before it. Guarded by the class lock. */
     private static List<Path> loadedFrom;
@@ -108,7 +114,7 @@ public final class PluginEngine {
 
     /**
      * Every action of the loaded plugins (desktop-ui spec, part 4), in plugin order (name, then most recent
-     * version first) then step type (IN, ANALYZE, PROCESS, OUT), texts in the current language. Empty
+     * version first) then step type (IN, ANALYZE, PROCESS, OUT, RUN_END), texts in the current language. Empty
      * before {@link #load}. A plugin whose actions cannot be listed (e.g. a missing class) has none, with a
      * warning in the log (once per JVM), and is one of the {@link PluginCatalog#failedPlugins()}: it never
      * hides the others.
@@ -129,6 +135,7 @@ public final class PluginEngine {
                 addActions(pluginActions, plugin, StepType.ANALYZE, instance.getAnalyzeActions());
                 addActions(pluginActions, plugin, StepType.PROCESS, instance.getProcessActions());
                 addActions(pluginActions, plugin, StepType.OUT, instance.getOutActions());
+                addActions(pluginActions, plugin, StepType.RUN_END, instance.getRunEndActions());
             } catch (LinkageError | RuntimeException e) {
                 if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion())) {
                     LOG.warn(e, "plugin.catalog.failed", plugin.getName(), plugin.getVersion(), String.valueOf(e));
@@ -190,6 +197,13 @@ public final class PluginEngine {
         return value.equals("%" + key) ? Optional.empty() : Optional.of(value); // "%key": no such key
     }
 
+    /**
+     * A new configured instance of the step's action, whatever its type. The {@code ${secret:name}} and
+     * {@code ${env:NAME}} references of its configuration are resolved just before {@link IAction#loadConfig}
+     * (spec run-end, Secrets): a reference that cannot be resolved refuses the step by its name, and an invalid
+     * configuration never shows a resolved value in its error. The step's {@link PipelineStep#getRedactor()} hides
+     * them in what the action says later.
+     */
     public static <A extends IAction> PipelineStep<A> resolve(PipelineStepConfig stepConfig, Class<A> actionClass) {
         StepType type = StepType.getType(actionClass);
         // if config contains version, get plugin with desired version
@@ -204,8 +218,19 @@ public final class PluginEngine {
             throw new IllegalStateException(instance.getClass().getName() + " is not a " + actionClass.getSimpleName());
         }
         A action = actionClass.cast(instance);
-        action.loadConfig(stepConfig.actionConfig());
-        return new PipelineStep<>(pluginDef.getPluginInstance(), action, stepConfig);
+        // the action alone gets the values of ${secret:} and ${env:}; the step keeps the references
+        SecretReferences.Resolved config = SecretReferences.resolve(stepConfig.actionConfig(), secrets);
+        try {
+            action.loadConfig(config.config());
+        } catch (RuntimeException e) {
+            throw config.redact(e);
+        }
+        return new PipelineStep<>(pluginDef.getPluginInstance(), action, stepConfig, config);
+    }
+
+    // visible for tests: the secrets the references are resolved with, the current user's again with null
+    static void useSecretsForTest(SecretStore store) {
+        secrets = store == null ? SecretStore::forCurrentUser : () -> store;
     }
 
     /** A new instance of the action, chained with its plugin ({@link IAction#setPlugin}) before anything else. */

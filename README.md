@@ -90,17 +90,11 @@ libraries.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
   CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
-- **Launch a program after the copy.** A pipeline can name a program and its
-  arguments (`postProcess`, under the editor's *After the copy*). It starts
-  when a copy ends, unless the copy was cancelled, and Copybot does not wait
-  for it. An argument `{createdDirs}` becomes one argument per directory the
-  copy created. If the copy created none, the program does not start. For
-  example, this opens the photo rights of the new folders in synoRight:
-  `"postProcess": { "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe", "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"] }`.
-  synoRight keeps the folders it manages and waits until Synology Photos has
-  indexed them.
-  If the program cannot start, the run gets a warning, and its status stays
-  the copy's.
+- **Actions after the copy.** A pipeline can end with an ordered list of
+  actions (`runEnd`): launch a program such as synoRight, send an e-mail or a
+  webhook message (ntfy, Discord, Slack, Telegram), write a ZIP of the copied
+  files with their checksums. Passwords stay in a per-user vault. See
+  [After the copy](#after-the-copy-run-end-actions).
 - **Desktop application.** The home screen lists recent pipelines and how
   their last run went. The plan view has filters and a context menu: resume
   from here, ignore, see the planned processing, analyse. The pipeline editor
@@ -309,6 +303,141 @@ Known limits: the links inside a saved HTML page are not rewritten when its
 main file is renamed (the `_files` folder follows); only ZIP is
 supported (no 7z or tar.gz yet).
 
+## After the copy (run-end actions)
+
+A pipeline can end with an ordered list of actions, `runEnd`, set in the
+editor under *After the copy*. Each entry names an action and when it runs:
+
+```json
+"runEnd": [
+  { "action": "post.process", "when": ["success", "error"],
+    "actionConfig": { "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe",
+                      "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"] } },
+  { "plugin": "archive", "action": "archive.zip", "timeoutSeconds": 0,
+    "actionConfig": { "target": "D:\\Archives\\{pipeline}-{date}.zip" } }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `plugin` | The plugin of the action; absent for the embedded `post.process` |
+| `action` | The action code |
+| `when` | Among `success`, `error` and `cancelled`; absent: `success` and `error` (an empty list or another value is refused) |
+| `timeoutSeconds` | How long the action may take; `0` means no limit. Absent: 30 s for `post.process`, 60 s for e-mail and webhook, no limit for the archive. A negative value is refused |
+| `actionConfig` | The configuration of the action |
+
+**When actions run.** After every run that was started to copy, including a
+run whose preparation failed, and never after a plan-mode preparation alone.
+The actions run in list order, only for the outcomes in their `when`, and the
+status of the run is published once they are over (the action in progress is
+shown). An action that fails or times out gives a warning and does not stop the
+next ones. Cancelling skips the actions that remain. An action can hand values
+to the next ones: the archive publishes `archive.path`, which the e-mail and
+the webhook can put in their message as `{output:archive.path}`.
+
+**From `postProcess`.** A pipeline with the former `postProcess` block is
+converted when it is read (and in the editor): the block becomes a first
+`post.process` entry running on success and error, with the same command and
+arguments, unless the list already has one. The file is rewritten in the new
+shape the next time you save it.
+
+### post.process
+
+Starts a program and does not wait for it. `command` is the program and `args`
+its arguments; an argument `{createdDirs}` becomes one argument per directory
+the copy created, and if the copy created none the program does not start.
+If the program cannot start, the run gets a warning.
+
+### Secrets
+
+Anywhere in the configuration of an action, a text can hold `${secret:name}`
+(a secret of the vault) or `${env:NAME}` (an environment variable), several per
+value. They are replaced just before the action loads its configuration; the
+pipeline file keeps only the references, so it can be shared. `$${` stands for
+a literal `${` (for example PowerShell's `${env:PATH}` in the arguments of a
+program). Names are made of letters, digits, `.`, `_` and `-`.
+
+The vault is a per-user file: on Windows `%APPDATA%\Copybot\secrets.json`, the
+values protected with DPAPI (readable by your account on this machine only);
+elsewhere `$XDG_CONFIG_HOME/copybot/secrets.json` when that variable is an
+absolute path, else `~/.config/copybot/secrets.json`, readable by its owner only. Manage
+it from **Edit > Secrets…** in the application, or from the command line:
+
+```
+copybot secret set smtp-password     # the value is read without echo (or from stdin in a script)
+copybot secret list                  # names only
+copybot secret delete smtp-password
+```
+
+A reference to an undefined secret or variable refuses the step, naming the
+reference. An unknown secret name in the editor shows a warning (a pipeline may
+come from another machine). Secret values never appear in logs, messages or
+warnings of the actions: they are shown as their references. A password typed
+in clear in a field marked as secret gets a warning and an offer to move it to
+the vault.
+
+### notify-email: `email.send`
+
+```json
+{ "plugin": "notify-email", "action": "email.send", "when": ["success", "error"],
+  "actionConfig": {
+    "host": "smtp.example.org", "port": 587, "security": "starttls",
+    "user": "bot@example.org", "password": "${secret:smtp-password}",
+    "from": "copybot@example.org", "to": ["me@example.org"],
+    "subject": "Copybot \u2014 {pipeline} : {outcome}", "details": "errors" } }
+```
+
+`security` is `starttls` (default, required, not merely tried), `ssl` (TLS from
+the start, usually port 465) or `none`; `port` defaults to 465 with `ssl`, 587
+otherwise. With no `user`
+there is no authentication. With `none` and a user, the password travels in
+clear, and the run gets a warning. The subject accepts `{pipeline}`,
+`{outcome}`, `{written}`, `{skipped}`, `{errors}`, `{duration}` and
+`{output:key}`. `details` lists in the message `none`, the items in `errors`
+(default) or `all`. Connection, read and write timeouts of the SMTP socket are
+fixed at 20 s.
+
+### notify-webhook: `webhook.send`
+
+```json
+{ "plugin": "notify-webhook", "action": "webhook.send",
+  "actionConfig": { "url": "https://ntfy.sh/${secret:ntfy-topic}", "preset": "ntfy" } }
+```
+
+`preset` shapes the message: `json` (default; the summary of the run with the
+items in error, the `outputs` of the previous actions and the
+`createdDirectories`, without the list of written files), `ntfy` (plain text, a title, high priority on
+error), `discord`, `slack` or `telegram`. The Telegram preset posts to
+`api.telegram.org` with `"chat_id": "CHAT_ID"`: replace it through `body`. `headers`
+is a list of `Name: value` lines that replace the preset's header of the same
+name; `body` replaces the message with a template using `{pipeline}`,
+`{outcome}`, `{written}`, `{skipped}`, `{errors}`, `{duration}`, `{summary}` and
+`{output:key}`. Redirects are not followed (a 3xx is a failure). The URL, which
+may embed a token, and the header values are never written to a message or a log.
+
+### archive: `archive.zip`
+
+```json
+{ "plugin": "archive", "action": "archive.zip",
+  "actionConfig": { "target": "D:\\Archives\\{pipeline}\\{date}-{time}.zip",
+                    "content": "zip", "includeSkipped": false, "baseFolder": "D:\\Photos" } }
+```
+
+Writes an archive of the files the run copied, with the checksums computed
+during the copy (recomputed for a skipped file). `target` replaces `{date}`
+(`yyyy-MM-dd`), `{time}` (`HHmmss`) and `{pipeline}`; a relative path is
+relative to the pipeline's folder, as is `baseFolder`, the folder the entry
+paths are relative to (absent: the common directory of the files; a file
+outside it is left out). `content` is `zip` (default: the files and a
+`SHA256SUMS` manifest) or `manifest` (the `SHA256SUMS` file alone).
+`includeSkipped` also archives the targets of skipped items. Media entries
+(jpg, heic, raw, mp4, mov…) are not compressed (deflate level 0), the others
+are. The archive is written under a temporary name then renamed, and never
+overwrites a file: an existing target gets a ` (n)` suffix, and the real path
+is published as `archive.path`. If nothing was written, or the action is
+interrupted, nothing is produced. A file named `SHA256SUMS` at the root of your
+files is left out of the archive, with a warning.
+
 ## Plugins
 
 A plugin is a **JPMS module** that `provides com.copybot.plugin.api.definition.IPlugin`.
@@ -434,6 +563,9 @@ It produces:
 - `copybot-ui/target/copybot/` — the same as a jlink runtime image, also zipped as `copybot.zip`;
 - `copybot-plugin/copybot-plugin-metadata-extractor/target/` — the metadata plugin. Copy its jar and its `lib/` folder into `plugins/metadata-extractor/` next to the application.
 - `copybot-plugin/copybot-plugin-gps-zone/target/` — the optional GPS time zone check. Copy its jar and its `lib/` folder (about 36 MB, mostly the time zone boundaries) into `plugins/gps-zone/` next to the application. It loads the boundaries at the first photo whose GPS can tell (about 1 s and 200 MB of memory), never for an import without GPS. Its data is under the ODbL: see [NOTICE](NOTICE).
+- `copybot-plugin/copybot-plugin-notify-email/target/` — the end-of-run e-mail. Copy its jar and its `lib/` folder (Jakarta Mail) into `plugins/notify-email/` next to the application.
+- `copybot-plugin/copybot-plugin-notify-webhook/target/` — the end-of-run webhook (ntfy, Discord, Slack, Telegram, JSON). Copy its jar into `plugins/notify-webhook/` next to the application.
+- `copybot-plugin/copybot-plugin-archive/target/` — the end-of-run ZIP archive of the copied files. Copy its jar into `plugins/archive/` next to the application.
 
 **Where Copybot keeps its files:** the code (the application and its
 `plugins` folder) lives in the application folder. The data (`config.json`,
@@ -560,7 +692,9 @@ does that). That run configuration loads the metadata and gps-zone plugins
 straight from their `target/` folders through the `copybot.devPluginPaths`
 system property (folders separated by the platform path separator, `;` on
 Windows; ignored in the packaged application), so package these plugins once
-first. The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
+first. A dev run of the UI also needs the folders of the run-end plugins in
+`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target`
+(add them to the run configuration yourself). The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
 `logs/` are written (git-ignored).
 
 ## Why Copybot?
@@ -588,7 +722,7 @@ idea where to start again. Copybot is built around a few rules:
 |---|---|
 | [`copybot-engine`](copybot-engine) | The engine, the CLI, the plugin API (`com.copybot.plugin.api.*`) and the built-in `file.read` / `file.write` actions |
 | [`copybot-ui`](copybot-ui) | The JavaFX desktop application and its packaging |
-| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, and the optional `gps-zone` |
+| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive` |
 | [`copybot-plugin-demo`](copybot-plugin-demo) | Demo plugins exercising module isolation, versions and dependencies |
 | [`copybot-dependencies`](copybot-dependencies) | Shared dependency versions |
 

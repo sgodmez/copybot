@@ -15,6 +15,8 @@ import java.util.Optional;
 import static com.copybot.ui.model.TestCatalog.CATALOG;
 import static com.copybot.ui.model.TestCatalog.EXIF_1;
 import static com.copybot.ui.model.TestCatalog.EXIF_2;
+import static com.copybot.ui.model.TestCatalog.LAUNCH;
+import static com.copybot.ui.model.TestCatalog.MAIL;
 import static com.copybot.ui.model.TestCatalog.READ;
 import static com.copybot.ui.model.TestCatalog.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
@@ -32,6 +34,7 @@ public class StepCatalogTest {
         assertEquals(List.of(EXIF_2), CATALOG.forSection(Section.ANALYZE));
         assertEquals(List.of(), CATALOG.forSection(Section.PROCESS));
         assertEquals(List.of(WRITE), CATALOG.forSection(Section.OUT));
+        assertEquals(List.of(LAUNCH, MAIL), CATALOG.forSection(Section.RUN_END), "post.process and the plugins' actions");
     }
 
     @Test

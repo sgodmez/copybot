@@ -1,25 +1,33 @@
-package com.copybot.engine;
+package com.copybot.plugin.embedded.actions;
 
 import com.copybot.engine.pipeline.PostProcessConfig;
+import com.copybot.plugin.api.action.AbstractActionWithConfig;
+import com.copybot.plugin.api.action.IRunEndAction;
+import com.copybot.plugin.api.action.RunEndContext;
+import com.copybot.plugin.api.action.RunReport;
 import com.copybot.resources.ResourcesEngine;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 /**
- * Launches the program of the pipeline at the end of a copy (spec post-process), without waiting for it: the
- * directories the copy created replace {@link PostProcessConfig#CREATED_DIRS}, parents first.
+ * post.process: launches a program at the end of a copy (formerly the "postProcess" block), without waiting for it:
+ * the directories the copy created replace {@link PostProcessConfig#CREATED_DIRS}, parents first. A failed launch is
+ * a warning of the run.
  */
-final class PostProcess {
+public class PostProcessAction extends AbstractActionWithConfig<PostProcessConfig> implements IRunEndAction {
 
-    private static final System.Logger LOGGER = System.getLogger(PostProcess.class.getName());
+    public static final String CODE = "post.process";
 
-    /** Starts a process; visible for tests. */
-    interface Starter {
+    private static final System.Logger LOGGER = System.getLogger(PostProcessAction.class.getName());
+
+    /** Starts a process; a seam for the tests. */
+    public interface Starter {
         void start(List<String> commandLine, Path directory) throws IOException;
     }
 
@@ -37,16 +45,30 @@ final class PostProcess {
         builder.start().getOutputStream().close();
     };
 
-    private final PostProcessConfig config;
     private final Starter starter;
 
-    PostProcess(PostProcessConfig config, Starter starter) {
-        this.config = config;
+    public PostProcessAction() {
+        this(PROCESS_STARTER);
+    }
+
+    public PostProcessAction(Starter starter) {
         this.starter = starter;
     }
 
-    static PostProcess of(PostProcessConfig config) {
-        return new PostProcess(config, PROCESS_STARTER);
+    @Override
+    protected Class<PostProcessConfig> getConfigClass() {
+        return PostProcessConfig.class;
+    }
+
+    /** The program is only launched, never waited for. */
+    @Override
+    public Duration defaultTimeout() {
+        return Duration.ofSeconds(30);
+    }
+
+    @Override
+    public void runEnded(RunReport report, RunEndContext context) {
+        launch(report.createdDirectories()).ifPresent(context::warn);
     }
 
     /**
@@ -54,7 +76,8 @@ final class PostProcess {
      *
      * @return the warning of a failed launch
      */
-    Optional<String> run(Collection<Path> createdDirectories) {
+    public Optional<String> launch(Collection<Path> createdDirectories) {
+        PostProcessConfig config = getConfig();
         if (config == null || !config.isSet()) {
             return Optional.empty();
         }
@@ -71,12 +94,14 @@ final class PostProcess {
                 commandLine.add(arg);
             }
         }
-        LOGGER.log(System.Logger.Level.INFO, "Post-processing: {0}", commandLine);
+        // the program only: its arguments may hold the value of a ${secret:} or ${env:} reference
+        LOGGER.log(System.Logger.Level.INFO, "Post-processing: {0} ({1} arguments)", config.program(),
+                commandLine.size() - 1);
         try {
             starter.start(commandLine, directoryOf(config.program()));
             return Optional.empty();
         } catch (IOException | RuntimeException e) {
-            LOGGER.log(System.Logger.Level.WARNING, "Post-processing failed: " + commandLine, e);
+            LOGGER.log(System.Logger.Level.WARNING, "Post-processing failed: " + config.program(), e);
             return Optional.of(ResourcesEngine.getString("post-process.failed", config.program(),
                     e.getMessage() != null ? e.getMessage() : e.toString()));
         }

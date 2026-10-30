@@ -18,6 +18,19 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class WorkItemExecution {
 
+    /**
+     * How the steps of the copy ended an item, which {@link ItemStatus} alone does not tell (SKIPPED also covers the
+     * resume point, DONE also covers a filtered item): for the run report of the end-of-run actions.
+     */
+    public enum Ending {
+        /** DONE, written by the out step (or by the process steps of a pipeline without out step). */
+        WRITTEN,
+        /** SKIPPED by the out step (e.g. already at the destination). */
+        SKIPPED,
+        /** DONE, filtered out by a process step: nothing written. */
+        FILTERED
+    }
+
     private volatile WorkItem wi;
     private volatile WorkStatus ws;
 
@@ -28,6 +41,10 @@ public class WorkItemExecution {
     private volatile Set<String> waitingFor = Set.of();
     private volatile Throwable error;
     private volatile String skipReason;
+    /** How the steps of the copy ended it, null otherwise (not ended, failed, skipped by the resume point...). */
+    private volatile Ending ending;
+    /** Where the out step wrote it (WRITTEN), or the existing target that made it skip it (SKIPPED); null when it cannot tell. */
+    private volatile Path writtenTarget;
     /** SKIPPED because the resume point does not select it (its reason is the resume point, shown once by the UI). */
     private volatile boolean skippedByResumePoint;
     /** What the process steps would produce, by their dry run; set at the end of the preparation (spec pattern-helper §4.3). */
@@ -186,12 +203,58 @@ public class WorkItemExecution {
     }
 
     public void setDone() {
+        this.ending = null;
         this.waitingFor = Set.of();
         this.status = ItemStatus.DONE;
     }
 
+    /** DONE, written by the out step at this target (null when it cannot tell, or without out step). */
+    public void setWritten(Path target) {
+        // how it ended first: a reader seeing the status sees it too
+        this.writtenTarget = target;
+        this.ending = Ending.WRITTEN;
+        this.waitingFor = Set.of();
+        this.status = ItemStatus.DONE;
+    }
+
+    /** DONE, filtered out by a process step. */
+    public void setFiltered() {
+        this.ending = Ending.FILTERED; // before the status, like setWritten
+        this.waitingFor = Set.of();
+        this.status = ItemStatus.DONE;
+    }
+
+    /**
+     * SKIPPED by the out step (e.g. already at the destination), with the reason shown to the user and the existing
+     * target that made it skip the item (null when it cannot tell).
+     */
+    public void setSkippedByOutput(String reason, Path target) {
+        this.skipReason = reason;
+        this.writtenTarget = target;
+        this.skippedByResumePoint = false;
+        this.ending = Ending.SKIPPED; // before the status, like setWritten
+        this.waitingFor = Set.of();
+        this.status = ItemStatus.SKIPPED;
+    }
+
+    /** How the steps of the copy ended this item; null when they did not (see {@link Ending}). */
+    public Ending getEnding() {
+        return ending;
+    }
+
+    /** Where the out step wrote it, null unless {@link Ending#WRITTEN} (or when the out step cannot tell). */
+    public Path getWrittenTarget() {
+        return ending == Ending.WRITTEN ? writtenTarget : null;
+    }
+
+    /** The existing target that made the out step skip it, null unless {@link Ending#SKIPPED} (or when it cannot tell). */
+    public Path getSkippedTarget() {
+        return ending == Ending.SKIPPED ? writtenTarget : null;
+    }
+
     public void setError(Throwable error) {
         this.error = error;
+        this.ending = null;
         this.waitingFor = Set.of();
         this.status = ItemStatus.ERROR;
     }
@@ -200,6 +263,7 @@ public class WorkItemExecution {
     public void setSkipped(String reason) {
         this.skipReason = reason;
         this.skippedByResumePoint = false;
+        this.ending = null;
         this.waitingFor = Set.of();
         this.status = ItemStatus.SKIPPED;
     }
@@ -267,6 +331,7 @@ public class WorkItemExecution {
     public void setReady() {
         this.skipReason = null;
         this.skippedByResumePoint = false;
+        this.ending = null;
         this.waitingFor = Set.of();
         this.status = ItemStatus.PENDING;
     }

@@ -333,6 +333,7 @@ public class FileWriteAction extends AbstractActionWithConfig<FileWriteConfig> i
             throw e;
         }
         workItem.getMetadatas().raw().put(WorkItemMetadata.SHA256, written.sha256());
+        context.fileWritten(decision.target(), written.sha256(), written.size());
         deleteSource(settings, workItem, decision.target());
         return WriteResult.written(decision.target());
     }

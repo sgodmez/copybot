@@ -16,6 +16,7 @@ import com.copybot.engine.resume.ResumeStateStore;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.ListingSink;
+import com.copybot.plugin.api.action.RunOutcome;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WriteContext;
@@ -30,8 +31,10 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -163,6 +166,14 @@ class MainExecutorGroupingTest {
 
     private static PipelineConfig listing(GroupingConfig grouping, ArchivesConfig archives) {
         return new PipelineConfig(null, null, null, null, null, null, null, null, grouping, archives);
+    }
+
+    /** One run-end action for every outcome, logging its calls. */
+    private static List<String> runEndLog(MainExecutor exec) {
+        List<String> log = new CopyOnWriteArrayList<>();
+        MainExecutorRunEndTest.Act action = new MainExecutorRunEndTest.Act("end", log, (report, context) -> { });
+        exec.setRunEnd(List.of(new RunEnd.Entry("end", action, EnumSet.allOf(RunOutcome.class), Duration.ofSeconds(30))));
+        return log;
     }
 
     private static PipelineConfig streaming(GroupingConfig grouping) {
@@ -444,10 +455,12 @@ class MainExecutorGroupingTest {
                 List.of(new PipelineStep<>(null, out, ControlFakes.emptyConfig())),
                 true, null, registry(Map.of("disk:*", 1000)));
         exec.setListingConfig(streaming(rawXmp()));
+        List<String> runEnd = runEndLog(exec);
 
         exec.stream();
 
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(List.of("end"), runEnd, "the run-end actions run once, through the fallback");
         assertEquals(List.of(2, 2), doneAtWrites, "every input listed before the first copy");
         assertEquals(List.of(ResourcesEngine.getString("grouping.streaming-fallback", "FolderIn")),
                 exec.getState().getWarnings());
@@ -460,10 +473,12 @@ class MainExecutorGroupingTest {
         CompanionOut out = new CompanionOut();
         MainExecutor exec = withResume(in, out, registry(Map.of("disk:*", 1000)), store());
         exec.setListingConfig(streaming(rawXmp()));
+        List<String> runEnd = runEndLog(exec);
 
         exec.stream();
 
         assertEquals(PipelineStatus.SUCCESS, exec.getState().getStatus());
+        assertEquals(List.of("end"), runEnd, "the run-end actions run once, after the execution");
         assertEquals(List.of(ResourcesEngine.getString("grouping.streaming-fallback", "FolderIn")),
                 exec.getState().getWarnings(), "told once, through the preparation and the execution");
         assertEquals(1, exec.getState().getWorkItems().size());

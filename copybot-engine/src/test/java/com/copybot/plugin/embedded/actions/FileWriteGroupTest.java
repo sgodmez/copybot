@@ -96,6 +96,30 @@ public class FileWriteGroupTest {
     }
 
     @Test
+    public void everyFileWrittenIsTold() throws IOException {
+        List<String> told = new CopyOnWriteArrayList<>();
+        WriteContext context = new WriteContext("run1", null, null,
+                (target, sha256, size) -> told.add(tempDir.relativize(target) + " " + sha256.length() + " " + size));
+
+        action("").write(rawWithXmp("raw", "xmp!"), context);
+        action("").write(source("IMG_2.JPG", "jpeg"), context);
+
+        String nas = "nas" + java.io.File.separator;
+        assertEquals(List.of(nas + "IMG_1.CR3 64 3", nas + "IMG_1.xmp 64 4", nas + "IMG_2.JPG 64 4"), told);
+    }
+
+    @Test
+    public void aCompanionWrittenNextToASkippedMainIsTold() throws IOException {
+        nas("IMG_1.CR3", "raw");
+        List<Path> told = new CopyOnWriteArrayList<>();
+
+        action("").write(rawWithXmp("raw", "xmp"), new WriteContext("run1", null, null,
+                (target, sha256, size) -> told.add(target)));
+
+        assertEquals(List.of(nasPath("IMG_1.xmp")), told);
+    }
+
+    @Test
     public void aMissingCompanionIsWrittenWhenTheMainIsSkippedAsIdentical() throws IOException {
         nas("IMG_1.CR3", "raw");
 

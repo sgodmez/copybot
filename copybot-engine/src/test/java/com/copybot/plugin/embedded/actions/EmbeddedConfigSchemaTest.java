@@ -125,4 +125,23 @@ public class EmbeddedConfigSchemaTest {
             }
         }
     }
+
+    @Test
+    public void postProcessDescribesItsProgramInEveryLanguage() throws IOException {
+        ConfigSchema schema = new PostProcessAction().configSchema().orElseThrow()
+                .withKeyPrefix("plugin.embedded.post.process");
+        assertTrue(field(schema, "command").required());
+        assertTrue(field(schema, "command").hasHint(FieldHint.FILE));
+        assertEquals(FieldKind.LIST, field(schema, "args").kind());
+        for (String file : List.of("pluginBundle.properties", "pluginBundle_fr.properties", "pluginBundle_it.properties")) {
+            Properties properties = bundle(file);
+            for (ConfigField field : schema.allFields()) {
+                assertNotNull(properties.getProperty(field.labelKey()), field.labelKey() + " in " + file);
+                assertNotNull(properties.getProperty(field.descriptionKey()), field.descriptionKey() + " in " + file);
+            }
+            for (String suffix : List.of(".name", ".description")) {
+                assertNotNull(properties.getProperty("plugin.embedded.post.process" + suffix), suffix + " in " + file);
+            }
+        }
+    }
 }

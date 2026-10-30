@@ -28,6 +28,8 @@ import java.util.Set;
 
 import static com.copybot.ui.model.TestCatalog.CATALOG;
 import static com.copybot.ui.model.TestCatalog.EXIF_2;
+import static com.copybot.ui.model.TestCatalog.LAUNCH;
+import static com.copybot.ui.model.TestCatalog.MAIL;
 import static com.copybot.ui.model.TestCatalog.READ;
 import static com.copybot.ui.model.TestCatalog.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
@@ -139,32 +141,142 @@ public class PipelineDocumentTest {
                 "an unknown mode reads as the default (the engine refuses it)");
     }
 
+    // ---- run-end actions (spec run-end, editor) ----
+
+    /** The former block is converted at the opening, like the engine reads it: saving writes the new form. */
     @Test
-    public void thePostProcessingIsWrittenOnlyWithAProgram() {
+    public void aFormerPostProcessBlockOpensAsTheFirstRunEndAction() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("legacy.json"), """
+                { "postProcess": { "command": "D:\\\\progs\\\\synoRight.exe", "args": ["gui", "{createdDirs}"] },
+                  "runEnd": [ { "plugin": "notify-email", "action": "email.send" } ] }
+                """);
+
+        PipelineDocument document = PipelineDocument.load(file);
+
+        List<JsonObject> runEnd = document.steps(Section.RUN_END);
+        assertEquals(2, runEnd.size());
+        assertEquals(tree("""
+                { "action": "post.process", "when": ["success", "error"],
+                  "actionConfig": { "command": "D:\\\\progs\\\\synoRight.exe", "args": ["gui", "{createdDirs}"] } }
+                """), runEnd.getFirst());
+        assertEquals("email.send", runEnd.get(1).get("action").getAsString(), "the existing entries follow");
+        assertFalse(document.isModified(), "the same pipeline for the engine: closing asks nothing");
+
+        document.save(file);
+        JsonObject saved = tree(Files.readString(file));
+        assertFalse(saved.has("postProcess"));
+        assertEquals(2, saved.getAsJsonArray("runEnd").size(), "saved in the new form");
+    }
+
+    @Test
+    public void aBlockWithoutProgramIsDroppedAndARunEndThatIsNoListIsRefused() {
+        PipelineDocument document = PipelineDocument.parse("{\"postProcess\": {\"command\": \" \"}}");
+        assertEquals(List.of(), document.steps(Section.RUN_END));
+        assertEquals("{}\n", document.toJson());
+
+        assertThrows(IllegalArgumentException.class, () -> PipelineDocument.parse("{\"runEnd\": {}}"));
+        assertThrows(IllegalArgumentException.class, () -> PipelineDocument.parse("{\"runEnd\": [1]}"));
+    }
+
+    @Test
+    public void runEndActionsAreAddedMovedAndRemovedLikeProcessSteps() {
         PipelineDocument document = PipelineDocument.parse(PIPELINE);
-        assertEquals("", document.postProcessCommand());
-        assertEquals(List.of(), document.postProcessArgs());
+        assertTrue(document.canAdd(Section.RUN_END));
 
-        document.setPostProcess(" ", List.of("ignored"));
-        assertFalse(document.isModified(), "no program: nothing to write");
-
-        document.setPostProcess(" D:\\progs\\synoRight.exe ", List.of("gui", " ", "{createdDirs}"));
+        document.addStep(Section.RUN_END, LAUNCH);
+        document.addStep(Section.RUN_END, MAIL);
         assertTrue(document.isModified());
-        assertEquals("D:\\progs\\synoRight.exe", document.postProcessCommand());
-        assertEquals(List.of("gui", "{createdDirs}"), document.postProcessArgs(), "blank lines dropped");
-        assertEquals(tree("{\"command\":\"D:\\\\progs\\\\synoRight.exe\",\"args\":[\"gui\",\"{createdDirs}\"]}"),
-                tree(document.toJson()).getAsJsonObject("postProcess"));
+        assertEquals(JsonParser.parseString("""
+                [ { "action": "post.process", "actionConfig": {} },
+                  { "plugin": "notify-email", "action": "email.send", "actionConfig": {} } ]
+                """), tree(document.toJson()).getAsJsonArray("runEnd"));
+        assertEquals(List.of("success", "error"), document.runEndWhen(document.steps(Section.RUN_END).getFirst()),
+                "no conditions: those of the former post-processing");
+
+        assertTrue(document.canMove(Section.RUN_END, 1, -1));
+        document.moveStep(Section.RUN_END, 1, -1);
+        assertEquals("email.send", document.steps(Section.RUN_END).getFirst().get("action").getAsString());
+
+        document.removeStep(Section.RUN_END, 0);
+        assertEquals(List.of("post.process"), document.steps(Section.RUN_END).stream()
+                .map(step -> step.get("action").getAsString()).toList());
+    }
+
+    @Test
+    public void theConditionsOfARunEndActionKeepAtLeastOne() {
+        PipelineDocument document = PipelineDocument.parse("""
+                { "runEnd": [ { "action": "post.process", "when": ["error", "later"] } ] }
+                """);
+        JsonObject step = document.steps(Section.RUN_END).getFirst();
+        assertEquals(List.of("error"), document.runEndWhen(step), "an unknown value is left out");
+
+        document.setRunEndWhen(step, Set.of("cancelled", "success"));
+        assertTrue(document.isModified());
+        assertEquals(JsonParser.parseString("[\"success\", \"cancelled\"]"), step.get("when"), "in the order of the outcomes");
+        assertEquals(List.of("success", "cancelled"), document.runEndWhen(step));
 
         PipelineDocument same = PipelineDocument.parse(document.toJson());
-        same.setPostProcess("D:\\progs\\synoRight.exe", List.of("gui", "{createdDirs}"));
+        same.setRunEndWhen(same.steps(Section.RUN_END).getFirst(), Set.of("success", "cancelled"));
         assertFalse(same.isModified(), "unchanged");
 
-        document.setPostProcess("\"D:\\progs\\synoRight.exe\"", List.of(" gui ", "{createdDirs} "));
-        assertEquals("D:\\progs\\synoRight.exe", document.postProcessCommand(), "Explorer's quotes dropped");
-        assertEquals(List.of("gui", "{createdDirs}"), document.postProcessArgs(), "arguments trimmed");
+        assertThrows(IllegalArgumentException.class, () -> document.setRunEndWhen(step, Set.of()));
+        assertThrows(IllegalArgumentException.class, () -> document.setRunEndWhen(step, Set.of("success", "later")));
+        assertEquals(JsonParser.parseString("[\"success\", \"cancelled\"]"), step.get("when"), "a refused change writes nothing");
+    }
 
-        document.setPostProcess("", List.of("gui"));
-        assertFalse(tree(document.toJson()).has("postProcess"), "no program removes the block");
+    @Test
+    public void theTimeoutIsAnAdvancedFieldOfTheRunEndActionsOnly() {
+        assertEquals(List.of("timeoutSeconds", "version"),
+                PipelineDocument.advancedFields(Section.RUN_END).stream().map(ConfigField::name).toList());
+        for (Section section : List.of(Section.IN, Section.ANALYZE, Section.PROCESS, Section.OUT)) {
+            assertEquals(PipelineDocument.ADVANCED_FIELDS, PipelineDocument.advancedFields(section));
+        }
+        PipelineDocument document = PipelineDocument.parse("{ \"runEnd\": [ { \"action\": \"post.process\" } ] }");
+        JsonObject step = document.steps(Section.RUN_END).getFirst();
+        ConfigField timeout = PipelineDocument.advancedFields(Section.RUN_END).getFirst();
+
+        document.setAdvancedText(step, timeout, "60");
+        assertEquals(60, step.get("timeoutSeconds").getAsInt());
+        document.setAdvancedText(step, timeout, "0");
+        assertEquals(0, step.get("timeoutSeconds").getAsInt(), "0: no limit");
+        assertThrows(IllegalArgumentException.class, () -> document.setAdvancedText(step, timeout, "-5"));
+        assertThrows(IllegalArgumentException.class, () -> document.setAdvancedText(step, timeout, " -1.0 "));
+        assertThrows(IllegalArgumentException.class, () -> document.setAdvancedText(step, timeout, "soon"));
+        assertEquals("0", document.advancedText(step, timeout));
+        document.setAdvancedText(step, timeout, "-0");
+        assertEquals(0, step.get("timeoutSeconds").getAsInt(), "-0 is 0, not negative");
+        document.setAdvancedText(step, timeout, "");
+        assertFalse(step.has("timeoutSeconds"), "empty: the action's own limit");
+    }
+
+    /** Not blocking (the pipeline may be meant for another machine): the save only warns. */
+    @Test
+    public void theSecretsNotDefinedOnThisMachineAreReported() {
+        PipelineDocument document = PipelineDocument.parse("""
+                { "inSteps": [ { "action": "file.read", "actionConfig": { "path": "${env:DCIM}" } } ],
+                  "runEnd": [ { "plugin": "notify-email", "action": "email.send",
+                                "actionConfig": { "host": "smtp", "password": "${secret:hunter2}",
+                                                  "auth": { "token": "Bearer ${secret:api}" },
+                                                  "to": ["${secret:smtp}", "$${secret:literal}"] } } ] }
+                """);
+
+        assertEquals(List.of(new PipelineDocument.UnknownSecret(Section.RUN_END, 0, "hunter2"),
+                        new PipelineDocument.UnknownSecret(Section.RUN_END, 0, "api")),
+                document.unknownSecrets(List.of("smtp")));
+        assertEquals(List.of(), document.unknownSecrets(List.of("smtp", "hunter2", "api")));
+        assertEquals(List.of(), document.validate(CATALOG), "not a blocking problem");
+    }
+
+    @Test
+    public void aRunEndActionNeedsItsRequiredFieldsAndAKnownCondition() {
+        PipelineDocument document = PipelineDocument.parse("""
+                { "runEnd": [ { "action": "post.process", "actionConfig": {} },
+                              { "plugin": "notify-email", "action": "email.send", "when": [],
+                                "actionConfig": { "host": "smtp" } } ] }
+                """);
+
+        assertEquals(List.of(new Problem(Section.RUN_END, 0, "command"), new Problem(Section.RUN_END, 1, "when")),
+                document.validate(CATALOG));
     }
 
     private static JsonObject rule(String json) {

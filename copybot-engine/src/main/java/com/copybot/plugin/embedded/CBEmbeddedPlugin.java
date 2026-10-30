@@ -4,10 +4,12 @@ import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
+import com.copybot.plugin.api.action.IRunEndAction;
 import com.copybot.plugin.api.definition.AbstractPlugin;
 import com.copybot.plugin.embedded.actions.FileBufferAction;
 import com.copybot.plugin.embedded.actions.FileReadAction;
 import com.copybot.plugin.embedded.actions.FileWriteAction;
+import com.copybot.plugin.embedded.actions.PostProcessAction;
 
 import java.util.List;
 
@@ -44,6 +46,13 @@ public class CBEmbeddedPlugin extends AbstractPlugin {
     public List<ActionDefinition<? extends IOutAction>> getOutActions() {
         return List.of(
                 new ActionDefinition<>("file.write", FileWriteAction.class)
+        );
+    }
+
+    @Override
+    public List<ActionDefinition<? extends IRunEndAction>> getRunEndActions() {
+        return List.of(
+                new ActionDefinition<>(PostProcessAction.CODE, PostProcessAction.class)
         );
     }
 }

@@ -128,6 +128,7 @@ final class PlanHeader {
             case ANALYZE -> "🏷";
             case PROCESS -> "⚙";
             case OUT -> "💾";
+            case RUN_END -> "🏁";
         };
         Label chip = new Label(icon + " " + step.name());
         chip.setStyle(CHIP_STYLE);

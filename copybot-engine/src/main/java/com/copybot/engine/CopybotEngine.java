@@ -249,13 +249,34 @@ public final class CopybotEngine implements AutoCloseable {
      * @param chosen null for the automatic resume point
      */
     public Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started, ResumePoint chosen) {
+        return prepare(pipelinePath, watcher, started, chosen, false);
+    }
+
+    /**
+     * Same as {@link #prepare(Path, Consumer, Consumer, ResumePoint)} for a plan prepared to be executed at once (the
+     * CLI with a resume point chosen on its command line): the preparation belongs to a run launched to copy, so a
+     * preparation that fails or is cancelled ends with the end-of-run actions of its outcome (spec run-end), like
+     * {@link #run}. A plan to look at first (the UI) is prepared with {@link #prepare(Path, Consumer)} instead.
+     *
+     * @param chosen null for the automatic resume point
+     */
+    public Plan prepareForCopy(Path pipelinePath, Consumer<PipelineState> watcher, ResumePoint chosen) {
+        return prepare(pipelinePath, watcher, null, chosen, true);
+    }
+
+    private Plan prepare(Path pipelinePath, Consumer<PipelineState> watcher, Consumer<Plan> started,
+                         ResumePoint chosen, boolean forCopy) {
         begin();
         MainExecutor mainExecutor = endOnFailure(() -> {
             PipelineConfig pipelineConfig = PipelineReader.read(pipelinePath);
             PipelineChecks.requirePreparable(pipelineConfig);
-            MainExecutor prepared = new MainExecutor(pipelineConfig, watcher, newRegistry(), resumeContext(pipelinePath, pipelineConfig));
+            MainExecutor prepared = new MainExecutor(pipelineConfig, watcher, newRegistry(),
+                    resumeContext(pipelinePath, pipelineConfig), pipelinePath);
             prepared.setOutPatternStore(ResumeStateStore.forPipeline(pipelinePath)); // whatever the resume mode
             prepared.chooseResumePoint(chosen);
+            if (forCopy) {
+                prepared.markCopyRun();
+            }
             return prepared;
         });
         return prepareBegun(mainExecutor, started);
@@ -363,7 +384,7 @@ public final class CopybotEngine implements AutoCloseable {
             ResumeContext resume = pipelineConfig.resumeMode() == ResumeMode.NONE && chosen == null
                     ? null
                     : resumeContext(pipelinePath, pipelineConfig);
-            MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume);
+            MainExecutor mainExecutor = new MainExecutor(pipelineConfig, watcher, newRegistry(), resume, pipelinePath);
             mainExecutor.setOutPatternStore(ResumeStateStore.forPipeline(pipelinePath)); // whatever the resume mode
             mainExecutor.chooseResumePoint(chosen);
             replacePlan(null); // the plan, if any, is abandoned

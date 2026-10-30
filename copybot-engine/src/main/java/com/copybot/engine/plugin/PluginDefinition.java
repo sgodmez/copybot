@@ -120,6 +120,7 @@ public final class PluginDefinition {
             case ANALYZE -> pluginInstance.getAnalyzeActions();
             case PROCESS -> pluginInstance.getProcessActions();
             case OUT -> pluginInstance.getOutActions();
+            case RUN_END -> pluginInstance.getRunEndActions();
         };
         return actionList.stream()
                 .filter(a -> a.actionCode().equals(name))

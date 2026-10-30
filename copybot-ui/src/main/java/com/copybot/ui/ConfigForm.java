@@ -5,7 +5,9 @@ import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.FieldHint;
 import com.copybot.plugin.api.config.FieldKind;
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.SecretField;
 import com.copybot.ui.util.Choosers;
+import javafx.application.Platform;
 import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
@@ -30,6 +32,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.function.UnaryOperator;
 import java.util.stream.Collectors;
 
 /**
@@ -73,6 +78,11 @@ final class ConfigForm {
         default Helper patternHelper(ConfigField field, TextInputControl input) {
             return null;
         }
+
+        /** The names of the secrets defined on this machine, for a {@link FieldHint#SECRET} field (read each time). */
+        default List<String> secretNames() {
+            return SecretsDialog.names();
+        }
     }
 
     /** What a pattern helper adds to its field: a node right of the control (null for none), one under it. */
@@ -108,6 +118,9 @@ final class ConfigForm {
     static final String COMMIT = "copybot.config-form.commit";
 
     private static final String INVALID_STYLE = "-fx-border-color: #d9534f;";
+    /** A value written, but that will not work here (a secret not defined on this machine...). */
+    private static final String WARNING_STYLE = "-fx-border-color: #c87f0a;";
+    private static final String WARNING_TEXT_STYLE = "-fx-font-size: 11px; -fx-text-fill: #c87f0a;";
 
     private final Access access;
     private final Window owner;
@@ -201,6 +214,9 @@ final class ConfigForm {
     }
 
     private Node input(ConfigField field) {
+        if (field.hasHint(FieldHint.SECRET) && field.kind() != FieldKind.LIST) {
+            return secret(field);
+        }
         return switch (field.kind()) {
             case BOOLEAN -> choice(field, List.of("true", "false"), ConfigForm::booleanLabel);
             case ENUM -> choice(field, field.enumValues(), value -> access.valueLabel(field, value));
@@ -214,7 +230,7 @@ final class ConfigForm {
      * The values only: an absent field shows its default selected (nothing is written until another choice).
      * "" (absent) is offered only for an optional field without default; a value outside them is kept and shown.
      */
-    private Node choice(ConfigField field, List<String> values, java.util.function.UnaryOperator<String> label) {
+    private Node choice(ConfigField field, List<String> values, UnaryOperator<String> label) {
         ComboBox<String> combo = new ComboBox<>();
         List<String> items = new ArrayList<>();
         if (field.defaultValue() == null && !field.required()) {
@@ -279,6 +295,95 @@ final class ConfigForm {
             return area;
         }
         return text(area, field);
+    }
+
+    /**
+     * A {@link FieldHint#SECRET} field (spec run-end, Secrets): an editable list of the secrets' names, written as
+     * {@code ${secret:name}}, then "New secret…" (the secret is created, then chosen); a reference such as
+     * {@code ${env:NAME}} can be typed. A value typed in clear is refused (the field turns red). Under it, a warning
+     * for a name not defined on this machine (a password typed as a name...), or for a value the file holds in clear,
+     * with "Put in the vault".
+     */
+    private Node secret(ConfigField field) {
+        ComboBox<String> combo = new ComboBox<>();
+        combo.setEditable(true);
+        combo.setMaxWidth(Double.MAX_VALUE);
+        combo.setPromptText(ResourcesEngine.getString("editor.secret.prompt", "${env:NAME}"));
+        String newSecret = ResourcesEngine.getString("editor.secret.new");
+        List<String> names = new ArrayList<>();
+        Label warning = new Label();
+        warning.setWrapText(true);
+        warning.setStyle(WARNING_TEXT_STYLE);
+        Button toStore = new Button(ResourcesEngine.getString("editor.secret.to-store"));
+        VBox box = new VBox(3, combo, warning, toStore);
+        Runnable state = () -> { // what the document holds now, against the names of this machine
+            String value = access.text(field);
+            boolean inClear = SecretField.isInClear(value);
+            String unknown = SecretField.secretNames(value).stream().filter(name -> !names.contains(name))
+                    .findFirst().orElse(null);
+            String text = inClear ? ResourcesEngine.getString("editor.secret.plain")
+                    : unknown != null ? ResourcesEngine.getString("editor.secret.unknown", unknown, newSecret) : null;
+            show(warning, text != null);
+            warning.setText(text == null ? "" : "⚠ " + text);
+            show(toStore, inClear);
+            if (!invalid.labels.containsKey(combo)) {
+                combo.setStyle(text == null ? "" : WARNING_STYLE);
+            }
+        };
+        Runnable fill = () -> { // the names again each time the list opens: a secret may have been added meanwhile
+            String value = combo.getValue();
+            names.clear();
+            names.addAll(access.secretNames());
+            List<String> items = new ArrayList<>(names);
+            items.add(newSecret);
+            combo.getItems().setAll(items);
+            if (!Objects.equals(combo.getValue(), value)) {
+                combo.setValue(value);
+            }
+            state.run();
+        };
+        fill.run();
+        combo.setValue(SecretField.text(access.text(field)));
+        combo.setOnShowing(e -> fill.run());
+        combo.valueProperty().addListener((obs, old, value) -> {
+            if (newSecret.equals(value)) {
+                Platform.runLater(() -> { // not while the list is still choosing
+                    Optional<String> created = SecretsDialog.newSecret(owner);
+                    created.ifPresent(name -> fill.run());
+                    combo.setValue(created.orElse(newSecret.equals(old) ? null : old));
+                });
+            }
+        });
+        combo.getEditor().textProperty().addListener((obs, old, text) -> {
+            if (text == null || newSecret.equals(text)) {
+                return;
+            }
+            if (text.equals(SecretField.text(access.text(field)))) {
+                markValid(combo); // what the document holds, shown (by the skin, a reset...): even a value in clear stays
+            } else {
+                apply(combo, field, text, SecretField::value);
+            }
+            state.run();
+        });
+        combo.focusedProperty().addListener((obs, was, focused) -> {
+            if (!focused && invalid.labels.containsKey(combo) && focusMovedAway(combo)) {
+                combo.setValue(SecretField.text(access.text(field))); // the value the document holds
+                markValid(combo);
+                state.run();
+            }
+        });
+        // the value in clear goes to the store under a name (never shown), the field then holds its reference
+        toStore.setOnAction(e -> SecretsDialog.putInStore(owner, SecretField.proposedName(field.path()),
+                access.text(field)).ifPresent(name -> {
+                    fill.run();
+                    combo.setValue(name);
+                }));
+        return box;
+    }
+
+    private static void show(Node node, boolean visible) {
+        node.setVisible(visible);
+        node.setManaged(visible);
     }
 
     private Node path(ConfigField field) {
@@ -350,8 +455,13 @@ final class ConfigForm {
     }
 
     private void apply(Control control, ConfigField field, String text) {
+        apply(control, field, text, UnaryOperator.identity());
+    }
+
+    /** @param toValue the value written for the text of the control; an IllegalArgumentException turns it red too */
+    private void apply(Control control, ConfigField field, String text, UnaryOperator<String> toValue) {
         try {
-            access.setText(field, text);
+            access.setText(field, toValue.apply(text));
             markValid(control);
         } catch (IllegalArgumentException e) {
             control.setStyle(INVALID_STYLE);

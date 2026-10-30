@@ -7,29 +7,29 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+/** The configuration of the embedded run-end action post.process. */
 public class PostProcessConfigTest {
 
-    private static PipelineConfig parse(String json) {
-        return GsonUtil.getGson().fromJson(json, PipelineConfig.class);
+    private static PostProcessConfig parse(String json) {
+        return GsonUtil.getGson().fromJson(json, PostProcessConfig.class);
     }
 
     @Test
-    public void theBlockIsReadWithItsArguments() {
-        PipelineConfig config = parse("{\"postProcess\":{\"command\":\"C:\\\\progs\\\\synoRight.exe\","
-                + "\"args\":[\"gui\",\"{createdDirs}\"]}}");
+    public void theConfigurationIsReadWithItsArguments() {
+        PostProcessConfig config = parse("{\"command\":\"C:\\\\progs\\\\synoRight.exe\","
+                + "\"args\":[\"gui\",\"{createdDirs}\"]}");
 
-        assertEquals(new PostProcessConfig("C:\\progs\\synoRight.exe", List.of("gui", "{createdDirs}")),
-                config.postProcess());
-        assertTrue(config.postProcess().isSet());
+        assertEquals(new PostProcessConfig("C:\\progs\\synoRight.exe", List.of("gui", "{createdDirs}")), config);
+        assertTrue(config.isSet());
     }
 
     @Test
-    public void withoutCommandThereIsNoPostProcessing() {
-        assertNull(parse("{}").postProcess());
-        assertFalse(parse("{\"postProcess\":{\"command\":\" \"}}").postProcess().isSet());
-        assertEquals(List.of(), parse("{\"postProcess\":{\"command\":\"a\"}}").postProcess().args(),
-                "no args: an empty list");
-        assertEquals(List.of("a"), parse("{\"postProcess\":{\"command\":\"a\",\"args\":[null,\"a\"]}}")
-                .postProcess().args(), "a null argument is left out");
+    public void withoutCommandNothingIsLaunched() {
+        assertFalse(parse("{}").isSet());
+        assertFalse(parse("{\"command\":\" \"}").isSet());
+        assertFalse(parse("{\"command\":\"\\\"\\\"\"}").isSet(), "only quotes");
+        assertEquals(List.of(), parse("{\"command\":\"a\"}").args(), "no args: an empty list");
+        assertEquals(List.of("a"), parse("{\"command\":\"a\",\"args\":[null,\"a\"]}").args(),
+                "a null argument is left out");
     }
 }

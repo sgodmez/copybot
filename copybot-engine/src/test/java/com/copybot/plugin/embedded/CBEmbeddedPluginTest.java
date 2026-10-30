@@ -4,8 +4,10 @@ import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.PluginDefinition;
 import com.copybot.exception.ActionNotFoundException;
 import com.copybot.plugin.api.action.ActionDefinition;
+import com.copybot.plugin.api.action.IRunEndAction;
 import com.copybot.plugin.embedded.actions.FileReadAction;
 import com.copybot.plugin.embedded.actions.FileWriteAction;
+import com.copybot.plugin.embedded.actions.PostProcessAction;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -36,6 +38,17 @@ public class CBEmbeddedPluginTest {
 
         assertEquals(FileReadAction.class, definition.findAction("file.read", StepType.IN).actionClass());
         assertEquals(FileWriteAction.class, definition.findAction("file.write", StepType.OUT).actionClass());
+    }
+
+    @Test
+    public void postProcessIsARunEndAction() {
+        PluginDefinition definition = PluginDefinition.ofEmbedded(plugin);
+
+        assertEquals(List.of("post.process"),
+                plugin.getRunEndActions().stream().map(ActionDefinition::actionCode).toList());
+        assertEquals(PostProcessAction.class, definition.findAction("post.process", StepType.RUN_END).actionClass());
+        assertEquals(StepType.RUN_END, StepType.getType(IRunEndAction.class));
+        assertThrows(ActionNotFoundException.class, () -> definition.findAction("post.process", StepType.OUT));
     }
 
     @Test

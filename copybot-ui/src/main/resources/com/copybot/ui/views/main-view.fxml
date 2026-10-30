@@ -28,6 +28,7 @@
                         <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
                         <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
                         <MenuItem mnemonicParsing="false" onAction="#onResourcesClick" text="%menu.tools.resources" />
+                        <MenuItem mnemonicParsing="false" onAction="#onSecretsClick" text="%menu.edit.secrets" />
                         <MenuItem mnemonicParsing="false" onAction="#onUpdatesClick" text="%menu.edit.updates" />
                      </items>
                   </Menu>

@@ -29,6 +29,7 @@ public class PipelineState {
     private volatile List<String> warnings = List.of();
     private final AtomicReference<Throwable> failure = new AtomicReference<>();
     private volatile boolean preparationFailed;
+    private volatile String runEndStep;
 
     // written by listing threads, read by watchers/UI on other threads
     private final AtomicInteger archivesUnfolded = new AtomicInteger();
@@ -144,6 +145,18 @@ public class PipelineState {
 
     public void setPreparationFailed(boolean preparationFailed) {
         this.preparationFailed = preparationFailed;
+    }
+
+    /**
+     * The end-of-run action running now, by its localised name (spec run-end: "Fin de run : Envoyer un e-mail");
+     * null outside the end-of-run actions.
+     */
+    public String getRunEndStep() {
+        return runEndStep;
+    }
+
+    public void setRunEndStep(String runEndStep) {
+        this.runEndStep = runEndStep;
     }
 
     /** The archives unfolded at the listing so far (spec grouping/archives). */

@@ -5,8 +5,10 @@ import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.DirectoryPath;
+import com.copybot.plugin.api.config.FilePath;
 import com.copybot.plugin.api.config.PatternField;
 import com.copybot.plugin.api.config.Required;
+import com.copybot.plugin.api.config.Secret;
 
 import java.util.List;
 import java.util.Map;
@@ -29,13 +31,22 @@ final class TestCatalog {
     record ExifConfig(Boolean gps) {
     }
 
+    record LaunchConfig(@Required @FilePath String command, List<String> args) {
+    }
+
+    record MailConfig(@Required String host, @Secret String password) {
+    }
+
     static final CatalogAction READ = action(CatalogAction.EMBEDDED_PLUGIN, null, "file.read", StepType.IN, ReadConfig.class);
     static final CatalogAction WRITE = action(CatalogAction.EMBEDDED_PLUGIN, null, "file.write", StepType.OUT, WriteConfig.class);
     static final CatalogAction EXIF_2 = action("com.acme.exif", "2.1.0", "exif.read", StepType.ANALYZE, ExifConfig.class);
     static final CatalogAction EXIF_1 = action("com.acme.exif", "1.4.0", "exif.read", StepType.ANALYZE, ExifConfig.class);
+    static final CatalogAction LAUNCH = action(CatalogAction.EMBEDDED_PLUGIN, null, "post.process", StepType.RUN_END,
+            LaunchConfig.class);
+    static final CatalogAction MAIL = action("notify-email", "1.0.0", "email.send", StepType.RUN_END, MailConfig.class);
 
     /** In PluginEngine order: plugin name, most recent version first. */
-    static final StepCatalog CATALOG = catalog(EXIF_2, EXIF_1, READ, WRITE);
+    static final StepCatalog CATALOG = catalog(EXIF_2, EXIF_1, READ, WRITE, LAUNCH, MAIL);
 
     /** A catalog of these actions, in PluginEngine order, without failed plugin. */
     static StepCatalog catalog(CatalogAction... actions) {

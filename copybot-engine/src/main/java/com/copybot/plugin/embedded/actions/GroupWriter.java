@@ -76,6 +76,7 @@ final class GroupWriter {
             throw e;
         }
         main.getMetadatas().raw().put(WorkItemMetadata.SHA256, written.sha256());
+        context.fileWritten(mainTarget, written.sha256(), written.size());
         List<Integer> toWrite = decision.replaceExisting()
                 ? IntStream.range(0, copies.size()).boxed().toList() : decision.missingCompanions();
         writeCompanions(copies, decision, toWrite, context);
@@ -93,6 +94,7 @@ final class GroupWriter {
                 SafeFileWriter.Written written = writer.write(item, target, decision.replaceExisting(), context.runId(),
                         percent -> { }, context::directoryCreated); // the progress is the main file's
                 item.getMetadatas().raw().put(WorkItemMetadata.SHA256, written.sha256());
+                context.fileWritten(target, written.sha256(), written.size());
             } catch (IOException e) {
                 throw CopybotException.ofResource(e, "write.error.io-detail", target, FileWriteAction.detail(e));
             }

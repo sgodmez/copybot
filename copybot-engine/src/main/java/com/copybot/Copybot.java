@@ -1,5 +1,6 @@
 package com.copybot;
 
+import com.copybot.config.SecretStore;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.Execution;
 import com.copybot.engine.Plan;
@@ -14,6 +15,7 @@ import com.copybot.resources.ResourcesEngine;
 import picocli.CommandLine;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
@@ -22,8 +24,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
-@CommandLine.Command(name = "Copybot", version = "0.1", mixinStandardHelpOptions = true)
+@CommandLine.Command(name = "Copybot", version = "0.1", mixinStandardHelpOptions = true,
+        subcommands = SecretCommand.class)
 public class Copybot implements Callable<Integer> {
 
     /** SUCCESS (skipped items are not errors), or a dry run prepared without error. */
@@ -39,7 +43,10 @@ public class Copybot implements Callable<Integer> {
     /** CANCELLED (Ctrl+C). */
     public static final int EXIT_CANCELLED = 130;
 
-    /** Grace period the Ctrl+C hook gives the cancelled execution to release its files. */
+    /**
+     * Grace period the Ctrl+C hook gives the cancelled execution to release its files (its "cancelled" end-of-run
+     * actions get their own time after it).
+     */
     private static final long CANCEL_AWAIT_SECONDS = 5;
 
     private static final CopybotLogger LOG = CopybotLogger.getLogger(Copybot.class);
@@ -47,8 +54,12 @@ public class Copybot implements Callable<Integer> {
     @CommandLine.Option(names = {"-c", "--config-file"}, description = "Configuration file")
     private Path configPath;
 
-    @CommandLine.Option(names = {"-p", "--pipeline"}, description = "Pipeline file", required = true)
+    // required to run a pipeline, checked by call(): picocli would require it of the secret subcommand too
+    @CommandLine.Option(names = {"-p", "--pipeline"}, description = "Pipeline file (required to run a pipeline)")
     private Path pipelinePath;
+
+    @CommandLine.Spec
+    private CommandLine.Model.CommandSpec spec;
 
     @CommandLine.Option(names = {"-dr", "--dry-run"}, description = "Dry run")
     private boolean isDryRun;
@@ -76,17 +87,39 @@ public class Copybot implements Callable<Integer> {
     /** The Ctrl+C hook registered while an execution runs, null otherwise. */
     private volatile Thread cancelHook;
 
+    /** The store of the secret subcommand. */
+    private final Supplier<SecretStore> secrets;
+
     public Copybot() {
         this(execution -> {
         });
     }
 
     Copybot(Consumer<Execution> onExecutionStarted) {
+        this(onExecutionStarted, SecretStore::forCurrentUser);
+    }
+
+    private Copybot(Consumer<Execution> onExecutionStarted, Supplier<SecretStore> secrets) {
         this.onExecutionStarted = onExecutionStarted;
+        this.secrets = secrets;
+    }
+
+    // visible for tests: the secret subcommand on this store
+    static Copybot withSecrets(SecretStore store) {
+        return new Copybot(execution -> {
+        }, () -> store);
+    }
+
+    SecretStore secretStore() {
+        return secrets.get();
     }
 
     @Override
     public Integer call() {
+        if (pipelinePath == null) {
+            throw new CommandLine.ParameterException(spec.commandLine(),
+                    "Missing required option: '--pipeline=<pipelinePath>'");
+        }
         try (CopybotEngine engine = CopybotEngine.create(Optional.ofNullable(configPath))) {
             return doRun(engine);
         } catch (InterruptedException e) {
@@ -110,7 +143,10 @@ public class Copybot implements Callable<Integer> {
         if (isDryRun || resumeOverride != null) {
             // --all and --from-date are known before the listing: a chosen point, like a cursor there (spec
             // manual-point §1); --from-file names a listed file: applied once the listing found its key
-            Plan plan = engine.prepare(pipelinePath, watcher, null, chosenPoint());
+            // a dry run is a plan to look at; the other ones are executed at once: a run launched to copy, whose
+            // failed or cancelled preparation ends with the end-of-run actions
+            Plan plan = isDryRun ? engine.prepare(pipelinePath, watcher, null, chosenPoint())
+                    : engine.prepareForCopy(pipelinePath, watcher, chosenPoint());
             PipelineStatus prepared = plan.getState().getStatus();
             if (prepared == PipelineStatus.CANCELLED) {
                 System.out.println("Cancelled !");
@@ -201,11 +237,22 @@ public class Copybot implements Callable<Integer> {
         }
     }
 
-    /** The Ctrl+C hook: cancels the execution and waits for it, {@value #CANCEL_AWAIT_SECONDS} s at most. */
+    /**
+     * The Ctrl+C hook: cancels the execution and waits for it, {@value #CANCEL_AWAIT_SECONDS} s at most, then, when it
+     * has "cancelled" end-of-run actions, as long as they may still take ({@link Execution#cancelledRunEndWait()}).
+     */
     static void cancelAndWait(Execution execution) {
         execution.cancel();
         try {
-            execution.await(CANCEL_AWAIT_SECONDS, TimeUnit.SECONDS);
+            if (execution.await(CANCEL_AWAIT_SECONDS, TimeUnit.SECONDS)) {
+                return;
+            }
+            Duration runEnd = execution.cancelledRunEndWait();
+            if (runEnd.isZero()) {
+                return;
+            }
+            System.err.println(ResourcesEngine.getString("cli.cancel.run-end-wait", String.valueOf(runEnd.toSeconds())));
+            execution.await(runEnd.toMillis(), TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
