@@ -159,7 +159,8 @@ final class EmailContent {
         String name = oneLine(item.name());
         String reason = item.reason() == null || item.reason().isBlank() ? null : oneLine(item.reason());
         return switch (item.outcome()) {
-            case WRITTEN -> texts.get("email.item.written", name, item.target() == null ? "" : item.target().toString());
+            case WRITTEN -> item.target() == null ? texts.get("email.item.written-plain", name)
+                    : texts.get("email.item.written", name, item.target().toString());
             case SKIPPED -> reason == null ? texts.get("email.item.skipped-plain", name)
                     : texts.get("email.item.skipped", name, reason);
             case ERROR -> reason == null ? texts.get("email.item.error-plain", name)

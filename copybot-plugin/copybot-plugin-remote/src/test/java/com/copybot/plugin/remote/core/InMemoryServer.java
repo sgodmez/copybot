@@ -37,6 +37,8 @@ final class InMemoryServer {
     final List<String> operations = new CopyOnWriteArrayList<>();
 
     volatile boolean atomic;
+    /** Whether a connection lists a whole tree at once ({@link RemoteFs#listTree}), as S3. */
+    volatile boolean treeListing;
     volatile boolean failConnect;
     /** The paths whose listing fails. */
     volatile Predicate<String> failList = path -> false;
@@ -135,6 +137,29 @@ final class InMemoryServer {
                 Collections.shuffle(entries); // no order promised
                 return entries;
             }
+        }
+
+        /** The tree in one listing when {@link #treeListing} (as S3), else not supported. */
+        @Override
+        public boolean listTree(String folder, java.util.function.Consumer<RemoteEntry> found) throws IOException {
+            if (!treeListing) {
+                return false;
+            }
+            check("listTree", folder);
+            String prefix = folder.endsWith("/") ? folder : folder + "/";
+            List<RemoteEntry> entries = new ArrayList<>();
+            synchronized (InMemoryServer.this) {
+                files.forEach((path, stored) -> {
+                    if (path.startsWith(prefix)) {
+                        entries.add(RemoteEntry.file(path.substring(prefix.length()), stored.content().length,
+                                stored.lastModified()));
+                    }
+                });
+            }
+            for (RemoteEntry entry : entries) {
+                found.accept(entry); // outside the lock, as a page given while the listing goes on
+            }
+            return true;
         }
 
         @Override

@@ -14,6 +14,8 @@ import com.google.gson.JsonParser;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
@@ -30,9 +32,11 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -194,6 +198,42 @@ public class ArchiveZipTest {
         assertEquals(List.of("p/q/1.txt", "p/r/2.txt"),
                 new ArrayList<>(parseSums(Files.readString(dir.resolve("m3"))).keySet()));
         assertTrue(warnings.isEmpty(), warnings.toString());
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void withoutBaseFolderFilesOnSeveralRootsAreKeptUnderAFolderPerRoot() {
+        Path c = Path.of("C:\\out\\2024\\a.jpg");
+        Path d = Path.of("D:\\copy\\b.jpg");
+        Path share = Path.of("\\\\nas\\photos\\2024\\c.jpg");
+        Set<Path> files = new LinkedHashSet<>(List.of(c, d, share));
+
+        Map<Path, String> names = ArchiveZip.entryNames(files, null);
+
+        assertEquals(Map.of(c, "C/out/2024/a.jpg", d, "D/copy/b.jpg", share, "nas_photos/2024/c.jpg"), names);
+    }
+
+    @Test
+    @EnabledOnOs(OS.WINDOWS)
+    void twoRootsOfTheSameFolderNameGetDistinctFolders() {
+        Path one = Path.of("\\\\nas\\a_b\\x.jpg");
+        Path two = Path.of("\\\\nas_a\\b\\y.jpg");
+        Map<Path, String> names = ArchiveZip.entryNames(new LinkedHashSet<>(List.of(one, two)), null);
+        assertEquals("nas_a_b/x.jpg", names.get(one));
+        assertEquals("nas_a_b_2/y.jpg", names.get(two));
+    }
+
+    @Test
+    void withoutBaseFolderFilesOnOneRootAreRelativeToTheirDeepestCommonFolder() {
+        Path a = dir.resolve("out/2024/a.jpg").toAbsolutePath();
+        Path b = dir.resolve("out/2025/b.jpg").toAbsolutePath();
+        Map<Path, String> names = ArchiveZip.entryNames(new LinkedHashSet<>(List.of(a, b)), null);
+        assertEquals(Map.of(a, "2024/a.jpg", b, "2025/b.jpg"), names);
+    }
+
+    @Test
+    void aRootGivesAValidFolderName() {
+        assertEquals("root", ArchiveZip.rootFolder(Path.of("/")));
     }
 
     @Test

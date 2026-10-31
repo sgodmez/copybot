@@ -402,7 +402,7 @@ public class PipelineDocumentTest {
         assertEquals(2, document.groupingRules().size());
         assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(CATALOG));
         assertFalse(document.folderRuleWithNonRecursiveFileRead(CATALOG));
-        assertEquals(Optional.empty(), document.streamingGroupingWarning());
+        assertEquals(Optional.empty(), document.streamingGroupingWarning(CATALOG));
     }
 
     @Test
@@ -430,18 +430,44 @@ public class PipelineDocumentTest {
         PipelineDocument plugin = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
                 + "{\"action\":\"file.read\",\"actionConfig\":{\"path\":\"D:/p\"}},"
                 + "{\"plugin\":\"com.x\",\"action\":\"ftp.read\",\"actionConfig\":{}}]}");
-        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(), "no rule: nothing to say");
+        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(CATALOG), "no rule: nothing to say");
         plugin.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
         assertEquals(Optional.of(new PipelineDocument.StreamingNote(
                         ResourcesEngine.getString("editor.grouping.warning.streaming-fallback", "ftp.read"), true)),
-                plugin.streamingGroupingWarning(), "an input that may not signal its folders");
+                plugin.streamingGroupingWarning(CATALOG), "an input that may not signal its folders");
         plugin.setExecutionMode(ExecutionMode.AUTO);
-        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(), "not streaming");
+        assertEquals(Optional.empty(), plugin.streamingGroupingWarning(CATALOG), "not streaming");
         PipelineDocument builtIn = withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"iphone\"}");
         builtIn.setExecutionMode(ExecutionMode.STREAMING);
         assertEquals(Optional.of(new PipelineDocument.StreamingNote(
                         ResourcesEngine.getString("editor.grouping.warning.streaming-by-folder"), false)),
-                builtIn.streamingGroupingWarning(), "file.read signals its folders");
+                builtIn.streamingGroupingWarning(CATALOG), "file.read signals its folders");
+    }
+
+    @Test
+    public void anInputWhoseActionSignalsItsFoldersIsProcessedFolderByFolder() {
+        CatalogAction sftp = new CatalogAction("com.copybot.plugin.remote", "remote", "1.0.0", "sftp.read",
+                com.copybot.engine.pipeline.StepType.IN, "SFTP", "", null, java.util.Map.of(), true);
+        CatalogAction s3 = new CatalogAction("com.copybot.plugin.remote", "remote", "1.0.0", "s3.read",
+                com.copybot.engine.pipeline.StepType.IN, "S3", "", null, java.util.Map.of(), false);
+        StepCatalog catalog = TestCatalog.catalog(READ, WRITE, sftp, s3);
+        PipelineDocument document = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
+                + "{\"plugin\":\"com.copybot.plugin.remote\",\"action\":\"sftp.read\",\"actionConfig\":{}}]}");
+        document.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
+        assertEquals(Optional.of(new PipelineDocument.StreamingNote(
+                        ResourcesEngine.getString("editor.grouping.warning.streaming-by-folder"), false)),
+                document.streamingGroupingWarning(catalog), "sftp.read signals its folders");
+        assertEquals(Optional.of(new PipelineDocument.StreamingNote(
+                        ResourcesEngine.getString("editor.grouping.warning.streaming-fallback", "sftp.read"), true)),
+                document.streamingGroupingWarning(CATALOG), "its plugin missing: it may not");
+
+        PipelineDocument both = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
+                + "{\"plugin\":\"com.copybot.plugin.remote\",\"action\":\"sftp.read\",\"actionConfig\":{}},"
+                + "{\"plugin\":\"com.copybot.plugin.remote\",\"action\":\"s3.read\",\"actionConfig\":{}}]}");
+        both.addGroupingRule(rule("{\"preset\":\"iphone\"}"));
+        assertEquals(Optional.of(new PipelineDocument.StreamingNote(
+                        ResourcesEngine.getString("editor.grouping.warning.streaming-fallback", "s3.read"), true)),
+                both.streamingGroupingWarning(catalog), "s3.read does not signal its folders");
     }
 
     @Test
@@ -1487,5 +1513,24 @@ public class PipelineDocumentTest {
         assertFalse(warning.kind().blocking());
         assertFalse(warning.message().startsWith("%"), warning.message());
         assertTrue(warning.message().contains("Thumbs"), warning.message());
+    }
+
+    @Test
+    public void aSecondaryRemoteWriteThatDeletesTheSourceIsAWarningToo() {
+        com.copybot.resources.ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+        PipelineDocument document = PipelineDocument.parse("""
+                { "outStep": { "action": "file.write" },
+                  "secondaryOutputs": [
+                    { "name": "a", "outStep": { "plugin": "com.copybot.plugin.remote", "action": "sftp.write",
+                                               "actionConfig": { "deleteSource": true } } },
+                    { "name": "b", "outStep": { "plugin": "com.copybot.plugin.remote", "action": "ftp.write",
+                                               "actionConfig": { "deleteSource": true } } },
+                    { "name": "c", "outStep": { "plugin": "com.copybot.plugin.remote", "action": "s3.write",
+                                               "actionConfig": { "deleteSource": true } } },
+                    { "name": "d", "outStep": { "plugin": "com.copybot.plugin.remote", "action": "s3.write",
+                                               "actionConfig": { "deleteSource": false } } } ] }
+                """);
+
+        assertEquals(List.of("0:SOURCE_KEPT", "1:SOURCE_KEPT", "2:SOURCE_KEPT"), kinds(document));
     }
 }

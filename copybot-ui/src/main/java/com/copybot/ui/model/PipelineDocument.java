@@ -895,14 +895,18 @@ public final class PipelineDocument {
 
     /**
      * The warning of streaming with grouping rules (spec execution-mode §3): the files processed folder by folder,
-     * or, with an input that is not the built-in file.read (which signals its folders), the run in the automatic
-     * mode should that input not signal them. Empty when not streaming or without rule.
+     * or, with an input that does not signal its folders, the run in the automatic mode should that input not signal
+     * them. An input signals its folders when it is the built-in file.read or when its action says so in the catalog
+     * ({@link CatalogAction#signalsFolders()}: sftp.read, ftp.read...); one the catalog does not know (its plugin
+     * missing) may not. Empty when not streaming or without rule.
      */
-    public Optional<StreamingNote> streamingGroupingWarning() {
+    public Optional<StreamingNote> streamingGroupingWarning(StepCatalog catalog) {
         if (executionMode() != ExecutionMode.STREAMING || groupingRules().isEmpty()) {
             return Optional.empty();
         }
-        List<String> others = steps(Section.IN).stream().filter(step -> !isFileRead(step))
+        List<String> others = steps(Section.IN).stream()
+                .filter(step -> !isFileRead(step)
+                        && !catalog.find(Section.IN, step).map(CatalogAction::signalsFolders).orElse(false))
                 .map(PipelineDocument::actionName).toList();
         return Optional.of(others.isEmpty()
                 ? new StreamingNote(ResourcesEngine.getString("editor.grouping.warning.streaming-by-folder"), false)
@@ -911,7 +915,7 @@ public final class PipelineDocument {
     }
 
     /**
-     * The text of {@link #streamingGroupingWarning()}.
+     * The text of {@link #streamingGroupingWarning}.
      *
      * @param fallback a warning (the run may fall back to the automatic mode), otherwise an information
      */
@@ -1351,17 +1355,28 @@ public final class PipelineDocument {
                 && ("fail".equals(value.getAsString()) || "warn".equals(value.getAsString()));
     }
 
-    /** A built-in file.write step whose "deleteSource" is on. */
+    /** A built-in file.write step, or a write of the remote plugin, whose "deleteSource" is on. */
     private static boolean deletesSource(JsonObject step) {
         JsonElement deleteSource = get(step, List.of("actionConfig", "deleteSource"));
-        return isEmbeddedAction(step, FILE_WRITE) && deleteSource != null && deleteSource.isJsonPrimitive()
-                && deleteSource.getAsBoolean();
+        return (isEmbeddedAction(step, FILE_WRITE) || isPluginAction(step, REMOTE_PLUGIN, REMOTE_WRITES))
+                && deleteSource != null && deleteSource.isJsonPrimitive() && deleteSource.getAsBoolean();
+    }
+
+    /** The step runs one of these actions of this plugin. */
+    private static boolean isPluginAction(JsonObject step, String pluginName, Set<String> codes) {
+        JsonElement plugin = step.get("plugin");
+        JsonElement action = step.get("action");
+        return plugin != null && plugin.isJsonPrimitive() && pluginName.equals(plugin.getAsString())
+                && action != null && action.isJsonPrimitive() && codes.contains(action.getAsString());
     }
 
     // ---- exclusions ("always ignore" in the plan view) ----
 
     private static final String FILE_READ = "file.read";
     private static final String FILE_WRITE = "file.write";
+    /** The remote plugin, whose writes honour "deleteSource" as file.write does (a kept source is never deleted). */
+    private static final String REMOTE_PLUGIN = "com.copybot.plugin.remote";
+    private static final Set<String> REMOTE_WRITES = Set.of("sftp.write", "ftp.write", "s3.write");
 
     /**
      * What {@link #exclude} did.

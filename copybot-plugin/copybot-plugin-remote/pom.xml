@@ -74,7 +74,7 @@
             <plugin>
                 <!--
                     the SFTP tests answer the questions to the user (Confirmations) and set the plugins' data folder;
-                    jdk.httpserver: the fake S3 server of the tests
+                    jdk.httpserver: the fake S3 server of the tests; java.logging: a test reads the log of a write
                 -->
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
@@ -88,7 +88,7 @@
                                 <arg>--add-modules</arg>
                                 <arg>jdk.httpserver</arg>
                                 <arg>--add-reads</arg>
-                                <arg>com.copybot.plugin.remote=jdk.httpserver</arg>
+                                <arg>com.copybot.plugin.remote=java.logging,jdk.httpserver</arg>
                             </compilerArgs>
                         </configuration>
                     </execution>
@@ -100,9 +100,9 @@
                 <configuration>
                     <!--
                         the engine reads the disks of a local item natively (a test deletes a local source);
-                        jdk.httpserver: the fake S3 server of the tests
+                        jdk.httpserver: the fake S3 server of the tests; java.logging: a test reads the log of a write
                     -->
-                    <argLine>--enable-native-access=com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.remote --add-modules jdk.httpserver --add-reads com.copybot.plugin.remote=jdk.httpserver</argLine>
+                    <argLine>--enable-native-access=com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.remote --add-modules jdk.httpserver --add-reads com.copybot.plugin.remote=java.logging,jdk.httpserver</argLine>
                 </configuration>
             </plugin>
             <plugin>

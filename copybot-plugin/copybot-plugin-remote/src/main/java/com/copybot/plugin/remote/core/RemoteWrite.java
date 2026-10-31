@@ -99,6 +99,7 @@ public abstract class RemoteWrite<C extends RemoteWriteSettings> extends Abstrac
     /** Whether the warnings were logged in this phase (reset by {@link #beforeAll}). */
     private final AtomicBoolean datesWarned = new AtomicBoolean();
     private final AtomicBoolean sizeWarned = new AtomicBoolean();
+    private final AtomicBoolean keptWarned = new AtomicBoolean();
 
     /** The uploads through a temporary file made by this step: the number of each one is in its name. */
     private final AtomicLong attempts = new AtomicLong();
@@ -184,6 +185,7 @@ public abstract class RemoteWrite<C extends RemoteWriteSettings> extends Abstrac
     public void beforeAll() {
         datesWarned.set(false);
         sizeWarned.set(false);
+        keptWarned.set(false);
     }
 
     /** Closes the connections of the step. */
@@ -203,6 +205,11 @@ public abstract class RemoteWrite<C extends RemoteWriteSettings> extends Abstrac
     @Override
     public WriteResult write(WorkItem workItem, WriteContext context) {
         Settings current = settings;
+        if (workItem.isSourceKept() && current.deleteSource() && keptWarned.compareAndSet(false, true)) {
+            // an out step has no run warning channel: logged, once per phase and step (as file.write)
+            LOGGER.log(System.Logger.Level.WARNING,
+                    code() + ": deleteSource is ignored for a secondary output, the source is kept");
+        }
         OutPattern.Resolution resolution = pattern(workItem, current).resolve(workItem.getMetadatas().display());
         if (!resolution.complete()) {
             switch (current.onMissingKey()) {

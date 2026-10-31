@@ -18,5 +18,16 @@
             <directory>${project.build.directory}/lib</directory>
             <outputDirectory>${plugin.code}/lib</outputDirectory>
         </fileSet>
+        <fileSet>
+            <!--
+                the plugin's NOTICE, when it has one: the third-party software and data it ships or uses (each library
+                jar of lib/ also keeps its own licence texts in its META-INF/); the plugin loader ignores it
+            -->
+            <directory>${project.basedir}</directory>
+            <outputDirectory>${plugin.code}</outputDirectory>
+            <includes>
+                <include>NOTICE</include>
+            </includes>
+        </fileSet>
     </fileSets>
 </assembly>

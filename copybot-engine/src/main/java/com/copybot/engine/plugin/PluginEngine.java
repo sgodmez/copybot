@@ -11,6 +11,7 @@ import com.copybot.exception.PluginNotFoundException;
 import com.copybot.logger.CopybotLogger;
 import com.copybot.plugin.api.action.ActionDefinition;
 import com.copybot.plugin.api.action.IAction;
+import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.config.ConfigField;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.definition.IPlugin;
@@ -194,7 +195,8 @@ public final class PluginEngine {
         CombinedResourceBundle bundle = instance.getResourceBundle();
         for (ActionDefinition<?> definition : definitions) {
             String keyPrefix = "plugin." + instance.getPluginCode() + "." + definition.actionCode();
-            ConfigSchema schema = schemaOf(plugin, definition).map(s -> s.withKeyPrefix(keyPrefix)).orElse(null);
+            Described described = describe(plugin, definition);
+            ConfigSchema schema = described.schema() == null ? null : described.schema().withKeyPrefix(keyPrefix);
             Map<String, String> texts = new HashMap<>();
             if (schema != null) {
                 for (ConfigField field : schema.allFields()) {
@@ -209,22 +211,28 @@ public final class PluginEngine {
                     definition.actionCode(), type,
                     text(bundle, keyPrefix + ".name").orElse(definition.actionCode()),
                     text(bundle, keyPrefix + ".description").orElse(""),
-                    schema, texts));
+                    schema, texts, described.signalsFolders()));
         }
     }
 
+    /** What a fresh instance tells of itself: its schema (null: none) and, for an input, whether it signals folders. */
+    private record Described(ConfigSchema schema, boolean signalsFolders) {
+    }
+
     /**
-     * The schema of a fresh instance; an action that cannot be instantiated or describe itself describes
-     * nothing (warned in the log; the step resolution reports the failure again, with its context).
+     * What a fresh instance tells; an action that cannot be instantiated or describe itself describes nothing
+     * (warned in the log; the step resolution reports the failure again, with its context).
      */
-    private static Optional<ConfigSchema> schemaOf(PluginDefinition plugin, ActionDefinition<?> definition) {
+    private static Described describe(PluginDefinition plugin, ActionDefinition<?> definition) {
         try {
-            return newAction(plugin, definition).configSchema();
+            IAction action = newAction(plugin, definition);
+            ConfigSchema schema = action.configSchema().orElse(null);
+            return new Described(schema, action instanceof IInAction in && in.signalsFolders());
         } catch (LinkageError | RuntimeException e) {
             if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion() + ":" + definition.actionCode())) {
                 LOG.warn(e, "plugin.catalog.no-schema", plugin.getName(), definition.actionCode(), String.valueOf(e));
             }
-            return Optional.empty();
+            return new Described(null, false);
         }
     }
 

@@ -71,7 +71,7 @@ libraries.
   a file for this copy only, or always ignore it: that adds an exclude to the
   pipeline.
 - **Companion files and archives.** Rules attach an `.xmp`, a `.AAE`, a
-  `_files` folder or a Takeout JSON to their main file, which then travels,
+  `_files` folder or a JSON sidecar to their main file, which then travels,
   is sorted and is written with them, as one plan row. A ZIP, even split in
   parts, can be unfolded at the listing and its files treated like any other.
   See *Companion files and archives* below.
@@ -89,14 +89,19 @@ libraries.
 - **Pause, resume, stop.** You can pause, resume or stop a run at any time.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
-  CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
+  CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish; when
+  the pipeline has end-of-run actions for `cancelled`, it then waits for them,
+  within a bound computed from their time limits (shown on stderr).
 - **Remote sources and targets.** The `remote` plugin reads from and writes
-  to SFTP, FTP or FTPS servers and S3 buckets (AWS, MinIO), with the same
-  safe writes, conflict policy and dates. A server's key or self-signed
+  to SFTP, FTP or FTPS servers and S3 buckets (AWS, MinIO). Writes go through a
+  temporary name and a size check, and keep the dates; an existing target is
+  compared by size, or size and date, never by content, and companion files
+  are not written to a server. A server's key or self-signed
   certificate is trusted on first use, after you confirm it. See
   [Remote servers](#remote-servers-sftp-ftp-and-s3-the-remote-plugin).
 - **Actions after the copy.** A pipeline can end with an ordered list of
-  actions (`runEnd`): launch a program such as synoRight, send an e-mail or a
+  actions (`runEnd`): launch a program (to fix the rights of the new folders on
+  a NAS, for example), send an e-mail or a
   webhook message (ntfy, Discord, Slack, Telegram), write a ZIP of the copied
   files with their checksums. Passwords stay in a per-user vault. See
   [After the copy](#after-the-copy-run-end-actions).
@@ -295,7 +300,7 @@ each folder is listed. A source that does not signal the end of its folders
 would make grouping wait for the end of its whole listing: with such a source,
 a streaming pipeline with grouping rules runs in auto mode instead (prepared,
 then copied without confirmation), and a warning says so. The editor shows the
-matching warning. `file.read` signals its folders.
+matching warning. `file.read`, `sftp.read` and `ftp.read` signal their folders; `s3.read` (no real folders) does not.
 
 **Archives.** With `unfold`, a listed ZIP is replaced by the files it
 contains, which are then grouped, analysed, planned and checked like any other
@@ -374,7 +379,7 @@ list behaves exactly as before.
   items (several thumbnail sizes) sends each one to the branch output; a step
   that filters writes nothing for the item, which is not an error.
 - **The source is kept.** An item handed to a secondary output never loses
-  its source: `file.write` ignores `deleteSource` there (logged once per
+  its source: `file.write` and the remote writes (`sftp.write`, `ftp.write`, `s3.write`) ignore `deleteSource` there (logged once per
   run, and shown as a warning in the editor), so the main branch, which runs last, may still
   move the file.
 - **`onError`.** With `fail`, an error in a branch puts the item in error, the
@@ -592,7 +597,11 @@ on the next run. A server that cannot set dates (vsftpd has neither `MFMT` nor
 
 **Connections and resources.** A step opens at most `maxConnections`
 connections to its server and closes them at the end of the run (an idle one
-also after 30 s). The listing of an input holds one of them while it runs.
+also after 30 s). The listing of an input borrows one for each folder it lists
+(for the whole listing on S3) and gives it back before handing on the files,
+so a listed file can be read at once (an archive unfolded) even with
+`maxConnections` 1. On S3 the files are therefore handed on only once the
+whole listing has ended, even in streaming mode.
 The listing of an input and each file written by an output hold the resource
 `net:<protocol>:<host>` (`net:sftp:nas.local`, `net:ftp:ftp.example.org`,
 `net:s3:s3.eu-west-3.amazonaws.com` for every bucket of that endpoint), whose
@@ -693,8 +702,8 @@ editor under *After the copy*. Each entry names an action and when it runs:
 ```json
 "runEnd": [
   { "action": "post.process", "when": ["success", "error"],
-    "actionConfig": { "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe",
-                      "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"] } },
+    "actionConfig": { "command": "C:\\Tools\\fix-rights.exe",
+                      "args": ["--new-folders", "{createdDirs}"] } },
   { "plugin": "com.copybot.plugin.archive", "action": "archive.zip", "timeoutSeconds": 0,
     "actionConfig": { "target": "D:\\Archives\\{pipeline}-{date}.zip" } }
 ]
@@ -811,8 +820,11 @@ Writes an archive of the files the run copied, with the checksums computed
 during the copy (recomputed for a skipped file). `target` replaces `{date}`
 (`yyyy-MM-dd`), `{time}` (`HHmmss`) and `{pipeline}`; a relative path is
 relative to the pipeline's folder, as is `baseFolder`, the folder the entry
-paths are relative to (absent: the common directory of the files; a file
-outside it is left out). `content` is `zip` (default: the files and a
+paths are relative to (a file outside it is left out, with a warning). Without
+`baseFolder`, the entry paths are relative to the common directory of the
+files; when they lie on several drives or shares (a secondary output to another
+NAS), each file keeps its full path under a top folder named after its drive or
+share (`C/…`, `D/…`, `nas_photos/…`), so none is left out. `content` is `zip` (default: the files and a
 `SHA256SUMS` manifest) or `manifest` (the `SHA256SUMS` file alone).
 `includeSkipped` also archives the targets of skipped items. Media entries
 (jpg, heic, raw, mp4, mov…) are not compressed (deflate level 0), the others
@@ -835,7 +847,7 @@ window, and the other plugins still load.
 
 To write an action, you extend `AbstractActionWithConfig<C>`, where `C` is a
 record holding the action's configuration. You implement `IInAction`,
-`IAnalyzeAction`, `IProcessAction` or `IOutAction`. Annotations on the
+`IAnalyzeAction`, `IProcessAction`, `IOutAction` or `IRunEndAction`. Annotations on the
 record's fields (`@Required`, `@DefaultValue`, `@AllowedValues`,
 `@DirectoryPath`, `@PatternField`…) give the editor what it needs to build
 the form. An action can also declare the resources it needs, report
@@ -846,6 +858,34 @@ reports the progress of the file it works on with `updateStatus` /
 `WriteContext`), shown in the plan view, and gets `beforeAll` / `afterAll`
 once per phase (preparation, execution) and `beforeEach` / `afterEach`
 around each file (see the `IAction` javadoc).
+
+The rest of the API, by need (see each javadoc):
+
+- **Run-end actions.** `IRunEndAction.runEnded(RunReport, RunEndContext)`,
+  listed by `IPlugin.getRunEndActions()`: runs once after the run with the
+  report of what it did; `RunEndContext.publish` hands values to the next
+  actions, `warn` adds a run warning, and `defaultTimeout()` sets its time
+  limit (60 s by default, `Duration.ZERO` for none).
+- **Listing by folder.** An input lists into a `ListingSink` (`root`, `item`,
+  `folderDone`); with `signalsFolders()` true it promises each `folderDone`,
+  so grouping and a streaming run settle folder by folder.
+- **Items that are not local files.** `WorkItem.remote(...)` builds an item
+  whose content is read from a stream (an archive entry, a remote file), with a
+  `SourceDeleter` that deletes its source once copied (null: never deleted).
+  `getContentFile()` gives the local file holding exactly the content, when
+  there is one, for a tool that reads a path.
+- **Secondary outputs.** `isSourceKept()` marks the copy a secondary output
+  receives (`withSourceKept()` makes one): an out action never deletes its
+  source. `IOutAction.writesCompanions()` says the action writes the item's
+  companions itself.
+- **Questions to the user.** `UserConfirmation.ask(question)` blocks until the
+  user answers (trusting a host seen for the first time, for example); ask it
+  from `listFiles`, `beforeAll` or a step of an item, never from `afterAll`.
+- **Plugin data.** `PluginFolders.dataDirectory(code)` is a folder kept across
+  runs (a tool the plugin downloaded).
+- **Secrets.** `@Secret` on a configuration field (`FieldHint.SECRET` in the
+  schema) makes the editor offer a secret of the vault instead of a typed
+  value; `${secret:name}` references are resolved before `loadConfig`.
 
 A plugin can also bring **grouping presets** (see
 [Companion files and archives](#companion-files-and-archives)): it returns
@@ -886,7 +926,7 @@ every module (`com.copybot.plugin.api.*`, `com.copybot.utils`,
 own, `X.Y`, distinct from the version of Copybot: the property
 `copybot.plugin.api.version` of the root `pom.xml`, which the build makes the
 module version of `com.copybot.engine` (`jar --describe-module` shows
-`com.copybot.engine@1.0`). A plugin declares the API it was built for without
+`com.copybot.engine@1.2` for the current API, 1.2). A plugin declares the API it was built for without
 doing anything, since `javac` records the version of the engine module it
 compiles against in the plugin's `requires com.copybot.engine`. A plugin runs
 on every Copybot whose API has the same major version and a minor version at
@@ -1150,10 +1190,15 @@ The design specifications and implementation plans are in
 
 ## Status
 
-Copybot is under active development. The pipeline
-format and the plugin API may still change. These are not built yet:
-detecting a card when it is inserted, sidecar files, transcoding, and step
-priorities.
+Copybot is under active development. The pipeline format and the plugin API
+(1.2 today) may still change. Built: the plan, auto and streaming modes, safe
+writes and conflict policies, resume, companion files and archive unfolding,
+secondary outputs, run-end actions (program, e-mail, webhook, ZIP with
+checksums) and a secrets vault, external programs and ffmpeg (video, HEIC to
+JPEG, thumbnails), and SFTP, FTP / FTPS and S3 sources and targets. Not built
+yet: a Google Takeout plugin, phones over MTP, detecting a card when it is
+inserted, step priorities, WebDAV and SMB (use a mounted share), and retrying
+a failed transfer within a run.
 
 ## License
 

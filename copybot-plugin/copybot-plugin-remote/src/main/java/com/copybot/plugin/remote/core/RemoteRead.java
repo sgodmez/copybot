@@ -121,33 +121,43 @@ public abstract class RemoteRead<C extends RemoteReadSettings> extends AbstractA
         });
     }
 
-    /** @throws IllegalStateException the connection or the listing of a folder failed, naming the folder */
+    /**
+     * Lists the folder. No connection is held while the sink is called: the sink may read a listed content at once
+     * (the unfolding of an archive, on this thread), which borrows a connection of the same pool; held, it would wait
+     * forever with maxConnections 1. Each folder is listed on a connection borrowed for that listing only; a tree
+     * listed at once ({@link RemoteFs#listTree}) is kept in memory until its end, then given.
+     *
+     * @throws IllegalStateException the connection or the listing of a folder failed, naming the folder
+     */
     @Override
     public void listFiles(ListingSink sink) {
         String root = folder;
         sink.root(root);
         String[] current = {root};
         try {
-            pool.call(fs -> {
-                if (!isRecursive() || signalsFolders() || !fs.listTree(root, entry -> treeEntry(root, entry, sink))) {
-                    walk(fs, root, "", sink, current);
+            if (isRecursive() && !signalsFolders()) {
+                List<WorkItem> tree = new ArrayList<>();
+                if (pool.call(fs -> fs.listTree(root, entry -> treeEntry(root, entry, tree::add)))) {
+                    tree.forEach(sink::item);
+                    return;
                 }
-                return null;
-            });
+            }
+            walk(root, "", sink, current);
         } catch (IOException e) {
             throw new IllegalStateException(message("read.error.list", code(), display(current[0]), RemoteText.detail(e)), e);
         }
     }
 
     /**
-     * Lists a folder: its files, then its sub-folders' trees (names in order), then tells it done.
+     * Lists a folder: its files, then its sub-folders' trees (names in order), then tells it done. The folder is
+     * listed on a borrowed connection, given back before its entries go to the sink.
      *
      * @param relative the folder relative to the listed one, "" for it, else ending with '/'
      * @param current  receives the folder being listed, for the message of a failure
      */
-    private void walk(RemoteFs fs, String dir, String relative, ListingSink sink, String[] current) throws IOException {
+    private void walk(String dir, String relative, ListingSink sink, String[] current) throws IOException {
         current[0] = dir;
-        List<RemoteEntry> entries = new ArrayList<>(fs.list(dir));
+        List<RemoteEntry> entries = new ArrayList<>(pool.call(fs -> fs.list(dir)));
         entries.sort(BY_NAME);
         long minSize = config.minSize() == null ? 0 : config.minSize();
         List<RemoteEntry> folders = new ArrayList<>();
@@ -165,7 +175,7 @@ public abstract class RemoteRead<C extends RemoteReadSettings> extends AbstractA
             for (RemoteEntry sub : folders) {
                 String subRelative = relative + sub.name();
                 if (!globs.excludedFolder(subRelative)) {
-                    walk(fs, RemotePaths.join(dir, sub.name()), subRelative + "/", sink, current);
+                    walk(RemotePaths.join(dir, sub.name()), subRelative + "/", sink, current);
                 }
             }
         }
@@ -179,7 +189,7 @@ public abstract class RemoteRead<C extends RemoteReadSettings> extends AbstractA
      * left out as {@link #walk} would leave it (a hidden name on its path, an excluded folder above it, its size, the
      * globs).
      */
-    private void treeEntry(String root, RemoteEntry entry, ListingSink sink) {
+    private void treeEntry(String root, RemoteEntry entry, Consumer<WorkItem> items) {
         String relative = entry.name();
         String[] names = relative.split("/", -1);
         for (int i = 0; i < names.length; i++) {
@@ -197,7 +207,7 @@ public abstract class RemoteRead<C extends RemoteReadSettings> extends AbstractA
         }
         String parent = RemotePaths.parent(relative);
         String dir = parent.isEmpty() ? root : RemotePaths.join(root, parent);
-        sink.item(item(dir, RemoteEntry.file(RemotePaths.name(relative), entry.size(), entry.lastModified())));
+        items.accept(item(dir, RemoteEntry.file(RemotePaths.name(relative), entry.size(), entry.lastModified())));
     }
 
     private boolean isRecursive() {

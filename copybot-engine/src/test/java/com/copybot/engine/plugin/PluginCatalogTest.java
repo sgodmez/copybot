@@ -74,6 +74,12 @@ public class PluginCatalogTest {
     }
 
     @Test
+    public void anInputTellsWhetherItSignalsItsFolders() {
+        assertTrue(embedded("file.read").signalsFolders(), "file.read signals its folders");
+        assertFalse(embedded("file.write").signalsFolders(), "not an input");
+    }
+
+    @Test
     public void namesAndDescriptionsAreLocalized() {
         for (CatalogAction action : List.of(embedded("file.read"), embedded("file.write"), embedded("file.buffer"))) {
             assertNotEquals(action.actionCode(), action.name(), "a translated name");

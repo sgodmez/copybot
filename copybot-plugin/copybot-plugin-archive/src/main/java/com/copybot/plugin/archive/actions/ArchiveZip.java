@@ -31,6 +31,7 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -53,8 +54,9 @@ import java.util.zip.ZipOutputStream;
  * The archive is written to a temporary file next to the target, then renamed: an interruption (time limit,
  * cancellation) or a failure leaves nothing under the final name and removes the temporary file. An existing file is
  * never overwritten: the archive takes the next free name "name (1).zip". The names of the entries are relative to
- * the base folder with "/" separators and never hold ".." or an absolute part: a file outside the base folder is left
- * out with a warning.
+ * the base folder with "/" separators and never hold ".." or an absolute part: a file outside the configured base
+ * folder is left out with a warning; without one, files on several roots are kept under a folder per root
+ * ({@link #entryNames}).
  */
 public class ArchiveZip extends AbstractActionWithConfig<ArchiveConfig> implements IRunEndAction {
 
@@ -111,7 +113,7 @@ public class ArchiveZip extends AbstractActionWithConfig<ArchiveConfig> implemen
         List<Entry> entries;
         try {
             entries = files.isEmpty() ? List.of()
-                    : entries(files, base(config.baseFolder(), files.keySet(), root), zip, context);
+                    : entries(files, configuredBase(config.baseFolder(), root), zip, context);
         } catch (InterruptedIOException e) {
             throw interrupted();
         }
@@ -218,11 +220,51 @@ public class ArchiveZip extends AbstractActionWithConfig<ArchiveConfig> implemen
         return parent == null ? Path.of("").toAbsolutePath() : parent;
     }
 
-    /** The base folder: the configured one, or the deepest directory holding all the files (of the first one's root). */
-    private static Path base(String configured, Set<Path> files, Path root) {
-        if (configured != null && !configured.isBlank()) {
-            return root.resolve(configured.strip()).normalize();
+    /** The configured base folder, resolved against the root; null when none is configured. */
+    private static Path configuredBase(String configured, Path root) {
+        return configured == null || configured.isBlank() ? null : root.resolve(configured.strip()).normalize();
+    }
+
+    /**
+     * The name of each file in the archive (absolute, normalised paths); a file left out is not in the map.
+     * <ul>
+     *     <li>With a base folder: the path relative to it; a file outside it is left out.</li>
+     *     <li>Without, the files on one root (drive, share): the path relative to the deepest folder holding them.</li>
+     *     <li>Without, the files on several roots (a secondary output to another share): the path relative to its
+     *     root, under a top folder named after the root ("C", "nas_photos"), so that none is left out.</li>
+     * </ul>
+     */
+    static Map<Path, String> entryNames(Set<Path> files, Path base) {
+        Map<Path, String> names = new LinkedHashMap<>();
+        if (base != null) {
+            for (Path file : files) {
+                if (file.startsWith(base) && !file.equals(base)) {
+                    names.put(file, name(base.relativize(file)));
+                }
+            }
+            return names;
         }
+        Map<Path, String> roots = rootFolders(files);
+        if (roots.size() <= 1) {
+            Path common = commonFolder(files);
+            for (Path file : files) {
+                if (common != null && file.startsWith(common) && !file.equals(common)) {
+                    names.put(file, name(common.relativize(file)));
+                }
+            }
+            return names;
+        }
+        for (Path file : files) {
+            Path root = file.getRoot();
+            if (root != null && !file.equals(root)) {
+                names.put(file, roots.get(root) + "/" + name(root.relativize(file)));
+            }
+        }
+        return names;
+    }
+
+    /** The deepest directory holding all the files (all on one root), or null. */
+    private static Path commonFolder(Set<Path> files) {
         Path common = null;
         for (Path file : files) {
             Path dir = file.getParent();
@@ -231,8 +273,8 @@ public class ArchiveZip extends AbstractActionWithConfig<ArchiveConfig> implemen
             }
             if (common == null) {
                 common = dir;
-            } else if (dir.getRoot() != null && dir.getRoot().equals(common.getRoot())) {
-                while (!dir.startsWith(common)) {
+            } else {
+                while (common != null && !dir.startsWith(common)) {
                     common = common.getParent();
                 }
             }
@@ -240,17 +282,44 @@ public class ArchiveZip extends AbstractActionWithConfig<ArchiveConfig> implemen
         return common;
     }
 
+    /** The folder name of each root of the files, in the order met: unique, a valid name ("C", "nas_photos"). */
+    private static Map<Path, String> rootFolders(Set<Path> files) {
+        Map<Path, String> folders = new LinkedHashMap<>();
+        Set<String> taken = new HashSet<>();
+        for (Path file : files) {
+            Path root = file.getRoot();
+            if (root == null || folders.containsKey(root)) {
+                continue;
+            }
+            String base = rootFolder(root);
+            String folder = base;
+            for (int n = 2; !taken.add(folder.toLowerCase(Locale.ROOT)); n++) {
+                folder = base + "_" + n;
+            }
+            folders.put(root, folder);
+        }
+        return folders;
+    }
+
+    /** A root as a folder name: "C:\" gives "C", "\\nas\photos\" gives "nas_photos", "/" gives "root". */
+    static String rootFolder(Path root) {
+        String name = root.toString().replaceAll("[\\\\/:]+", "_").replaceAll("^_+|_+$", "");
+        name = safeName(name);
+        return name.isEmpty() ? "root" : name;
+    }
+
     private List<Entry> entries(Map<Path, WrittenFile> files, Path base, boolean zip, RunEndContext context)
             throws InterruptedIOException {
+        Map<Path, String> names = entryNames(files.keySet(), base);
         TreeMap<String, Entry> byName = new TreeMap<>();
         for (Map.Entry<Path, WrittenFile> candidate : files.entrySet()) {
             checkInterrupted();
             Path file = candidate.getKey();
-            if (base == null || !file.startsWith(base) || file.equals(base)) {
+            String name = names.get(file);
+            if (name == null) {
                 context.warn(message("archive.warn.outside", file, base == null ? "" : base));
                 continue;
             }
-            String name = name(base.relativize(file));
             if (zip && name.equals(MANIFEST)) {
                 // the manifest of the archive takes this name
                 context.warn(message("archive.warn.reserved", file, MANIFEST));

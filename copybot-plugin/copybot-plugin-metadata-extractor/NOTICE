@@ -1,0 +1,8 @@
+Copybot plugin metadata-extractor
+Copyright the Copybot authors, distributed under the GNU General Public License v3
+(see the LICENSE of Copybot, https://www.gnu.org/licenses/gpl-3.0.html).
+
+This plugin includes, or uses, third-party software and data:
+
+  metadata-extractor (com.drewnoakes)     Apache License 2.0
+  Apache Commons Imaging                  Apache License 2.0

@@ -159,6 +159,51 @@ public class RemoteReadTest {
         second.close();
     }
 
+    /** A sink reading each content as it is listed (the unfolding of an archive), as the engine's listing pipe does. */
+    private static final class ReadingSink implements ListingSink {
+        final List<String> contents = new ArrayList<>();
+
+        @Override
+        public void item(WorkItem item) {
+            try (InputStream in = item.openInputStream()) {
+                contents.add(new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            }
+        }
+
+        @Override
+        public void folderDone(String folder) {
+        }
+    }
+
+    @Test
+    public void aContentOpenedWhileListedDoesNotWaitForTheListingsConnection() {
+        sampleTree();
+        MemoryActions.Read read = MemoryActions.read(server, "{host: 'nas', folder: '/in', maxConnections: 1}");
+        ReadingSink sink = new ReadingSink();
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> read.listFiles(sink));
+        assertEquals(List.of("a", "bb", "e", "ccc", "dddd"), sink.contents);
+        assertEquals(1, server.connects.get(), "one connection, shared by the listing and the contents");
+    }
+
+    @Test
+    public void aContentOpenedWhileListedInOneTreeListingDoesNotWait() {
+        sampleTree();
+        server.treeListing = true;
+        MemoryActions.Read read = new MemoryActions.Read(server) {
+            @Override
+            public boolean signalsFolders() {
+                return false;
+            }
+        };
+        read.setPlugin(MemoryActions.plugin());
+        read.loadConfig(com.google.gson.JsonParser.parseString("{host: 'nas', folder: '/in', maxConnections: 1}"));
+        ReadingSink sink = new ReadingSink();
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(10), () -> read.listFiles(sink));
+        assertEquals(5, sink.contents.size(), sink.contents.toString());
+    }
+
     @Test
     public void aFailedOpenIsAnUncheckedIOExceptionAndClosesTheConnection() {
         server.put("/in/a.jpg", "a", DATE);

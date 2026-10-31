@@ -735,7 +735,7 @@ public class EditorController {
                     && PipelineDocument.DESTINATION_CHECKS.getFirst().equals(document.destinationCheck());
             executionWarning.setVisible(warn);
             executionWarning.setManaged(warn);
-            GroupingForms.showStreamingWarning(groupingWarning, document);
+            GroupingForms.showStreamingWarning(groupingWarning, document, catalog);
         };
         sync.run();
         execution.valueProperty().addListener((obs, old, mode) -> {

@@ -325,6 +325,44 @@ public class RemoteWriteTest {
     }
 
     @Test
+    public void deleteSourceOnAKeptSourceIsLoggedOncePerPhase() {
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(RemoteWrite.class.getName());
+        List<String> logged = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.logging.Handler handler = new java.util.logging.Handler() {
+            @Override
+            public void publish(java.util.logging.LogRecord record) {
+                if (record.getLevel() == java.util.logging.Level.WARNING) {
+                    logged.add(record.getMessage());
+                }
+            }
+
+            @Override
+            public void flush() {
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+        logger.addHandler(handler);
+        try {
+            MemoryActions.Write write = action(", deleteSource: true");
+            write.beforeAll();
+            write.write(item("a.jpg", "hello").withSourceKept(), CONTEXT);
+            write.write(item("b.jpg", "hello").withSourceKept(), CONTEXT);
+            write.write(item("c.jpg", "hello"), CONTEXT); // not kept: no warning
+            List<String> kept = logged.stream().filter(m -> m.contains("deleteSource")).toList();
+            assertEquals(List.of("mem.write: deleteSource is ignored for a secondary output, the source is kept"),
+                    kept);
+            write.beforeAll();
+            write.write(item("d.jpg", "hello").withSourceKept(), CONTEXT);
+            assertEquals(2, logged.stream().filter(m -> m.contains("deleteSource")).count(), "again in a new phase");
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @Test
     public void aLocalSourceIsDeleted() throws IOException {
         Path source = Files.writeString(tempDir.resolve("a.jpg"), "hello");
         WorkItem item = new WorkItem(source);

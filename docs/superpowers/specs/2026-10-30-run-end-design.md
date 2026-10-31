@@ -187,7 +187,8 @@ et aux chemins de plugins de développement) ; il ne déclare que des actions de
 
 - Config : `target` (requis : chemin du fichier, variables `{date}` (aaaa-mm-jj), `{time}` (hhmmss), `{pipeline}`),
   `content` (`zip` | `manifest`, défaut `zip`), `includeSkipped` (faux), `baseFolder` (vide ⇒ répertoire commun des
-  fichiers).
+  fichiers ; fichiers sur plusieurs racines — lecteurs, partages — : chacun sous un dossier nommé d'après sa racine,
+  `C/…`, `nas_photos/…`, chemin complet conservé).
 - `zip` : une archive des fichiers écrits du run (`writtenFiles`, + les cibles des éléments sautés si
   `includeSkipped`) avec un fichier `SHA256SUMS` (format `sha256sum` : `empreinte  chemin/relatif`) ; entrées
   stockées sans compression pour les médias (jpg, heic, raw, mp4, mov…), compressées sinon. `manifest` : le seul

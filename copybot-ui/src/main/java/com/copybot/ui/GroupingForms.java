@@ -174,7 +174,7 @@ final class GroupingForms {
         if (document.folderRuleWithNonRecursiveFileRead(catalog)) {
             nodes.add(warning(ResourcesEngine.getString("editor.grouping.warning.folder")));
         }
-        document.streamingGroupingWarning().ifPresent(note -> {
+        document.streamingGroupingWarning(catalog).ifPresent(note -> {
             Label label = wrapped("");
             showStreamingNote(label, note);
             nodes.add(label);
@@ -183,11 +183,11 @@ final class GroupingForms {
     }
 
     /**
-     * The streaming note ({@link PipelineDocument#streamingGroupingWarning()}), also shown by the pipeline form
+     * The streaming note ({@link PipelineDocument#streamingGroupingWarning}), also shown by the pipeline form
      * where the execution is chosen: hidden when there is none.
      */
-    static void showStreamingWarning(Label label, PipelineDocument document) {
-        Optional<StreamingNote> note = document.streamingGroupingWarning();
+    static void showStreamingWarning(Label label, PipelineDocument document, StepCatalog catalog) {
+        Optional<StreamingNote> note = document.streamingGroupingWarning(catalog);
         note.ifPresentOrElse(n -> showStreamingNote(label, n), () -> label.setText(""));
         label.setWrapText(true);
         label.setVisible(note.isPresent());

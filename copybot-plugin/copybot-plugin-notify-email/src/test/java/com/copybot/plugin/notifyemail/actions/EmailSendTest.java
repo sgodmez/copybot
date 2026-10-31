@@ -227,6 +227,18 @@ public class EmailSendTest {
     }
 
     @Test
+    void aWrittenItemWithoutTargetTellsItsOutcomeOnly() throws Exception {
+        JsonObject config = config();
+        config.addProperty("details", "all");
+        List<RunItem> items = List.of(new RunItem("a.jpg", "card", ItemOutcome.WRITTEN, null, null));
+        action(config).runEnded(report(RunOutcome.SUCCESS, items, Map.of()), context);
+
+        String text = parts().text();
+        assertTrue(text.contains("a.jpg: written"), text);
+        assertFalse(text.contains("written to"), text);
+    }
+
+    @Test
     void detailsNoneListsNoItem() throws Exception {
         JsonObject config = config();
         config.addProperty("details", "none");
