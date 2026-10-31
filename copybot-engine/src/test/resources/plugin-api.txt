@@ -14,6 +14,8 @@ com.copybot.exception.PluginNotFoundException constructor public <init>(java.lan
 com.copybot.exception.PluginNotFoundException type public class com.copybot.exception.PluginNotFoundException extends com.copybot.exception.CopybotException
 com.copybot.plugin.api.PluginFolders method public static java.nio.file.Path dataDirectory(java.lang.String) throws java.io.IOException
 com.copybot.plugin.api.PluginFolders type public final class com.copybot.plugin.api.PluginFolders
+com.copybot.plugin.api.UserConfirmation method public static boolean ask(java.lang.String)
+com.copybot.plugin.api.UserConfirmation type public final class com.copybot.plugin.api.UserConfirmation
 com.copybot.plugin.api.action.AbstractAction constructor public <init>()
 com.copybot.plugin.api.action.AbstractAction method protected final void updatePercent(int)
 com.copybot.plugin.api.action.AbstractAction method protected final void updateStatus(com.copybot.plugin.api.action.WorkStatus)

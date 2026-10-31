@@ -1,8 +1,10 @@
 package com.copybot.engine.sample;
 
+import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.plugin.api.UserConfirmation;
 import com.copybot.plugin.api.action.IAction;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
@@ -19,8 +21,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -548,5 +552,62 @@ class SampleSessionTest {
         caller.join(2000);
         assertFalse(caller.isAlive(), "returned within 2 s");
         assertEquals(Optional.of(ResourcesEngine.getString("sample.cancelled")), result.get().failure());
+    }
+
+    // ---- questions of the plugins (spec remote §2) ----
+
+    @Test
+    void theStepsOfASampleAreAnsweredNoWithoutAskingTheUser() throws IOException {
+        AtomicInteger asked = new AtomicInteger();
+        CopybotEngine.setConfirmationHandler(question -> {
+            asked.incrementAndGet();
+            return CompletableFuture.completedFuture(true);
+        });
+        try {
+            List<Boolean> answers = Collections.synchronizedList(new ArrayList<>());
+            Steps steps = new Steps().withIn(consumer -> {
+                answers.add(UserConfirmation.ask("listing?")); // in the listing thread of the sample
+                consumer.accept(item("a.JPG"));
+            });
+            steps.withAnalyse(item -> answers.add(UserConfirmation.ask("analysis?")));
+            SampleSession session = session(steps);
+
+            String note = ResourcesEngine.getString("sample.confirmation-declined");
+            Sample listed = session.list(CONFIG);
+            assertEquals(Optional.empty(), listed.failure());
+            assertEquals(1, listed.notes().stream().filter(note::equals).count(), "a run asks: " + listed.notes());
+            Sample analysed = session.analyse(CONFIG);
+            assertEquals(Optional.empty(), analysed.failure());
+            assertTrue(analysed.notes().contains(note));
+            Path file = Files.writeString(dir.resolve("chosen.JPG"), "x");
+            Sample chosen = session.analyseFile(FILE_READ, file);
+            assertEquals(Optional.empty(), chosen.failure());
+            assertTrue(chosen.notes().contains(note));
+
+            assertEquals(List.of(false, false, false, false), answers);
+            assertEquals(0, asked.get(), "a sample never asks");
+            assertTrue(UserConfirmation.ask("a run?"), "outside a sample the handler is asked");
+        } finally {
+            CopybotEngine.setConfirmationHandler(null);
+        }
+    }
+
+    @Test
+    void aListingFailingOnADeclinedQuestionSaysThatARunAsksIt() {
+        Steps steps = new Steps().withIn(consumer -> {
+            if (!UserConfirmation.ask("Trust nas.local?")) {
+                throw new IllegalStateException("host not trusted");
+            }
+        });
+        Sample sample = session(steps).list(CONFIG);
+        String failure = sample.failure().orElseThrow();
+        assertTrue(failure.startsWith("host not trusted"), failure);
+        assertTrue(failure.endsWith(ResourcesEngine.getString("sample.confirmation-declined")), failure);
+    }
+
+    @Test
+    void aSampleWithoutQuestionHasNoNoteAboutThem() {
+        Sample sample = session(new Steps().withIn(emitting("a.JPG"))).list(CONFIG);
+        assertEquals(List.of(), sample.notes());
     }
 }

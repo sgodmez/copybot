@@ -1,5 +1,6 @@
 package com.copybot.engine.sample;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +18,16 @@ public record Sample(List<SampleItem> items, int listed, boolean truncated, List
     public Sample {
         items = List.copyOf(items);
         notes = List.copyOf(notes);
+    }
+
+    /** The same sample with one more note; a failed sample shows only its failure: the note follows it there. */
+    public Sample withNote(String note) {
+        if (failure.isPresent()) {
+            return new Sample(items, listed, truncated, notes, Optional.of(failure.get() + " — " + note));
+        }
+        List<String> more = new ArrayList<>(notes);
+        more.add(note);
+        return new Sample(items, listed, truncated, more, failure);
     }
 
     public static Sample failed(String message) {

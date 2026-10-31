@@ -198,8 +198,8 @@ public class MainExecutor implements Runnable {
     private volatile List<String> modeWarnings = List.of();
     /** The steps could not be resolved before the phase ({@link #stream()}): thrown again by the phase. */
     private Throwable stepsFailure;
-    /** The actions whose {@link IAction#beforeAll} ran in the current phase, in that order. Phase thread only. */
-    private final List<IAction> begunActions = new ArrayList<>();
+    /** The steps whose {@link IAction#beforeAll} ran in the current phase, in that order. Phase thread only. */
+    private final List<PipelineStep<?>> begunActions = new ArrayList<>();
 
     /**
      * While preparing, true when the resume point comes from the destination probe: the items are not analysed at
@@ -377,7 +377,7 @@ public class MainExecutor implements Runnable {
     }
 
     private ItemRunner newItemRunner() {
-        return new ItemRunner(registry, state, tasks, notifier, writeContext, () -> layout, this::findOutAction,
+        return new ItemRunner(registry, state, tasks, notifier, writeContext, () -> layout, this::findOutStep,
                 () -> cancelRequested, this::addWarnings);
     }
 
@@ -760,7 +760,7 @@ public class MainExecutor implements Runnable {
      *                                                target to probe
      */
     private ResumeProposal resumeAtTheListing() {
-        resolver = new ResumeResolver(resume, findOutAction());
+        resolver = newResumeResolver();
         ResumePoint chosen = chosenPoint;
         ResumeProposal streamed;
         if (chosen != null) {
@@ -836,7 +836,7 @@ public class MainExecutor implements Runnable {
             phaseEnd = barrierIndex;
             itemRunner.setFinalPhase(false);
             itemRunner.setDryRunSteps(processSteps());
-            resolver = new ResumeResolver(resume, findOutAction());
+            resolver = newResumeResolver();
             ResumePoint chosen = chosenPoint;
             if (chosen != null) {
                 // like a cursor at that point (spec manual-point §1): no probe, the files before it not analysed
@@ -1519,13 +1519,17 @@ public class MainExecutor implements Runnable {
 
     /**
      * {@link IAction#beforeAll} of the actions of these steps, in order (spec of the lifecycle: {@link IAction}). A
-     * failure is thrown, the phase fails: the actions begun before it still get their {@link IAction#afterAll}.
+     * failure is thrown without the secret values of its step, the phase fails: the actions begun before it still get
+     * their {@link IAction#afterAll}.
      */
     private void beginActions(List<? extends PipelineStep<?>> steps) {
         for (PipelineStep<?> step : steps) {
-            IAction action = step.getAction();
-            action.beforeAll();
-            begunActions.add(action);
+            try {
+                step.getAction().beforeAll();
+            } catch (Throwable e) { // a checked exception thrown sneakily too
+                throw Redaction.rethrow(step.getRedactor(), e);
+            }
+            begunActions.add(step);
         }
     }
 
@@ -1552,27 +1556,27 @@ public class MainExecutor implements Runnable {
     /**
      * {@link IAction#afterAll} of the actions begun in this phase, the last begun first, every one of them called.
      *
-     * @throws RuntimeException the first failure, the next ones suppressed in it (or an Error)
+     * @throws RuntimeException the first failure, the next ones suppressed in it (or an Error, or a checked exception
+     *                          thrown sneakily), each one without the secret values of its step
      */
     private void endActions() {
         Throwable failure = null;
         for (int i = begunActions.size() - 1; i >= 0; i--) {
+            PipelineStep<?> step = begunActions.get(i);
             try {
-                begunActions.get(i).afterAll();
-            } catch (RuntimeException | Error e) {
+                step.getAction().afterAll();
+            } catch (Throwable e) { // a checked exception thrown sneakily too: the next actions still end
+                Throwable hidden = Redaction.hidden(step.getRedactor(), e);
                 if (failure == null) {
-                    failure = e;
+                    failure = hidden;
                 } else {
-                    failure.addSuppressed(e);
+                    failure.addSuppressed(hidden);
                 }
             }
         }
         begunActions.clear();
-        if (failure instanceof RuntimeException e) {
-            throw e;
-        }
-        if (failure instanceof Error e) {
-            throw e;
+        if (failure != null) {
+            throw Redaction.unchecked(failure);
         }
     }
 
@@ -1733,12 +1737,26 @@ public class MainExecutor implements Runnable {
      * resolved (yet).
      */
     IOutAction findOutAction() {
+        PipelineStep<IOutAction> step = findOutStep();
+        return step == null ? null : step.getAction();
+    }
+
+    /** The out step of the main branch, with the redactor of its secret values; null like {@link #findOutAction}. */
+    @SuppressWarnings("unchecked") // its action is an IOutAction
+    PipelineStep<IOutAction> findOutStep() {
         ItemLayout items = layout;
         if (items != null && !items.mainSteps().isEmpty()
-                && items.mainSteps().getLast().getAction() instanceof IOutAction out) {
-            return out;
+                && items.mainSteps().getLast().getAction() instanceof IOutAction) {
+            return (PipelineStep<IOutAction>) items.mainSteps().getLast();
         }
         return null;
+    }
+
+    /** The resume of the pipeline, its target failures without the secret values of the out step. */
+    private ResumeResolver newResumeResolver() {
+        PipelineStep<IOutAction> out = findOutStep();
+        return out == null ? new ResumeResolver(resume, null)
+                : new ResumeResolver(resume, out.getAction(), out.getRedactor());
     }
 
     ResumeProposal getProposal() {

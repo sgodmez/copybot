@@ -90,6 +90,11 @@ libraries.
   A stopped run does not move the cursor. A preparation stopped after its
   listing lets you pick where to resume from its rows, then prepare again. In the
   CLI, Ctrl+C cancels and leaves 5 s for writes in progress to finish.
+- **Remote sources and targets.** The `remote` plugin reads from and writes
+  to SFTP, FTP or FTPS servers and S3 buckets (AWS, MinIO), with the same
+  safe writes, conflict policy and dates. A server's key or self-signed
+  certificate is trusted on first use, after you confirm it. See
+  [Remote servers](#remote-servers-sftp-ftp-and-s3-the-remote-plugin).
 - **Actions after the copy.** A pipeline can end with an ordered list of
   actions (`runEnd`): launch a program such as synoRight, send an e-mail or a
   webhook message (ntfy, Discord, Slack, Telegram), write a ZIP of the copied
@@ -186,6 +191,8 @@ when several versions are installed.
 |---|---|---|---|
 | `file.read` | built in | in | Lists a folder, recursively or not, with include/exclude globs and the hidden-file policy |
 | `file.write` | built in | out | Safe write to a pattern-built path: temporary file and rename, verification, conflict policy, optional move |
+| `sftp.read`, `ftp.read`, `s3.read` | `com.copybot.plugin.remote` | in | Lists a folder of an SFTP or FTP / FTPS server, or a prefix of an S3 bucket. See *Remote servers* |
+| `sftp.write`, `ftp.write`, `s3.write` | `com.copybot.plugin.remote` | out | Writes to an SFTP or FTP / FTPS server or an S3 bucket: temporary name and rename (S3: atomic put), size check, conflict policy, optional move |
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
 | `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
 | `check` | `com.copybot.plugin.gpszone` (optional) | analyze | Goes after `extract`. Flags a photo whose camera was badly set: from its GPS position, the time zone of the place (offline boundaries of [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder) through [timeshape](https://github.com/RomanIakovlev/timeshape)) gives another offset than the recorded one, the GPS time confirming the capture date. Nothing near a time zone boundary, at sea, or for a video. The plan suggests the zone; you apply it |
@@ -483,6 +490,185 @@ Limits:
 - A video without a video stream passes unchanged (`ffmpeg.video`) or is left
   out (`ffmpeg.thumbnail`); this is detected from ffmpeg's English message.
 
+## Remote servers: SFTP, FTP and S3 (the remote plugin)
+
+The `remote` plugin (`com.copybot.plugin.remote`) reads files from a server
+and writes files to one, with SFTP, FTP or FTPS, or an S3 bucket (AWS, MinIO
+and other S3-compatible stores):
+
+| Action | Kind | Library |
+|---|---|---|
+| `sftp.read` / `sftp.write` | in / out | [JSch](https://github.com/mwiede/jsch) (the maintained fork) |
+| `ftp.read` / `ftp.write` | in / out | [Commons Net](https://commons.apache.org/proper/commons-net/): FTP, FTPS explicit or implicit |
+| `s3.read` / `s3.write` | in / out | the JDK only (its HTTP client, its own SigV4 signature) |
+
+A NAS reached by SFTP as a source, and an S3 bucket as the target:
+
+```json
+{
+  "inSteps": [
+    { "plugin": "com.copybot.plugin.remote", "action": "sftp.read",
+      "actionConfig": { "host": "nas.local", "user": "photos", "privateKey": "C:\\Users\\me\\.ssh\\id_ed25519",
+                        "passphrase": "${secret:nas-key}", "folder": "/volume1/upload",
+                        "include": ["**/*.jpg", "**/*.nef"] } }
+  ],
+  "analyseSteps": [ { "plugin": "com.copybot.plugin.metadataextractor", "action": "extract" } ],
+  "outStep": {
+    "plugin": "com.copybot.plugin.remote", "action": "s3.write",
+    "actionConfig": { "region": "eu-west-3", "bucket": "my-photos",
+                      "accessKey": "AKIAIOSFODNN7EXAMPLE", "secretKey": "${secret:aws-secret}",
+                      "outPattern": "{captureDate.Y|lastModified.Y}/{captureDate.m|lastModified.m}/{name}",
+                      "onConflict": { "compare": "sizeAndDate" } }
+  }
+}
+```
+
+An FTPS server as the target (the `outStep`):
+
+```json
+{ "plugin": "com.copybot.plugin.remote", "action": "ftp.write",
+  "actionConfig": { "host": "ftp.example.org", "user": "copybot", "password": "${secret:ftp-password}",
+                    "security": "explicit", "outPattern": "photos/{captureDate.Y|lastModified.Y}/{name}" } }
+```
+
+A MinIO bucket as a source (an entry of `inSteps`):
+
+```json
+{ "plugin": "com.copybot.plugin.remote", "action": "s3.read",
+  "actionConfig": { "endpoint": "https://minio.local:9000", "region": "us-east-1", "bucket": "camera",
+                    "pathStyle": true, "accessKey": "copybot", "secretKey": "${secret:minio-secret}",
+                    "folder": "dcim" } }
+```
+
+Put passwords, passphrases and secret keys in the vault (see *Secrets*): they
+never appear in a log, a message, a plan or a warning.
+
+**Connection fields.**
+
+| Protocol | Fields |
+|---|---|
+| SFTP | `host` (required), `port` (22), `user` (required), `password`, `privateKey` (a key file), `passphrase` |
+| FTP | `host` (required), `port` (21, 990 with `implicit`), `user` (required), `password`, `security` `explicit` (default: TLS after `AUTH TLS`), `implicit` (TLS from the start) or `none`, `passive` (true) |
+| S3 | `region` (required), `bucket` (required), `endpoint` (absent: `https://s3.<region>.amazonaws.com`), `accessKey` and `secretKey` (neither: anonymous requests, for a public bucket), `pathStyle` (false; true for MinIO or an endpoint given by its address) |
+
+**Input fields** (`*.read`): `folder` (required; an S3 prefix, `/` for the
+whole bucket), `recursive` (true), `include` / `exclude` (globs relative to the
+folder, case-insensitive, as `file.read`), `minSize` (bytes), `maxConnections`
+(4). Names starting with `.` (files and folders) are never listed. Each file
+keeps its date: SFTP mtime, FTP `MLSD` (else `LIST` and `MDTM`), S3
+`LastModified` (the date of the upload).
+
+**Output fields** (`*.write`): `outPattern` (as `file.write`, `/` between the
+names; relative to the starting folder of the user on SFTP and FTP, a key in
+S3), `onMissingKey`, `onConflict` (`compare` `size` (default) or `sizeAndDate`
+(within 2 s); `ifIdentical` `skip` (default), `ifDifferent` `rename` (default,
+`name (1).ext`), each also `overwrite` or `error`), `deleteSource` (false: true
+deletes the source once its copy is verified, also a remote source),
+`maxConnections` (4). Nothing compares contents on a server: a file of the
+same size counts as identical with `size`. On SFTP and FTP a file is written
+under a hidden temporary name (`.<name>.<run>-<n>.copybot-tmp`), its size
+checked, then renamed; folders are created as needed. On S3 an object appears
+whole or not at all, so it is written under its final key. The date of the
+source is given to the file (SFTP, FTP with `MFMT` or `SITE UTIME`, S3 as
+`x-amz-meta-mtime` metadata, as rclone does), so `sizeAndDate` finds it again
+on the next run. A server that cannot set dates (vsftpd has neither `MFMT` nor
+`SITE UTIME`) makes `sizeAndDate` compare sizes only, with a warning in the log.
+
+**Connections and resources.** A step opens at most `maxConnections`
+connections to its server and closes them at the end of the run (an idle one
+also after 30 s). The listing of an input holds one of them while it runs.
+The listing of an input and each file written by an output hold the resource
+`net:<protocol>:<host>` (`net:sftp:nas.local`, `net:ftp:ftp.example.org`,
+`net:s3:s3.eu-west-3.amazonaws.com` for every bucket of that endpoint), whose
+capacity is **1** unless `config.json` says otherwise: a remote output writes
+one file at a time, and a pipeline reading and writing on the same host (or two
+buckets of the same endpoint) starts no write before its listing ends. Reading
+the content of a listed file takes no resource, only one of the input's
+`maxConnections`. Raise the capacity with:
+
+```json
+{ "resources": { "net:*": 4 } }
+```
+
+Connecting gives up after 20 s; a transfer that makes no progress for 60 s
+fails (SFTP notices a dead link through keep-alives, within about 80 s).
+
+### SFTP: the server's key
+
+The first connection to a server shows its key fingerprint
+(`SHA256:…`, as `ssh-keygen -lf` prints it) and asks whether to trust it,
+before any password is sent. In the application this is a dialog; the editor's
+sample never asks (start a run to answer). From the **command line** the answer
+is yes, with a line on stderr naming the fingerprint: a first headless run
+trusts the key it sees, so check that line, or run once from the application.
+A trusted key is written to the plugin's `known_hosts` file
+(`plugin-data/remote/known_hosts` in the Copybot data folder, OpenSSH format;
+`[host]:port` when the port is not 22). A key that differs from the recorded one
+is **refused** without a question, the message giving both fingerprints and
+the file to edit if the server really changed its key. A key of another type
+than the recorded ones also counts as changed: remove the server's line to
+trust it again. A no is remembered until the end of the run. Only modern
+algorithms are accepted (Ed25519, ECDSA, RSA with SHA-2); a server offering only
+`ssh-rsa` (SHA-1) is refused.
+
+### FTPS: the server's certificate
+
+A certificate is first checked as a browser would (a trusted authority of the
+Java runtime, and the host name). A NAS with a self-signed certificate fails
+that check: Copybot then asks once whether to trust it, showing the SHA-256
+fingerprint of its public key, its subject, issuer and validity, and the names
+it holds when they are not the host's. Yes records the fingerprint in
+`plugin-data/remote/ftps_trust` (one `host:port SHA256:…` line per server); that
+certificate is then accepted even once expired or renewed with the same key.
+Another key is refused, with both fingerprints and the file. As for SFTP, the
+command line answers yes with a warning on stderr. With `security: none` and a
+password, the password travels in clear and the step gets a warning.
+
+### S3: endpoint, permissions and multipart
+
+- **Address.** By default the bucket goes into the host name
+  (`https://my-photos.s3.eu-west-3.amazonaws.com/key`), which needs a bucket
+  name made of lower case letters, digits, dots and hyphens (3 to 63
+  characters; a name with dots fails the certificate check of AWS over
+  `https`); for a dotted or any other name, or a server given by its address, set
+  `pathStyle: true` (`https://endpoint/bucket/key`), as MinIO usually needs. A
+  bucket of another region is named in the error with its region. An `http://`
+  endpoint gets a warning: the files travel in clear (the secret key is never
+  sent, only signatures).
+- **Permissions.** `s3:ListBucket` on the bucket (listing, and checking a
+  target: without it, S3 answers 403 instead of 404 for a missing key, and the
+  write fails as *access denied*), `s3:GetObject` (reading, and the `HEAD` that
+  checks a target), `s3:PutObject` (writing, multipart included),
+  `s3:AbortMultipartUpload`, and `s3:DeleteObject` on a source bucket whose
+  objects are moved (`deleteSource`) and on the target bucket (an object whose
+  check failed is removed).
+- **Large files.** Up to 16 MiB a file is sent in one `PUT`; above, in parts of
+  16 MiB (larger when 10,000 parts would not hold the file). Each connection
+  keeps one 16 MiB buffer while it lives: 64 MiB of memory for a step with the
+  default 4 connections. A failed or cancelled upload is aborted, so no part
+  is left; when even the abort fails (network down), the parts stay billed in
+  the bucket. Add a lifecycle rule *Delete expired object delete markers or
+  incomplete multipart uploads* (`AbortIncompleteMultipartUpload` after 1 to
+  7 days) to clean them up.
+- A listing gives the date of the upload, not of the photo: an `s3.read`
+  source has the date the object was written (Copybot's own objects keep the
+  original date in their metadata, read back when they are checked as targets).
+
+### Limits
+
+- The plan shows **unknown target** for a remote output: the target is
+  computed during the copy. The resume mode `destination` is refused for a
+  remote output; `stateThenDestination` (the default) uses the saved cursor and,
+  without one, takes every file with a warning.
+- Remote targets are not in the run's list of written files (no SHA-256 in the
+  run report), so `archive.zip` leaves them out.
+- Companion files to copy (grouping with `copy`) are refused for a remote
+  output: the pipeline does not load.
+- Hidden names (starting with `.`) are never listed, with no option.
+- No WebDAV or SMB (use a mounted share with `file.read` / `file.write`), no SSH
+  agent, no IAM role or AWS profile (keys only), no retry of a failed transfer
+  within the run (S3 `503 SlowDown` included).
+
 ## After the copy (run-end actions)
 
 A pipeline can end with an ordered list of actions, `runEnd`, set in the
@@ -552,7 +738,9 @@ copybot secret delete smtp-password
 A reference to an undefined secret or variable refuses the step, naming the
 reference. An unknown secret name in the editor shows a warning (a pipeline may
 come from another machine). Secret values never appear in logs, messages or
-warnings of the actions: they are shown as their references. A password typed
+warnings of the actions: they are shown as their references. That holds for
+every failure of a step, including a failed listing, the plan's targets, a
+dry run, the editor's sample and the actions after the copy. A password typed
 in clear in a field marked as secret gets a warning and an offer to move it to
 the vault.
 
@@ -729,7 +917,7 @@ You need **JDK 25** and Maven (3.8.8 or later).
 mvn verify
 ```
 
-builds the modules and runs the test suite (about 1,170 tests across the
+builds the modules and runs the test suite (about 2,250 tests across the
 engine, the UI and the plugins). To build the desktop application as well, add
 the `dist` profile:
 
@@ -747,6 +935,7 @@ It produces:
 - `copybot-plugin/copybot-plugin-notify-webhook/target/` — the end-of-run webhook (ntfy, Discord, Slack, Telegram, JSON). Copy its jar into `plugins/notify-webhook/` next to the application.
 - `copybot-plugin/copybot-plugin-archive/target/` — the end-of-run ZIP archive of the copied files. Copy its jar into `plugins/archive/` next to the application.
 - `copybot-plugin/copybot-plugin-exec/target/` — `exec.process` and the ffmpeg actions (compressed videos, HEIC to JPEG, thumbnails). Copy its jar into `plugins/exec/` next to the application. It does not ship ffmpeg: see *Programs and ffmpeg*.
+- `copybot-plugin/copybot-plugin-remote/target/` — SFTP, FTP / FTPS and S3 sources and targets. Copy its jar and its `lib/` folder (JSch, Commons Net, Commons IO) into `plugins/remote/` next to the application. See *Remote servers*.
 
 **Where Copybot keeps its files:** the code (the application and its
 `plugins` folder) lives in the application folder. The data (`config.json`,
@@ -873,8 +1062,8 @@ does that). That run configuration loads the metadata and gps-zone plugins
 straight from their `target/` folders through the `copybot.devPluginPaths`
 system property (folders separated by the platform path separator, `;` on
 Windows; ignored in the packaged application), so package these plugins once
-first. A dev run of the UI also needs the folders of the run-end plugins (and of `exec`, to use ffmpeg) in
-`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target;copybot-plugin/copybot-plugin-exec/target`
+first. A dev run of the UI also needs the folders of the run-end plugins (and of `exec`, to use ffmpeg, and `remote`, for servers and buckets) in
+`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target;copybot-plugin/copybot-plugin-exec/target;copybot-plugin/copybot-plugin-remote/target`
 (add them to the run configuration yourself). The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
 `logs/` are written (git-ignored).
 
@@ -903,7 +1092,7 @@ idea where to start again. Copybot is built around a few rules:
 |---|---|
 | [`copybot-engine`](copybot-engine) | The engine, the CLI, the plugin API (`com.copybot.plugin.api.*`) and the built-in `file.read` / `file.write` actions |
 | [`copybot-ui`](copybot-ui) | The JavaFX desktop application and its packaging |
-| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive`, and `exec` (any program, ffmpeg for video, HEIC and thumbnails) |
+| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive`, `exec` (any program, ffmpeg for video, HEIC and thumbnails), and `remote` (SFTP, FTP / FTPS and S3 sources and targets) |
 | [`copybot-plugin-demo`](copybot-plugin-demo) | Demo plugins exercising module isolation, versions and dependencies |
 | [`copybot-dependencies`](copybot-dependencies) | Shared dependency versions |
 

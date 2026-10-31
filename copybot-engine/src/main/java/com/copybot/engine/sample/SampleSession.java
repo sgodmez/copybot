@@ -1,10 +1,13 @@
 package com.copybot.engine.sample;
 
+import com.copybot.config.SecretReferences;
 import com.copybot.engine.DryRunner;
 import com.copybot.engine.Projection;
+import com.copybot.engine.Redaction;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
+import com.copybot.engine.plugin.Confirmations;
 import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IProcessAction;
@@ -26,11 +29,14 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 
 /**
  * A sample of a pipeline being edited (spec pattern-helper §3): list once, analyse as often as the analyse or
  * process steps change. Not thread-safe except {@link #cancel()}; its operations block and are meant for one
- * background thread. Never throws: failures are in {@link Sample#failure()}.
+ * background thread. Never throws: failures are in {@link Sample#failure()}. The questions its steps ask the user
+ * ({@link com.copybot.plugin.api.UserConfirmation}) are answered no without asking, and a note says that a run asks
+ * them: a preview trusts nothing (spec remote §2); a thread a plugin starts by itself is not covered.
  */
 public final class SampleSession {
 
@@ -63,6 +69,10 @@ public final class SampleSession {
 
     /** Lists the items (capped, with a deadline), keeps a few of them, then analyses them. */
     public Sample list(PipelineConfig config) {
+        return declining(() -> listDeclining(config));
+    }
+
+    private Sample listDeclining(PipelineConfig config) {
         begin();
         Thread lister = null;
         List<WorkItem> received = Collections.synchronizedList(new ArrayList<>());
@@ -73,9 +83,11 @@ public final class SampleSession {
             AtomicBoolean full = new AtomicBoolean();
             AtomicReference<Throwable> failure = new AtomicReference<>();
             List<PipelineStep<IInAction>> inSteps = steps.in(config); // resolution failure: caught below
-            lister = Thread.ofPlatform().daemon().name("copybot-sample-listing").start(() -> {
+            lister = Thread.ofPlatform().daemon().name("copybot-sample-listing").start(Confirmations.declining(() -> {
+                SecretReferences.Redactor redactor = SecretReferences.Redactor.NONE; // of the step listing
                 try {
                     for (PipelineStep<IInAction> step : inSteps) {
+                        redactor = step.getRedactor();
                         step.getAction().listFiles(item -> {
                             synchronized (received) {
                                 if (closed.get()) {
@@ -97,10 +109,10 @@ public final class SampleSession {
                 } catch (Throwable t) {
                     // a lister failing once the sample is taken (timeout, cancel) fails nothing
                     if (!full.get() && !closed.get() && !Thread.currentThread().isInterrupted()) {
-                        failure.set(t);
+                        failure.set(Redaction.hidden(redactor, t)); // without the secret values of the step
                     }
                 }
-            });
+            }));
             lister.join(listingTimeout.toMillis());
             close(received, closed);
             boolean timedOut = lister.isAlive();
@@ -134,6 +146,16 @@ public final class SampleSession {
         }
     }
 
+    /**
+     * Runs the operation answering no to the questions of its steps without asking (the listing thread included);
+     * when one was declined, a note says that a run asks it (spec remote §2).
+     */
+    private static Sample declining(Supplier<Sample> operation) {
+        AtomicBoolean declined = new AtomicBoolean();
+        Sample sample = Confirmations.declineDuring(declined, operation::get);
+        return declined.get() ? sample.withNote(ResourcesEngine.getString("sample.confirmation-declined")) : sample;
+    }
+
     /** No item is kept any more: under the lock of received, so that no item is added once the sample is taken. */
     private static void close(List<WorkItem> received, AtomicBoolean closed) {
         synchronized (received) {
@@ -143,6 +165,10 @@ public final class SampleSession {
 
     /** Analyses again the items kept by {@link #list}, with the current analyse and process steps. */
     public Sample analyse(PipelineConfig config) {
+        return declining(() -> analyseDeclining(config));
+    }
+
+    private Sample analyseDeclining(PipelineConfig config) {
         begin();
         try {
             if (kept == null) {
@@ -164,6 +190,10 @@ public final class SampleSession {
      * {@link #list}; cancellable like the other operations.
      */
     public Sample analyseFile(PipelineConfig config, Path file) {
+        return declining(() -> analyseFileDeclining(config, file));
+    }
+
+    private Sample analyseFileDeclining(PipelineConfig config, Path file) {
         begin();
         try {
             List<String> notes = new ArrayList<>();
@@ -228,7 +258,8 @@ public final class SampleSession {
             try {
                 step.getAction().doAnalyze(item);
             } catch (Throwable e) {
-                error = ResourcesEngine.getString("sample.analysis-failed", source, DryRunner.actionName(step), message(e));
+                error = ResourcesEngine.getString("sample.analysis-failed", source, DryRunner.actionName(step),
+                        step.getRedactor().text(message(e))); // without the secret values of the step
                 beforeFailure = snapshot;
                 break;
             }

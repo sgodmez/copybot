@@ -2,10 +2,12 @@ package com.copybot.engine;
 
 import com.copybot.config.AppFolders;
 import com.copybot.config.CopybotConfig;
+import com.copybot.config.SecretReferences;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.plugin.api.action.IAction;
@@ -14,6 +16,8 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.engine.plugin.ConfirmationHandler;
+import com.copybot.engine.plugin.Confirmations;
 import com.copybot.engine.plugin.PluginDataRoot;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.plugin.report.PluginReport;
@@ -142,6 +146,17 @@ public final class CopybotEngine implements AutoCloseable {
         return new CopybotEngine(config, folders);
     }
 
+    /**
+     * Installs who answers the questions of the plugins ({@link com.copybot.plugin.api.UserConfirmation}): one for
+     * the JVM, like the plugins, whatever the engine running the plugin. Without one every question is answered no.
+     *
+     * @param handler null: no one
+     * @return the handler it replaces, null for none
+     */
+    public static ConfirmationHandler setConfirmationHandler(ConfirmationHandler handler) {
+        return Confirmations.setHandler(handler);
+    }
+
     /** The configuration file, absolute, whether it exists or not. */
     public Path configFile() {
         return folders.configFile();
@@ -202,16 +217,22 @@ public final class CopybotEngine implements AutoCloseable {
             return;
         }
         for (PipelineStepConfig step : steps) {
+            SecretReferences.Redactor redactor = SecretReferences.Redactor.NONE; // its resolution hides them itself
             try {
-                for (Path path : PluginEngine.resolve(step, kind).getAction().touchedPaths(null)) {
+                PipelineStep<? extends IAction> resolved = PluginEngine.resolve(step, kind);
+                redactor = resolved.getRedactor();
+                for (Path path : resolved.getAction().touchedPaths(null)) {
                     if (!path.toString().isEmpty()) {
                         paths.add(path.toAbsolutePath().normalize());
                     }
                 }
             } catch (RuntimeException e) {
                 // this step tells nothing (plugin missing, invalid configuration): the others still do; the run
-                // reports the failure when it resolves the step
-                LOGGER.log(System.Logger.Level.DEBUG, "no paths for the step " + step.getDisplayName(), e);
+                // reports the failure when it resolves the step. Without the secret values of the step.
+                LOGGER.log(System.Logger.Level.DEBUG, "no paths for the step " + step.getDisplayName(),
+                        Redaction.hidden(redactor, e));
+            } catch (Error e) {
+                throw Redaction.rethrow(redactor, e); // hidden as well, the JVM failing as it is
             }
         }
     }

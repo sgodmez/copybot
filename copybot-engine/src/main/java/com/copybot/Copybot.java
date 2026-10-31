@@ -8,6 +8,7 @@ import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineState;
 import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.plugin.ConfirmationHandler;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
 import com.copybot.logger.CopybotLogger;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.ServiceConfigurationError;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -120,6 +122,9 @@ public class Copybot implements Callable<Integer> {
             throw new CommandLine.ParameterException(spec.commandLine(),
                     "Missing required option: '--pipeline=<pipelinePath>'");
         }
+        // nobody to ask on the command line: the plugins get yes, and the question is shown (decision of the spec
+        // remote §2); for this run only (a test runs several in the same JVM)
+        ConfirmationHandler previous = CopybotEngine.setConfirmationHandler(Copybot::yesWithWarning);
         try (CopybotEngine engine = CopybotEngine.create(Optional.ofNullable(configPath))) {
             return doRun(engine);
         } catch (InterruptedException e) {
@@ -132,7 +137,15 @@ public class Copybot implements Callable<Integer> {
             System.err.println(message(e));
             printStackTraceIfDebug(e);
             return EXIT_FATAL;
+        } finally {
+            CopybotEngine.setConfirmationHandler(previous);
         }
+    }
+
+    /** The answer of the command line to a question of a plugin: yes, the question shown on stderr. */
+    private static CompletableFuture<Boolean> yesWithWarning(String question) {
+        System.err.println(ResourcesEngine.getString("cli.confirmation", question));
+        return CompletableFuture.completedFuture(true);
     }
 
     /** The exit code is decided on the final status (and the preparation marker), never on the failure. */

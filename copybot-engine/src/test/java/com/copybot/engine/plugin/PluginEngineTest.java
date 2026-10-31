@@ -1,6 +1,8 @@
 package com.copybot.engine.plugin;
 
 import com.copybot.config.SecretStore;
+import com.copybot.engine.CopybotEngine;
+import com.copybot.engine.SecretRedactionTest;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.exception.CopybotException;
@@ -19,6 +21,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
@@ -252,6 +255,36 @@ public class PluginEngineTest {
                 assertFalse(String.valueOf(t.getMessage()).contains("hunter2"), t.toString());
             }
             assertTrue(e.getMessage().contains("${secret:gb}"), "the reference tells which value: " + e.getMessage());
+        } finally {
+            PluginEngine.useSecretsForTest(null);
+        }
+    }
+
+    @Test
+    public void theFoldersOfAStepThatFailsToTellThemAreLoggedWithoutTheSecretValue() throws Exception {
+        PluginEngine.load(Files.createDirectories(tempDir.resolve("plugins")), List.of());
+        SecretStore store = SecretStore.at(tempDir.resolve("secrets.json"));
+        String value = "hunter2\u0000pass"; // no valid path: the error of Path.of shows it
+        store.set("src", value);
+        PluginEngine.useSecretsForTest(store);
+        Path pipeline = Files.writeString(tempDir.resolve("p.json"), """
+                { "inSteps": [ { "action": "file.read", "actionConfig": { "path": "${secret:src}" } } ] }
+                """);
+        List<Path> paths = new ArrayList<>();
+        try {
+            // the plugins are already loaded: create() warns of its plugin directories, not printed
+            List<LogRecord> records = SecretRedactionTest.recordLogs(List.of(CopybotEngine.class, PluginEngine.class),
+                    () -> {
+                        try (CopybotEngine engine = CopybotEngine.create(
+                                Optional.of(Path.of("./src/test/resources/com/copybot/engine/config.json")))) {
+                            paths.addAll(engine.pipelinePaths(pipeline));
+                        }
+                    });
+
+            assertEquals(List.of(), paths, "the step tells nothing");
+            assertTrue(records.stream().anyMatch(r -> r.getLoggerName().equals(CopybotEngine.class.getName())),
+                    "the failure is logged");
+            SecretRedactionTest.assertNoValueLogged(records, value);
         } finally {
             PluginEngine.useSecretsForTest(null);
         }

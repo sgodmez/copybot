@@ -50,8 +50,8 @@ final class ItemRunner {
     private final WriteContext writeContext;
     /** The item steps of the pipeline and where the secondary outputs sit among them, null until they are resolved. */
     private final Supplier<ItemLayout> layout;
-    /** The out step's action, null when the pipeline has none. */
-    private final Supplier<IOutAction> outAction;
+    /** The out step, null when the pipeline has none. */
+    private final Supplier<PipelineStep<IOutAction>> outStep;
     /** A cancel() of the pipeline took effect. */
     private final BooleanSupplier cancelRequested;
     /** Adds warnings to the run's: the errors of the secondary outputs that only warn. */
@@ -76,7 +76,7 @@ final class ItemRunner {
     private volatile ConflictCheck conflictCheck = ConflictCheck.QUICK;
 
     ItemRunner(ResourceRegistry registry, PipelineState state, TaskGroup tasks, CoalescingNotifier<PipelineState> notifier,
-               WriteContext writeContext, Supplier<ItemLayout> layout, Supplier<IOutAction> outAction,
+               WriteContext writeContext, Supplier<ItemLayout> layout, Supplier<PipelineStep<IOutAction>> outStep,
                BooleanSupplier cancelRequested, Consumer<List<String>> runWarnings) {
         this.registry = registry;
         this.state = state;
@@ -84,7 +84,7 @@ final class ItemRunner {
         this.notifier = notifier;
         this.writeContext = writeContext;
         this.layout = layout;
-        this.outAction = outAction;
+        this.outStep = outStep;
         this.cancelRequested = cancelRequested;
         this.runWarnings = runWarnings;
     }
@@ -192,7 +192,8 @@ final class ItemRunner {
 
     /**
      * {@link IAction#afterItem} for every step that began for these finished items, the last step first. A failure
-     * is logged: the item is already finished, and the other steps still clean up.
+     * is logged, without the secret values of its step: the item is already finished, and the other steps still
+     * clean up.
      */
     private static void afterItem(List<WorkItemExecution> finished) {
         for (WorkItemExecution exec : finished) {
@@ -203,11 +204,12 @@ final class ItemRunner {
     /** {@link IAction#afterItem} of each step for the item it was handed, in this order, every one of them called. */
     private static void afterItem(List<PipelineStep<?>> steps, List<Map.Entry<Integer, WorkItem>> handed) {
         for (Map.Entry<Integer, WorkItem> began : handed) {
-            IAction action = steps.get(began.getKey()).getAction();
+            PipelineStep<?> step = steps.get(began.getKey());
             try {
-                action.afterItem(began.getValue());
+                step.getAction().afterItem(began.getValue());
             } catch (Throwable t) {
-                LOG.warn(t, "item.after-item.failed", began.getValue().getNameDisplay(), String.valueOf(t));
+                Throwable hidden = Redaction.hidden(step.getRedactor(), t);
+                LOG.warn(hidden, "item.after-item.failed", began.getValue().getNameDisplay(), String.valueOf(hidden));
             }
         }
     }
@@ -289,18 +291,8 @@ final class ItemRunner {
         Set<String> footprint = acquire(exec, step, index, item, ticket);
         try {
             handed.add(Map.entry(index, item));
+            // its failure without the secret values (aroundStep): it may become the item's error or a warning of the run
             produced = aroundStep(exec, step, index, item, progress -> runBranchStep(step, item, progress, tally));
-        } catch (Error e) {
-            // without the secret values, like a runtime exception (aroundStep): it may become the item's error or a
-            // warning of the run; the JVM failing is left as it is
-            if (e instanceof VirtualMachineError) {
-                throw e;
-            }
-            Throwable hidden = step.getRedactor().redact(e);
-            if (hidden instanceof RuntimeException runtime) {
-                throw runtime;
-            }
-            throw hidden instanceof Error error ? error : e;
         } finally {
             registry.releaseAll(footprint);
         }
@@ -378,21 +370,28 @@ final class ItemRunner {
     /**
      * What the out step would find at the targets of a file to copy (spec conflict-check §4): each produced item is
      * checked, the most severe result kept. Under the disks of the out step's targets (not the source disk), with
-     * the file's ticket so that it follows its analysis. A plugin failure is UNKNOWN, never an item error. Nothing
-     * for conflictCheck "none", a file not selected, or a dry run that projected nothing.
+     * the file's ticket so that it follows its analysis. A plugin failure is UNKNOWN, never an item error, and is
+     * logged without the secret values of the out step. Nothing for conflictCheck "none", a file not selected, or a
+     * dry run that projected nothing.
      */
     void checkTarget(WorkItemExecution exec, long ticket) throws InterruptedException {
         ConflictCheck level = conflictCheck;
-        IOutAction out = outAction.get();
-        if (level == ConflictCheck.NONE || out == null || exec.getStatus() != ItemStatus.PENDING
+        PipelineStep<IOutAction> step = outStep.get();
+        if (level == ConflictCheck.NONE || step == null || exec.getStatus() != ItemStatus.PENDING
                 || !(exec.getProjection() instanceof Projection.Projected projected)) {
             return;
         }
+        IOutAction out = step.getAction();
         exec.setTargetCheckPending(true); // the view tells the checks still queued once every file is analysed
         notifier.changed();
         try {
             // the destination only: the check reads nothing on the source, it must not hold the card the analyses read
-            Set<String> footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
+            Set<String> footprint;
+            try {
+                footprint = FootprintResolver.forTargets(out, exec.getWorkItem());
+            } catch (RuntimeException | Error e) {
+                throw Redaction.rethrow(step.getRedactor(), e);
+            }
             registry.acquireAll(footprint, ticket);
             try {
                 if (cancelRequested.getAsBoolean()) {
@@ -400,7 +399,7 @@ final class ItemRunner {
                 }
                 TargetCheck result = null;
                 for (WorkItem produced : projected.items()) {
-                    result = TargetCheck.mostSevere(result, check(out, produced, level == ConflictCheck.FULL));
+                    result = TargetCheck.mostSevere(result, check(step, produced, level == ConflictCheck.FULL));
                 }
                 exec.setTargetCheck(result == null ? TargetCheck.UNKNOWN : result);
             } finally {
@@ -412,13 +411,16 @@ final class ItemRunner {
         }
     }
 
-    private static TargetCheck check(IOutAction out, WorkItem produced, boolean compareContent) {
+    private static TargetCheck check(PipelineStep<IOutAction> out, WorkItem produced, boolean compareContent) {
         try {
-            TargetCheck check = out.checkTarget(produced, compareContent);
+            TargetCheck check = out.getAction().checkTarget(produced, compareContent);
             return check == null ? TargetCheck.UNKNOWN : check;
         } catch (RuntimeException e) {
-            LOG.debug(e, "plan.check.failed", produced.getNameDisplay(), String.valueOf(e));
+            RuntimeException hidden = redacted(out, e);
+            LOG.debug(hidden, "plan.check.failed", produced.getNameDisplay(), String.valueOf(hidden));
             return TargetCheck.UNKNOWN;
+        } catch (Error e) {
+            throw Redaction.rethrow(out.getRedactor(), e); // the item's error, hidden; the JVM failing as it is
         }
     }
 
@@ -476,10 +478,9 @@ final class ItemRunner {
                 } catch (Throwable after) {
                     t.addSuppressed(after); // the failure of the step is the one to report
                 }
-                if (t instanceof RuntimeException e) {
-                    throw redacted(step, e);
-                }
-                throw t;
+                // an error, or a checked exception thrown sneakily, hidden too (an interrupt and the JVM failing are
+                // left as they are)
+                throw Redaction.rethrow(step.getRedactor(), t);
             }
             try {
                 action.afterEach(item);

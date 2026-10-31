@@ -98,7 +98,7 @@ public class PopinUtil {
     }
 
     /** The focused window of the application (a dialog over the main window), else the main window when shown. */
-    private static Window defaultOwner() {
+    public static Window defaultOwner() {
         return Window.getWindows().stream()
                 .filter(w -> w.isShowing() && w.isFocused())
                 .findFirst()

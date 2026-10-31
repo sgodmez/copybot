@@ -3,6 +3,7 @@ package com.copybot;
 import com.copybot.engine.CopybotEngine;
 import com.copybot.engine.Execution;
 import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.plugin.api.UserConfirmation;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.ServiceConfigurationError;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -102,6 +104,20 @@ public class CopybotExitCodeTest {
 
         assertEquals("0", result[0], result[2]);
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
+    }
+
+    @Test
+    public void theCommandLineAnswersYesToAPluginAndSaysItOnStderr() throws IOException {
+        AtomicReference<Boolean> answer = new AtomicReference<>();
+        String[] result = cli(execution -> answer.set(UserConfirmation.ask("Trust nas.local?")),
+                "-p=" + pipeline("", ""), CONFIG);
+
+        assertEquals("0", result[0], result[2]);
+        assertEquals(Boolean.TRUE, answer.get());
+        String line = ResourcesEngine.getString("cli.confirmation", "Trust nas.local?");
+        assertTrue(line.contains("Trust nas.local?"), line);
+        assertEquals(1, result[2].lines().filter(line::equals).count(), result[2]);
+        assertFalse(UserConfirmation.ask("after the run?"), "the handler of the command line ends with its run");
     }
 
     @Test

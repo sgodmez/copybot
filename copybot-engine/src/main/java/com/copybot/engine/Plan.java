@@ -4,6 +4,7 @@ import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumePoint;
@@ -136,7 +137,7 @@ public final class Plan {
      * the plan is being prepared (any thread): the items analysed so far have their target, the others none.
      */
     public TargetProjection projectionOf(WorkItemExecution item) {
-        IOutAction out = executor.findOutAction();
+        PipelineStep<IOutAction> out = executor.findOutStep();
         if (out == null) {
             return TargetProjection.NONE;
         }
@@ -160,7 +161,7 @@ public final class Plan {
         if (projection == null) {
             return Optional.empty();
         }
-        IOutAction out = executor.findOutAction();
+        PipelineStep<IOutAction> out = executor.findOutStep();
         List<Path> files = new ArrayList<>();
         TargetProjection outcome = out == null && projection instanceof Projection.Projected
                 ? TargetProjection.NONE : outcome(out, projection, files);
@@ -182,7 +183,7 @@ public final class Plan {
             if (result == null) {
                 WorkItem copy = item.getWorkItem().copyForDryRun().withoutCompanions().withSourceKept();
                 copy.setOutPattern(null);
-                projection = outcome(branch.out().getAction(), DryRunner.project(copy, branch.steps()), files);
+                projection = outcome(branch.out(), DryRunner.project(copy, branch.steps()), files);
             }
             details.add(new ItemDetail.BranchDetail(branch.name(), projection,
                     projection instanceof TargetProjection.Targets ? files : List.of(), result));
@@ -191,7 +192,7 @@ public final class Plan {
     }
 
     /** How the dry run ended; out is only used (non null then) when it projected items, whose files go to files. */
-    private static TargetProjection outcome(IOutAction out, Projection projection, List<Path> files) {
+    private static TargetProjection outcome(PipelineStep<IOutAction> out, Projection projection, List<Path> files) {
         return switch (projection) {
             case Projection.Filtered f -> new TargetProjection.Filtered(f.action());
             case Projection.Unsupported u -> new TargetProjection.Unknown(u.action());
@@ -200,11 +201,12 @@ public final class Plan {
         };
     }
 
-    private static TargetProjection targets(IOutAction out, List<WorkItem> items, List<Path> files) {
+    /** A failure of the out step is shown and logged without its secret values. */
+    private static TargetProjection targets(PipelineStep<IOutAction> out, List<WorkItem> items, List<Path> files) {
         List<Path> directories = new ArrayList<>();
         for (WorkItem produced : items) {
             try {
-                Optional<Path> target = out.resolveTarget(produced);
+                Optional<Path> target = out.getAction().resolveTarget(produced);
                 if (target.isEmpty()) {
                     return TargetProjection.NONE;
                 }
@@ -214,8 +216,12 @@ public final class Plan {
                 directories.add(file.getParent());
             } catch (RuntimeException e) {
                 // e.g. a pattern variable this item has no value for
-                LOG.debug(e, "plan.target.failed", produced.getNameDisplay(), String.valueOf(e));
-                return new TargetProjection.Failed(e.getMessage() != null ? e.getMessage() : e.getClass().getName());
+                RuntimeException hidden = out.getRedactor().redact(e);
+                LOG.debug(hidden, "plan.target.failed", produced.getNameDisplay(), String.valueOf(hidden));
+                return new TargetProjection.Failed(hidden.getMessage() != null ? hidden.getMessage()
+                        : hidden.getClass().getName());
+            } catch (Error e) {
+                throw Redaction.rethrow(out.getRedactor(), e); // hidden as well, the JVM failing as it is
             }
         }
         return new TargetProjection.Targets(directories);

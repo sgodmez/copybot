@@ -1,5 +1,7 @@
 package com.copybot.engine.resume;
 
+import com.copybot.config.SecretReferences;
+import com.copybot.engine.Redaction;
 import com.copybot.engine.pipeline.ItemStatus;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.exception.CopybotException;
@@ -42,6 +44,7 @@ public final class ResumeResolver {
     private final DestinationMatch match;
     private final ResumeStateStore store;
     private final IOutAction out;
+    private final SecretReferences.Redactor redactor;
 
     private Optional<ItemKey> previousCursor = Optional.empty();
     private boolean cursorRead;
@@ -80,11 +83,20 @@ public final class ResumeResolver {
 
     /** @param out the pipeline out action, null when there is none */
     public ResumeResolver(ResumeContext context, IOutAction out) {
+        this(context, out, SecretReferences.Redactor.NONE);
+    }
+
+    /**
+     * @param out      the pipeline out action, null when there is none
+     * @param redactor hides the secret values of the out step in the failures of its targets
+     */
+    public ResumeResolver(ResumeContext context, IOutAction out, SecretReferences.Redactor redactor) {
         this.mode = context.mode();
         this.check = context.check();
         this.match = context.match();
         this.store = context.store();
         this.out = out;
+        this.redactor = redactor;
     }
 
     /**
@@ -347,7 +359,7 @@ public final class ResumeResolver {
         boolean fixed = false;
         if (match == DestinationMatch.DIRECTORY && !shared.isEmpty()) {
             Path first = shared.getFirst();
-            fixed = out.targetDirectoryVaries()
+            fixed = outDirectoryVaries()
                     .map(varies -> !varies)
                     .orElseGet(() -> shared.size() > 1 && shared.stream().allMatch(first::equals));
         }
@@ -446,7 +458,8 @@ public final class ResumeResolver {
     /**
      * The target of an analysed item, absolute; empty when it cannot be resolved (e.g. no value for a pattern
      * expression: it stays selected and fails or is skipped at the execution, by its own onMissingKey, spec
-     * pattern-helper §2); null when the out step resolves no target path at all.
+     * pattern-helper §2); null when the out step resolves no target path at all. Another failure is thrown without
+     * the secret values of the out step.
      */
     private Optional<Path> target(WorkItemExecution item) {
         Optional<Path> target;
@@ -454,8 +467,19 @@ public final class ResumeResolver {
             target = out.resolveTarget(item.getWorkItem());
         } catch (CopybotException e) {
             return Optional.empty();
+        } catch (RuntimeException | Error e) {
+            throw Redaction.rethrow(redactor, e);
         }
         return target.isEmpty() ? null : Optional.of(target.get().toAbsolutePath().normalize());
+    }
+
+    /** {@link IOutAction#targetDirectoryVaries} of the out step, a failure thrown without its secret values. */
+    private Optional<Boolean> outDirectoryVaries() {
+        try {
+            return out.targetDirectoryVaries();
+        } catch (RuntimeException | Error e) {
+            throw Redaction.rethrow(redactor, e);
+        }
     }
 
     private Path checkedPath(Path target) {
@@ -560,7 +584,7 @@ public final class ResumeResolver {
     }
 
     private boolean directoryVaries(Path directory) {
-        Optional<Boolean> declared = out.targetDirectoryVaries();
+        Optional<Boolean> declared = outDirectoryVaries();
         if (declared.isPresent()) {
             if (!declared.get() && fixedDirectoryWarned.compareAndSet(false, true)) {
                 streamingWarnings.add(ResourcesEngine.getString("resume.warn.single-directory", directory));

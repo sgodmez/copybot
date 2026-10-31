@@ -21,7 +21,10 @@ public final class DryRunner {
     private DryRunner() {
     }
 
-    /** Never throws for a plugin failure: it becomes {@link Projection.Failed}. */
+    /**
+     * A runtime exception of a plugin is never thrown: it becomes {@link Projection.Failed}, its message without the
+     * secret values of the step. An error of a plugin is thrown, hidden the same way (the JVM failing as it is).
+     */
     public static Projection project(WorkItem item, List<PipelineStep<IProcessAction>> processSteps) {
         List<WorkItem> current = List.of(item.copyForDryRun());
         List<Projection.Step> trace = new ArrayList<>();
@@ -32,7 +35,10 @@ public final class DryRunner {
                 try {
                     result = step.getAction().dryRun(produced);
                 } catch (RuntimeException e) {
-                    return new Projection.Failed(actionName(step), e.getMessage() != null ? e.getMessage() : e.getClass().getName(), trace);
+                    String message = e.getMessage() != null ? e.getMessage() : e.getClass().getName();
+                    return new Projection.Failed(actionName(step), step.getRedactor().text(message), trace);
+                } catch (Error e) {
+                    throw Redaction.rethrow(step.getRedactor(), e);
                 }
                 if (result == null || result.isEmpty()) {
                     return new Projection.Unsupported(actionName(step), current, trace);

@@ -120,8 +120,10 @@ final class ListingPipe {
             // ignored: any other exception, a plugin's own CancellationException included, fails the run.
             stopped.set(true);
         } catch (Throwable t) {
-            // A failing listing must not silently look like success: the whole run is marked ERROR.
-            state.recordFailureIfAbsent(t); // the first listing failure wins, atomically
+            // A failing listing (its footprint too) must not silently look like success: the whole run is marked
+            // ERROR, the failure without the secret values of the input step. The first listing failure wins,
+            // atomically.
+            state.recordFailureIfAbsent(Redaction.hidden(inStep.getRedactor(), t));
             listingFailed.set(true);
         } finally {
             CountDownLatch listings = gate;

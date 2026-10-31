@@ -64,6 +64,7 @@ public class CopybotMainUi extends Application {
             ResourcesEngine.addSupportedLocale(Locale.ITALIAN); // the UI ships an it bundle
             UiPreferences.savedLanguage().ifPresent(ResourcesEngine::loadLanguage);
             ENGINE = CopybotEngine.create(folders);
+            CopybotEngine.setConfirmationHandler(new ConfirmationDialogs()); // the questions of the plugins
             UpdateService updates = UpdateService.forThisApp(AppInfo.version(), folders.logsDir(),
                     folders.configChosen() ? folders.configFile() : null, CopybotMainUi::isBusy);
             UpdateUi.init(updates, PluginService.forThisApp(updates, () -> ENGINE.pluginReport()));
