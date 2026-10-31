@@ -80,7 +80,9 @@ public interface IAction {
 
     /**
      * Named resources this action consumes for one item (e.g. "cpu", "gpu", "net:flickr").
-     * Used by the engine to bound concurrency. Empty by default.
+     * Used by the engine to bound concurrency. Empty by default. Called for each item before its step, on the
+     * item's thread with its progress channel as {@link ItemProgress#current()} (the item shown running the step):
+     * work done here to tell the resources can report its progress.
      */
     default Set<String> requiredResources(WorkItem item) {
         return Set.of();

@@ -214,12 +214,23 @@ final class ItemRunner {
 
     /**
      * The resources of the step {@code index} for this item, waited for; the item is then RUNNING that step.
+     * <p>
+     * The action tells its resources ({@code requiredResources}) with the progress channel of the item bound and the
+     * item RUNNING the step meanwhile: an action doing some work there (e.g. finding, or downloading, the program its
+     * resource depends on) shows its progress as in the step itself. Its failure is redacted like one of the step.
      *
      * @throws InterruptedException interrupted while waiting, or the pipeline is cancelled
      */
     private Set<String> acquire(WorkItemExecution exec, PipelineStep<?> step, int index, WorkItem item, long ticket)
             throws InterruptedException {
-        Set<String> footprint = FootprintResolver.resolve(step.getAction(), item, step.getConfig(), index);
+        exec.setRunning(index); // the reports of this step are taken from now on
+        Set<String> footprint;
+        try {
+            footprint = ItemProgress.callWith(progress(exec, index),
+                    () -> FootprintResolver.resolve(step.getAction(), item, step.getConfig(), index));
+        } catch (RuntimeException e) {
+            throw redacted(step, e); // a failure of the action, without its secret values as in the step itself
+        }
         exec.setWaitingResources(index, footprint);
         notifier.changed();
         registry.acquireAll(footprint, ticket);
@@ -449,10 +460,7 @@ final class ItemRunner {
     private <R> R aroundStep(WorkItemExecution exec, PipelineStep<?> step, int stepIndex, WorkItem item,
                              Function<ItemProgress, R> body) {
         IAction action = step.getAction();
-        ItemProgress progress = status -> {
-            exec.reportProgress(stepIndex, status);
-            notifier.changed();
-        };
+        ItemProgress progress = progress(exec, stepIndex);
         return ItemProgress.callWith(progress, () -> {
             try {
                 action.beforeEach(item);
@@ -480,6 +488,14 @@ final class ItemRunner {
             }
             return outcome;
         });
+    }
+
+    /** The progress channel of the item for the step: its reports reach the watcher. */
+    private ItemProgress progress(WorkItemExecution exec, int stepIndex) {
+        return status -> {
+            exec.reportProgress(stepIndex, status);
+            notifier.changed();
+        };
     }
 
     /**

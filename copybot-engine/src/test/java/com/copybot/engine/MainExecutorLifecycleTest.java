@@ -12,6 +12,7 @@ import com.copybot.plugin.api.action.IAnalyzeAction;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
+import com.copybot.plugin.api.action.ItemProgress;
 import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WorkStatus;
@@ -32,6 +33,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 import static com.copybot.engine.MainExecutorTest.emptyConfig;
@@ -479,6 +481,54 @@ public class MainExecutorLifecycleTest {
     }
 
     abstract static class AbstractOut extends AbstractAction implements IOutAction {
+    }
+
+    @Test
+    public void workDoneToTellTheResourcesReportsItsProgress() throws Exception {
+        CountDownLatch reported = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        List<WorkStatus> inStep = Collections.synchronizedList(new ArrayList<>());
+        Analyse analyse = new Analyse() {
+            @Override
+            public Set<String> requiredResources(WorkItem item) {
+                // e.g. a program downloaded before the action can tell whether it takes the "gpu"
+                ItemProgress.current().report(new WorkStatus("Downloading ffmpeg", 30));
+                reported.countDown();
+                try {
+                    release.await(10, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return Set.of();
+            }
+
+            @Override
+            public void doAnalyze(WorkItem item) {
+                inStep.add(item(exec(), "a.jpg").getWorkStatus());
+            }
+        };
+        MainExecutor exec = new MainExecutor(List.of(step(new In("a.jpg"))), List.of(step(analyse)), true, null,
+                registry(Map.of("disk:*", 1000)));
+        holder.set(exec);
+
+        CompletableFuture<Void> run = CompletableFuture.runAsync(exec);
+        try {
+            assertTrue(reported.await(10, TimeUnit.SECONDS));
+            WorkItemExecution a = item(exec, "a.jpg");
+            assertEquals(ItemStatus.RUNNING, a.getStatus());
+            assertEquals(new WorkStatus("Downloading ffmpeg", 30), a.getWorkStatus());
+        } finally {
+            release.countDown();
+        }
+        run.get(10, TimeUnit.SECONDS);
+        assertEquals(ItemStatus.DONE, item(exec, "a.jpg").getStatus());
+        assertEquals(Collections.singletonList(null), inStep, "the step starts without the report made before it");
+    }
+
+    private final AtomicReference<MainExecutor> holder = new AtomicReference<>();
+
+    private MainExecutor exec() {
+        return holder.get();
     }
 
     @Test

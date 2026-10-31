@@ -123,6 +123,25 @@ public class WorkItemCopyTest {
     }
 
     @Test
+    public void theContentFileIsTheLocalFileHoldingExactlyTheContent() throws IOException {
+        Path source = Files.writeString(tempDir.resolve("a.jpg"), "card");
+        Path buffer = Files.writeString(tempDir.resolve("buffer.bin"), "card");
+        WorkItem item = new WorkItem(source);
+        WorkItem remote = new WorkItem(new java.net.URL("http://example.invalid/a.jpg"),
+                () -> new java.io.ByteArrayInputStream("remote".getBytes()));
+
+        assertEquals(Optional.of(source), item.getContentFile(), "a plain local item: its source");
+        assertEquals(Optional.of(buffer), item.withContentFile(buffer).getContentFile());
+        assertEquals(Optional.empty(), item.withContent(() -> new java.io.ByteArrayInputStream("x".getBytes()), 1)
+                .getContentFile(), "rewritten content: the source no longer holds it");
+        assertEquals(Optional.empty(), item.withContentFile(buffer)
+                .withContent(() -> new java.io.ByteArrayInputStream("x".getBytes()), 1).getContentFile());
+        assertEquals(Optional.empty(), remote.getContentFile(), "read from a URL");
+        assertEquals(Optional.of(buffer), remote.withContentFile(buffer).getContentFile());
+        assertEquals(Optional.of(source), item.copyForDryRun().getContentFile());
+    }
+
+    @Test
     public void theSourceKeptMarkFollowsEveryCopy() throws IOException {
         WorkItem item = new WorkItem(Files.writeString(tempDir.resolve("a.jpg"), "x"));
         assertFalse(item.isSourceKept(), "not marked by default");

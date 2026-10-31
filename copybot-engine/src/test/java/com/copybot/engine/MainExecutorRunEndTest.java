@@ -337,6 +337,35 @@ public class MainExecutorRunEndTest {
     }
 
     @Test
+    public void aFailureWhileTellingTheResourcesOfAStepNeverShowsASecret() throws Exception {
+        SecretStore store = SecretStore.at(tempDir.resolve("secrets.json"));
+        store.set("smtp", "hunter2-pass");
+        SecretReferences.Resolved secrets = SecretReferences.resolve(
+                JsonParser.parseString("{\"password\":\"${secret:smtp}\"}"), () -> store);
+        final class Footprint extends FakeAction implements IOutAction {
+            @Override
+            public Set<String> requiredResources(WorkItem item) {
+                throw new IllegalStateException("resources: hunter2-pass");
+            }
+
+            @Override
+            public WriteResult write(WorkItem item, WriteContext context) {
+                return WriteResult.written(Path.of("nas", item.getNameDisplay()));
+            }
+        }
+        MainExecutor exec = new MainExecutor(
+                List.of(new PipelineStep<IInAction>(null, new DatedIn(card(), 1, null), emptyConfig())),
+                List.of(new PipelineStep<IOutAction>(null, new Footprint(), emptyConfig(), secrets)),
+                true, null, registry());
+
+        exec.run();
+
+        String error = String.valueOf(exec.getState().getWorkItems().peek().getError());
+        assertFalse(error.contains("hunter2-pass"), error);
+        assertTrue(error.contains("resources: ${secret:smtp}"), error);
+    }
+
+    @Test
     public void theEngineControlExceptionsAreNeverRedacted() throws Exception {
         SecretStore store = SecretStore.at(tempDir.resolve("secrets.json"));
         store.set("short", "e"); // a letter of "phase stopped" and of every class name

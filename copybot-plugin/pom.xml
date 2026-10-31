@@ -19,6 +19,7 @@
         <module>copybot-plugin-notify-webhook</module>
         <module>copybot-plugin-notify-email</module>
         <module>copybot-plugin-archive</module>
+        <module>copybot-plugin-exec</module>
     </modules>
 
     <dependencies>

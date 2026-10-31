@@ -151,7 +151,7 @@ class MainExecutorSecondaryOutputsTest {
         }
     }
 
-    final class Out extends Logged implements IOutAction {
+    class Out extends Logged implements IOutAction {
         final List<WorkItem> got = new CopyOnWriteArrayList<>();
         volatile BiFunction<WorkItem, WriteContext, WriteResult> body = (item, context) -> WriteResult.written(null);
 
@@ -409,6 +409,35 @@ class MainExecutorSecondaryOutputsTest {
                 only.getError().getMessage());
         assertEquals(List.of(ResourcesEngine.getString("secondary.item.warning", "W", "login ${secret:pwd} refused",
                 "IMG_01.JPG")), exec.getState().getWarnings());
+    }
+
+    @Test
+    void aFailureWhileTellingTheResourcesOfABranchStepHidesItsSecrets() {
+        SecretReferences.Redactor redactor = new SecretReferences.Redactor() {
+            @Override
+            public String text(String text) {
+                return text == null ? null : text.replace("s3cret", "${secret:pwd}");
+            }
+
+            @Override
+            public Throwable redact(Throwable error) {
+                return error.getMessage() != null && error.getMessage().contains("s3cret")
+                        ? new IllegalArgumentException(text(error.getMessage())) : error;
+            }
+        };
+        Out failing = new Out("f") {
+            @Override
+            public java.util.Set<String> requiredResources(WorkItem item) {
+                throw new IllegalStateException("resources s3cret refused");
+            }
+        };
+        MainExecutor exec = executor(new ListIn(1, item -> item), null,
+                List.of(branch("W", OnError.WARN, redactor, failing)), new Out("main"));
+
+        exec.run();
+
+        assertEquals(List.of(ResourcesEngine.getString("secondary.item.warning", "W",
+                "resources ${secret:pwd} refused", "IMG_01.JPG")), exec.getState().getWarnings());
     }
 
     @Test

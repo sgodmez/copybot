@@ -39,3 +39,4 @@ build/
 .superpowers/
 copybot-ui/src/dev/prefs.json
 copybot-ui/src/dev/logs/
+copybot-ui/src/dev/plugin-data/

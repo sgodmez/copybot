@@ -23,6 +23,7 @@ module com.copybot.engine {
     exports com.copybot.engine.sample to com.copybot.ui;
     exports com.copybot.engine.listing to com.copybot.ui;
 
+    exports com.copybot.plugin.api;
     exports com.copybot.plugin.api.action;
     exports com.copybot.plugin.api.definition;
     exports com.copybot.plugin.api.config;

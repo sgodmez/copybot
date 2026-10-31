@@ -98,6 +98,16 @@ public class WorkItem {
         return contentPath != null ? contentPath : sourceLocationPath;
     }
 
+    /**
+     * The local file holding exactly the content, byte for byte: the content file ({@link #withContentFile}), else
+     * the local source. Empty when the content comes from a stream: an item read from a URL, a remote item, or
+     * content rewritten by {@link #withContent} (then {@link #getContentLocation()} may still name the file it is
+     * made from). For a step handing the file to a tool that reads a path.
+     */
+    public Optional<Path> getContentFile() {
+        return inputStreamSupplier == null ? Optional.ofNullable(getContentLocation()) : Optional.empty();
+    }
+
     public WorkItem(URL sourceLocationUrl, Supplier<InputStream> inputStreamSupplier) {
         this.sourceLocationUrl = sourceLocationUrl;
         this.inputStreamSupplier = inputStreamSupplier;

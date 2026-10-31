@@ -12,6 +12,8 @@ com.copybot.exception.CopybotException method public static com.copybot.exceptio
 com.copybot.exception.CopybotException type public class com.copybot.exception.CopybotException extends java.lang.RuntimeException
 com.copybot.exception.PluginNotFoundException constructor public <init>(java.lang.String)
 com.copybot.exception.PluginNotFoundException type public class com.copybot.exception.PluginNotFoundException extends com.copybot.exception.CopybotException
+com.copybot.plugin.api.PluginFolders method public static java.nio.file.Path dataDirectory(java.lang.String) throws java.io.IOException
+com.copybot.plugin.api.PluginFolders type public final class com.copybot.plugin.api.PluginFolders
 com.copybot.plugin.api.action.AbstractAction constructor public <init>()
 com.copybot.plugin.api.action.AbstractAction method protected final void updatePercent(int)
 com.copybot.plugin.api.action.AbstractAction method protected final void updateStatus(com.copybot.plugin.api.action.WorkStatus)
@@ -196,6 +198,7 @@ com.copybot.plugin.api.action.WorkItem method public java.nio.file.Path getLocal
 com.copybot.plugin.api.action.WorkItem method public java.util.List<com.copybot.plugin.api.action.Companion> getCompanions()
 com.copybot.plugin.api.action.WorkItem method public java.util.Optional<com.copybot.plugin.api.action.SourceDeleter> getSourceDeleter()
 com.copybot.plugin.api.action.WorkItem method public java.util.Optional<java.lang.String> getOutPattern()
+com.copybot.plugin.api.action.WorkItem method public java.util.Optional<java.nio.file.Path> getContentFile()
 com.copybot.plugin.api.action.WorkItem method public static com.copybot.plugin.api.action.WorkItem remote(java.lang.String,java.lang.String,java.lang.String,long,java.time.Instant,java.util.function.Supplier<java.io.InputStream>,com.copybot.plugin.api.action.SourceDeleter)
 com.copybot.plugin.api.action.WorkItem method public void setDeleted(boolean)
 com.copybot.plugin.api.action.WorkItem method public void setOutPattern(java.lang.String)

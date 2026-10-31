@@ -14,6 +14,7 @@ import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.IProcessAction;
 import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.engine.plugin.PluginDataRoot;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.plugin.report.PluginReport;
 import com.copybot.engine.plugin.report.PluginReports;
@@ -130,11 +131,13 @@ public final class CopybotEngine implements AutoCloseable {
     /**
      * Reads the configuration, makes sure the plugins of the app folder are loaded (once per JVM) and creates the
      * engine. A missing config file is the defaults, and is not written, unless it was chosen on the command line.
+     * The data folders of the plugins go under the data folder ({@link com.copybot.plugin.api.PluginFolders}).
      *
      * @throws CopybotException config.not-found / config.not-json
      */
     public static CopybotEngine create(AppFolders folders) {
         CopybotConfig config = readConfig(folders);
+        PluginDataRoot.set(folders.dataDir().resolve("plugin-data"));
         loadPlugins(folders);
         return new CopybotEngine(config, folders);
     }

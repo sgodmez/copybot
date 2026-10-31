@@ -189,6 +189,10 @@ when several versions are installed.
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
 | `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
 | `check` | `com.copybot.plugin.gpszone` (optional) | analyze | Goes after `extract`. Flags a photo whose camera was badly set: from its GPS position, the time zone of the place (offline boundaries of [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder) through [timeshape](https://github.com/RomanIakovlev/timeshape)) gives another offset than the recorded one, the GPS time confirming the capture date. Nothing near a time zone boundary, at sea, or for a video. The plan suggests the zone; you apply it |
+| `exec.process` | `com.copybot.plugin.exec` | process | Runs any program on the file (`{in}`, `{out}`, `{name}`, `{ext}` in its arguments); what it writes replaces the content. See *Programs and ffmpeg* |
+| `ffmpeg.video` | `com.copybot.plugin.exec` | process | Compresses videos to MP4 in H.265 or H.264, on the processor or a GPU encoder; ffmpeg is found, or downloaded on Windows |
+| `ffmpeg.image` | `com.copybot.plugin.exec` | process | HEIC (or chosen images) to JPEG, with quality and maximum size |
+| `ffmpeg.thumbnail` | `com.copybot.plugin.exec` | process | A small JPEG of each image or video; other files are left out |
 
 ### Companion files and archives
 
@@ -376,6 +380,109 @@ one item, conflict check of the branches in the plan, companion files in
 branches, conditional branches (a filter at the head of the branch does the
 job: every step accepts `filterCondition`).
 
+## Programs and ffmpeg (the exec plugin)
+
+The `exec` plugin has four process actions. `exec.process` runs any program
+on the file (`program`, `arguments` with `{in}`, `{out}`, `{name}` and `{ext}`,
+`outputExtension`, `successCodes`, `timeoutSeconds`); what the program writes
+replaces the content of the item. The three `ffmpeg.*` actions build the
+ffmpeg command themselves:
+
+| Action | What it does |
+|---|---|
+| `ffmpeg.video` | Videos to MP4 in H.265 (default) or H.264: `quality` `high` / `medium` / `small`, `maxHeight`, `audio` `aac` or `copy`, `encoder`. Other files pass unchanged |
+| `ffmpeg.image` | HEIC (or the extensions of `onlyExtensions`) to JPEG: `quality` 1 to 100 (90), `maxSize` for the long side. Other files pass unchanged |
+| `ffmpeg.thumbnail` | A small JPEG (`size`, 320 by default) of each image (`photo-thumb.jpg`) or video (`clip-video-thumb.jpg`, its frame at a tenth of its length, 10 s at most). Other files are left out |
+
+A typical pipeline copies the originals with the main output and makes two
+extra branches (see *Secondary outputs*):
+
+```json
+{
+  "inSteps": [ { "action": "file.read", "actionConfig": { "path": "E:\\DCIM" } } ],
+  "analyseSteps": [ { "plugin": "com.copybot.plugin.metadataextractor", "action": "extract" } ],
+  "outStep": {
+    "action": "file.write",
+    "actionConfig": { "outPattern": "\\\\nas\\photos\\{captureDate.Y|lastModified.Y}\\{name}" }
+  },
+  "secondaryOutputs": [
+    {
+      "name": "Compressed videos",
+      "onError": "warn",
+      "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.video",
+                         "actionConfig": { "codec": "h265", "quality": "medium", "maxHeight": 1080,
+                                           "downloadFfmpeg": true } } ],
+      "outStep": { "action": "file.write",
+                   "actionConfig": { "outPattern": "\\\\nas\\small\\{captureDate.Y|lastModified.Y}\\{name}" } }
+    },
+    {
+      "name": "Thumbnails",
+      "onError": "warn",
+      "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.thumbnail",
+                         "actionConfig": { "size": 320, "downloadFfmpeg": true } } ],
+      "outStep": { "action": "file.write",
+                   "actionConfig": { "outPattern": "\\\\nas\\thumbs\\{captureDate.Y|lastModified.Y}\\{name}" } }
+    }
+  ]
+}
+```
+
+To also turn HEIC photos into JPEG, put `{ "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.image",
+"actionConfig": { "quality": 90, "maxSize": 4096, "downloadFfmpeg": true } }` in the `actionSteps` of a
+branch, or of the main branch if the JPEG should replace the HEIC. Each ffmpeg
+action takes an optional `ffmpegPath`, a `timeoutSeconds` per file (3600 for
+video, 600 otherwise; `0`: none) and a `downloadFfmpeg` box. Tick
+`downloadFfmpeg` on **each** ffmpeg step: a step without it never downloads,
+and fails its files until another step has installed the copy (it then finds
+it).
+
+**Finding ffmpeg.** In this order: `ffmpegPath`, the copy the plugin downloaded
+(in the `plugin-data/exec` folder of the Copybot data folder), then `ffmpeg` in
+the `PATH`. ffmpeg is looked for and its version read once per phase of the run
+(preparation, execution). HEIC needs ffmpeg 7.1 or later:
+an older one gives a clear error on each HEIC file.
+
+**Downloading ffmpeg** (Windows x64 only). With `downloadFfmpeg` checked, a
+missing ffmpeg is downloaded when the **first file that needs it** comes up
+(not at the start of the run): the GPL build of
+[BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) for the highest
+stable `nX.Y` branch available, about 200 MB, checked against the SHA-256 file
+of the same release, then installed in one move. That file waits for the
+download; it can be cancelled. Copybot does not ship ffmpeg (GPL: see the plugin
+notice). The plan warns before the run when ffmpeg is missing. On Linux and
+macOS nothing is downloaded: install it (`apt install ffmpeg`, `brew install
+ffmpeg`) or set `ffmpegPath`.
+
+**GPU encoders.** `ffmpeg.video` `encoder` is `auto` (default), `cpu`, `nvenc`,
+`qsv`, `amf`, `videotoolbox` or `vaapi`. `auto` tries each hardware encoder
+once per phase with a one-frame test encode, in that order, and takes the first
+that works, else the processor. An explicit encoder that fails the test falls
+back to the processor, with a warning in the log only. A hardware encoder holds the `gpu` resource and the
+processor holds `cpu`, so the number of simultaneous encodings is set in
+`config.json`:
+
+```json
+{ "resources": { "gpu": 1, "cpu": 2 } }
+```
+
+Limits:
+
+- The EXIF data of a HEIC is **not** copied into the JPEG (ffmpeg does not
+  write it). The JPEG gets the capture date as its file date when it is known,
+  else the source's; the original still goes through the main output.
+- The rotation of a HEIC is applied from ffmpeg 7.1; the EXIF orientation of a
+  JPEG, PNG or TIFF depends on the ffmpeg build. Neither has been verified on real
+  photos yet.
+- H.265 is always 10-bit (Main10): an old TV that reads only Main profile cannot
+  play it. H.264 is 8-bit.
+- Apple metadata tags are kept as `mdta` keys: the title and comment of an
+  iPhone video may not show in Explorer-like tools.
+- An explicit encoder that fails is only logged, not shown in the run warnings.
+- No download button in the editor (the plugin API has none): tick
+  `downloadFfmpeg`.
+- A video without a video stream passes unchanged (`ffmpeg.video`) or is left
+  out (`ffmpeg.thumbnail`); this is detected from ffmpeg's English message.
+
 ## After the copy (run-end actions)
 
 A pipeline can end with an ordered list of actions, `runEnd`, set in the
@@ -386,7 +493,7 @@ editor under *After the copy*. Each entry names an action and when it runs:
   { "action": "post.process", "when": ["success", "error"],
     "actionConfig": { "command": "D:\\progs\\autre\\synoRight\\synoRightGui.exe",
                       "args": ["-c", "D:\\progs\\autre\\synoRight", "rights", "--new-folders", "{createdDirs}"] } },
-  { "plugin": "archive", "action": "archive.zip", "timeoutSeconds": 0,
+  { "plugin": "com.copybot.plugin.archive", "action": "archive.zip", "timeoutSeconds": 0,
     "actionConfig": { "target": "D:\\Archives\\{pipeline}-{date}.zip" } }
 ]
 ```
@@ -452,7 +559,7 @@ the vault.
 ### notify-email: `email.send`
 
 ```json
-{ "plugin": "notify-email", "action": "email.send", "when": ["success", "error"],
+{ "plugin": "com.copybot.plugin.notifyemail", "action": "email.send", "when": ["success", "error"],
   "actionConfig": {
     "host": "smtp.example.org", "port": 587, "security": "starttls",
     "user": "bot@example.org", "password": "${secret:smtp-password}",
@@ -473,7 +580,7 @@ fixed at 20 s.
 ### notify-webhook: `webhook.send`
 
 ```json
-{ "plugin": "notify-webhook", "action": "webhook.send",
+{ "plugin": "com.copybot.plugin.notifywebhook", "action": "webhook.send",
   "actionConfig": { "url": "https://ntfy.sh/${secret:ntfy-topic}", "preset": "ntfy" } }
 ```
 
@@ -491,7 +598,7 @@ may embed a token, and the header values are never written to a message or a log
 ### archive: `archive.zip`
 
 ```json
-{ "plugin": "archive", "action": "archive.zip",
+{ "plugin": "com.copybot.plugin.archive", "action": "archive.zip",
   "actionConfig": { "target": "D:\\Archives\\{pipeline}\\{date}-{time}.zip",
                     "content": "zip", "includeSkipped": false, "baseFolder": "D:\\Photos" } }
 ```
@@ -639,6 +746,7 @@ It produces:
 - `copybot-plugin/copybot-plugin-notify-email/target/` — the end-of-run e-mail. Copy its jar and its `lib/` folder (Jakarta Mail) into `plugins/notify-email/` next to the application.
 - `copybot-plugin/copybot-plugin-notify-webhook/target/` — the end-of-run webhook (ntfy, Discord, Slack, Telegram, JSON). Copy its jar into `plugins/notify-webhook/` next to the application.
 - `copybot-plugin/copybot-plugin-archive/target/` — the end-of-run ZIP archive of the copied files. Copy its jar into `plugins/archive/` next to the application.
+- `copybot-plugin/copybot-plugin-exec/target/` — `exec.process` and the ffmpeg actions (compressed videos, HEIC to JPEG, thumbnails). Copy its jar into `plugins/exec/` next to the application. It does not ship ffmpeg: see *Programs and ffmpeg*.
 
 **Where Copybot keeps its files:** the code (the application and its
 `plugins` folder) lives in the application folder. The data (`config.json`,
@@ -765,8 +873,8 @@ does that). That run configuration loads the metadata and gps-zone plugins
 straight from their `target/` folders through the `copybot.devPluginPaths`
 system property (folders separated by the platform path separator, `;` on
 Windows; ignored in the packaged application), so package these plugins once
-first. A dev run of the UI also needs the folders of the run-end plugins in
-`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target`
+first. A dev run of the UI also needs the folders of the run-end plugins (and of `exec`, to use ffmpeg) in
+`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target;copybot-plugin/copybot-plugin-exec/target`
 (add them to the run configuration yourself). The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
 `logs/` are written (git-ignored).
 
@@ -795,7 +903,7 @@ idea where to start again. Copybot is built around a few rules:
 |---|---|
 | [`copybot-engine`](copybot-engine) | The engine, the CLI, the plugin API (`com.copybot.plugin.api.*`) and the built-in `file.read` / `file.write` actions |
 | [`copybot-ui`](copybot-ui) | The JavaFX desktop application and its packaging |
-| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive` |
+| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive`, and `exec` (any program, ffmpeg for video, HEIC and thumbnails) |
 | [`copybot-plugin-demo`](copybot-plugin-demo) | Demo plugins exercising module isolation, versions and dependencies |
 | [`copybot-dependencies`](copybot-dependencies) | Shared dependency versions |
 
