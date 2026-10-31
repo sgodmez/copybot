@@ -6,7 +6,7 @@
     <parent>
         <groupId>com.copybot</groupId>
         <artifactId>copybot-plugin</artifactId>
-        <version>0.8.0-beta.2</version>
+        <version>0.8.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>copybot-plugin-exec</artifactId>
