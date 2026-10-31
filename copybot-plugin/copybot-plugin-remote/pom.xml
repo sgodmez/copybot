@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-plugin</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>copybot-plugin-remote</artifactId>
+    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
+    <version>1.0.0</version>
+
+    <properties>
+        <!-- IPlugin.getPluginCode(): the folder of the release archive -->
+        <plugin.code>remote</plugin.code>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <!-- SFTP: module com.jcraft.jsch, the maintained fork of JSch (requires java.base only), shipped in lib/ -->
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+            <version>2.28.8</version>
+        </dependency>
+        <dependency>
+            <!--
+                FTP / FTPS: module org.apache.commons.net (requires java.base and org.apache.commons.io, which requires
+                java.base only), both shipped in lib/
+            -->
+            <groupId>commons-net</groupId>
+            <artifactId>commons-net</artifactId>
+            <version>3.13.0</version>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- the embedded SFTP server of the tests -->
+            <groupId>org.apache.sshd</groupId>
+            <artifactId>sshd-sftp</artifactId>
+            <version>2.20.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- the embedded FTP / FTPS server of the tests -->
+            <groupId>org.apache.ftpserver</groupId>
+            <artifactId>ftpserver-core</artifactId>
+            <version>1.2.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- the logs of the test servers, silenced -->
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-nop</artifactId>
+            <version>1.7.36</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!--
+                    the SFTP tests answer the questions to the user (Confirmations) and set the plugins' data folder;
+                    jdk.httpserver: the fake S3 server of the tests; java.logging: a test reads the log of a write
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.remote</arg>
+                                <arg>--add-modules</arg>
+                                <arg>jdk.httpserver</arg>
+                                <arg>--add-reads</arg>
+                                <arg>com.copybot.plugin.remote=java.logging,jdk.httpserver</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!--
+                        the engine reads the disks of a local item natively (a test deletes a local source);
+                        jdk.httpserver: the fake S3 server of the tests; java.logging: a test reads the log of a write
+                    -->
+                    <argLine>--enable-native-access=com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.remote --add-modules jdk.httpserver --add-reads com.copybot.plugin.remote=java.logging,jdk.httpserver</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <!--
+                    target/copybot-plugin-remote-<version>.zip, configured in copybot-plugin/pom.xml. Last: at the
+                    package phase it must run after the copy of the libraries (plugins run in the order declared).
+                -->
+                <artifactId>maven-assembly-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

@@ -1,0 +1,1469 @@
+package com.copybot.ui.model;
+
+import com.copybot.engine.ItemDetail;
+import com.copybot.engine.Plan;
+import com.copybot.engine.Projection;
+import com.copybot.engine.TargetProjection;
+import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.ItemStatus;
+import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.resume.ItemKey;
+import com.copybot.engine.resume.ResumePoint;
+import com.copybot.engine.resume.ResumeProposal;
+import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.Companion;
+import com.copybot.plugin.api.action.CompanionRole;
+import com.copybot.plugin.api.action.TargetCheck;
+import com.copybot.plugin.api.action.TargetCheck.Kind;
+import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
+import com.copybot.plugin.api.action.WorkStatus;
+import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.RecentPipelines.LastRun;
+import com.copybot.utils.FileUtil;
+
+import java.nio.file.Path;
+import java.time.Instant;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.BiConsumer;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+/**
+ * The state of the plan view (spec desktop-ui §2), without JavaFX: the phase and the buttons it allows,
+ * the rows and their filter, the counters, the texts. The controller feeds it the engine state (on the
+ * JavaFX thread) and renders it. Not thread-safe.
+ * <p>
+ * The counters and the filtered rows are those of the last {@link #update}: the engine changes the rows in place,
+ * its next notification brings the change. They are computed once per update, however often they are read.
+ */
+public final class PlanViewModel {
+
+    public enum Phase {
+        /** nothing prepared (at opening, after a reload or a preparation refused before it started) */
+        NOT_PREPARED,
+        PREPARING,
+        PREPARED,
+        PREPARE_FAILED,
+        /** the preparation was stopped: what was listed and analysed so far stays in view, it cannot be copied */
+        PREPARE_STOPPED,
+        /**
+         * a manual resume point selected again files whose analysis was deferred at the listing: they are being
+         * analysed (spec deferred-analysis §2), the plan is PREPARED again afterwards
+         */
+        ANALYSING,
+        RUNNING,
+        PAUSED,
+        /** the execution ended: SUCCESS, ERROR or CANCELLED */
+        FINISHED
+    }
+
+    /** CONFLICTS: the files to copy whose target already exists (spec conflict-check §5). */
+    /** SUGGESTED_ZONE: the rows whose time zone the GPS suggests, whatever their status (the whole card checked). */
+    public enum Filter { ALL, TO_COPY, SKIPPED, ERRORS, CONFLICTS, SUGGESTED_ZONE }
+
+    /**
+     * The steps of a preparation: listing the source (total unknown), analysing the files, checking the targets still
+     * queued once every file is analysed (the destination slower than the source), computing the resume point.
+     */
+    public enum PrepareStage { LISTING, ANALYSING, CHECKING, RESOLVING }
+
+    /** The target checks of some files: done, and under way (waiting for the destination disk, or checking). */
+    private record Checks(int done, int pending) {
+        static Checks of(Collection<WorkItemExecution> rows) {
+            int done = 0;
+            int pending = 0;
+            for (WorkItemExecution item : rows) {
+                if (item.isTargetCheckPending()) {
+                    pending++;
+                } else if (item.getTargetCheck() != null) {
+                    done++;
+                }
+            }
+            return new Checks(done, pending);
+        }
+
+        int total() {
+            return done + pending;
+        }
+
+        double fraction() {
+            return (double) done / total();
+        }
+    }
+
+    /** A progress without known end (the value of JavaFX's {@code ProgressBar.INDETERMINATE_PROGRESS}). */
+    public static final double INDETERMINATE = -1;
+
+    /** Files and bytes processed (done, skipped or failed) among those selected when the copy started. */
+    public record Progress(int doneFiles, int totalFiles, long doneBytes, long totalBytes) {
+        /** 0 to 1, by bytes when the sizes are known, by files otherwise. */
+        public double fraction() {
+            if (totalBytes > 0) {
+                return (double) doneBytes / totalBytes;
+            }
+            return totalFiles == 0 ? 0 : (double) doneFiles / totalFiles;
+        }
+    }
+
+    private static final DateTimeFormatter ITEM_DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm");
+    private static final DateTimeFormatter RESUME_DATE = DateTimeFormatter.ofPattern("dd/MM HH:mm");
+    private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /** The sort of the "Date" column: the date shown (then the name), not its text; the files without date last. */
+    public static final Comparator<WorkItemExecution> DATE_ORDER = Comparator.comparing(
+            PlanViewModel::dateKey, Comparator.nullsLast(Comparator.naturalOrder()));
+
+    /** The sort of the "Size" column: the bytes, not their text; the unknown sizes last. */
+    public static final Comparator<WorkItemExecution> SIZE_ORDER = Comparator.comparing(
+            (WorkItemExecution item) -> item.getWorkItem().getMetadatas().getSize(),
+            Comparator.nullsLast(Comparator.naturalOrder()));
+
+    private Phase phase = Phase.NOT_PREPARED;
+    /** The out step's own-pattern default of the prepared plan (empty: no own pattern possible). */
+    private Optional<String> defaultOutPattern = Optional.empty();
+    private boolean executing;
+    private boolean autoExecute;
+    private boolean autoExecuteArmed;
+    private boolean finishedReported;
+    private Filter filter = Filter.ALL;
+    private List<WorkItemExecution> items = List.of();
+    private PipelineStatus status;
+    /** The source is still being listed (only meaningful while preparing). */
+    private boolean listing;
+    /** The run-end action running now, by its localised name; null outside the run-end actions (spec run-end). */
+    private String runEndStep;
+    private List<String> warnings = List.of();
+    private ResumeProposal proposal;
+    private ResumePoint override;
+    private Throwable failure;
+    /** Why the prepared plan cannot be executed (the pipeline does nothing with the files), null when it can. */
+    private String executionRefusal;
+    /**
+     * Why the pipeline cannot be prepared (no input step), null when it can; it belongs to the pipeline read,
+     * not to a preparation: kept by {@link #reset()} and {@link #startPreparing()}.
+     */
+    private String preparationRefusal;
+    /** The pipeline does nothing with the files: refuses the one-step modes (see {@link #startRefusal()}). */
+    private String nothingDoneRefusal;
+    private Set<WorkItemExecution> selectedAtStart = Set.of();
+    /** The files being analysed in {@link Phase#ANALYSING}, empty otherwise. */
+    private List<WorkItemExecution> analysing = List.of();
+    /**
+     * The resume point chosen for the next preparations (spec manual-point §3), null for the automatic one: a
+     * choice of the user, kept by {@link #reset()} and {@link #startPreparing()}.
+     */
+    private ResumePoint chosenPoint;
+    /** The last preparation listed every input to its end (a stopped one then offers its rows). */
+    private boolean listingComplete;
+    /** The archives unfolded at the listing, those copied locally to be, and their size (the engine's counters). */
+    private int archivesUnfolded;
+    private int archivesToDownload;
+    private long bytesToDownload;
+
+    /** The "execution" of the pipeline (spec execution-mode §5): what the button does. */
+    private ExecutionMode executionMode = ExecutionMode.PLAN;
+    /** The current execution is a streaming run, started without plan ({@link #startStreaming()}). */
+    private boolean streaming;
+    /** The current run failed before anything was done (its preparation: steps, state file). */
+    private boolean preparationFailed;
+    /**
+     * The listing the rows were last sorted from (by date, before the resume order is known), null when they were
+     * not: the same listing still in order is not sorted again.
+     */
+    private List<WorkItemExecution> sortedFrom;
+    /**
+     * The counters and texts the rows give, computed once per update: a notification (~10 per second) renders them
+     * several times. Null when to be computed again: every change of the rows or of what they are counted against.
+     */
+    private Derived derived;
+    /** The rows of the current filter, null when to be filtered again (as {@link #derived}, and a new filter). */
+    private List<WorkItemExecution> visible;
+
+    /** The automatic execution box unchecked, mode plan. */
+    public PlanViewModel() {
+    }
+
+    public void setExecutionMode(ExecutionMode executionMode) {
+        this.executionMode = executionMode;
+    }
+
+    public ExecutionMode executionMode() {
+        return executionMode;
+    }
+
+    /** The label of the button that starts the run: "Prepare the plan", "Prepare and copy", "Copy as files are listed". */
+    public String prepareLabel() {
+        return ResourcesEngine.getString(switch (executionMode) {
+            case PLAN -> "plan.prepare";
+            case AUTO -> "plan.prepare-and-copy";
+            case STREAMING -> "plan.stream";
+        });
+    }
+
+    /** The "automatic execution" box: only in mode plan (auto copies anyway, streaming has no plan), not while copying. */
+    public boolean showsAutoExecuteBox() {
+        return executionMode == ExecutionMode.PLAN && !isExecutionActive();
+    }
+
+    /**
+     * A streaming run starts ({@code "execution": "streaming"}): an execution from the start, without plan; the
+     * files are counted as they are listed.
+     */
+    public void startStreaming() {
+        clear();
+        executing = true;
+        streaming = true;
+        listing = true; // until the engine says otherwise
+        phase = Phase.RUNNING;
+        invalidate();
+    }
+
+    // ---- feeding ----
+
+    /** A preparation starts: empty table, the automatic execution armed if checked. */
+    public void startPreparing() {
+        clear();
+        phase = Phase.PREPARING;
+        listing = true; // until the engine says otherwise
+        autoExecuteArmed = true;
+        invalidate();
+    }
+
+    /** The prepared plan starts executing: the selected items and bytes become the progress totals. */
+    public void startExecuting() {
+        executing = true;
+        finishedReported = false;
+        autoExecuteArmed = false;
+        phase = Phase.RUNNING;
+        Set<WorkItemExecution> selected = Collections.newSetFromMap(new IdentityHashMap<>());
+        items.stream().filter(i -> Plan.Counts.isSelected(i.getStatus())).forEach(selected::add);
+        selectedAtStart = selected;
+        invalidate(); // the progress totals, "To copy"
+    }
+
+    /**
+     * The files a manual resume point selected again are analysed ({@code Plan.toAnalyse}): the view is locked
+     * until the plan is PREPARED again. Only from PREPARED.
+     */
+    public void startAnalysing(List<WorkItemExecution> toAnalyse) {
+        analysing = List.copyOf(toAnalyse);
+        autoExecuteArmed = false;
+        phase = Phase.ANALYSING;
+        invalidate();
+    }
+
+    /** Back to "not prepared" (pipeline reloaded, preparation refused before it started). */
+    public void reset() {
+        clear();
+        phase = Phase.NOT_PREPARED;
+    }
+
+    private void clear() {
+        executing = false;
+        streaming = false;
+        preparationFailed = false;
+        autoExecuteArmed = false;
+        finishedReported = false;
+        items = List.of();
+        status = null;
+        listing = false;
+        runEndStep = null;
+        warnings = List.of();
+        proposal = null;
+        override = null;
+        executionRefusal = null;
+        failure = null;
+        selectedAtStart = Set.of();
+        analysing = List.of();
+        sortedFrom = null;
+        archivesUnfolded = 0;
+        archivesToDownload = 0;
+        bytesToDownload = 0;
+        invalidate();
+    }
+
+    /** The rows or what they are counted against changed: the counters and the filtered rows are computed again. */
+    private void invalidate() {
+        derived = null;
+        visible = null;
+    }
+
+    /**
+     * The latest engine state (watcher notification, end of the preparation, pause...).
+     *
+     * @param ordered the plan's items in resume order once it is prepared, empty before: the rows are
+     *                then in date order ({@link #DATE_ORDER}); items forked during the execution come after the ordered ones
+     */
+    public void update(PipelineState state, List<WorkItemExecution> ordered) {
+        status = state.getStatus();
+        listing = state.isListingInProgress();
+        runEndStep = state.getRunEndStep();
+        listingComplete = state.isListingComplete();
+        archivesUnfolded = state.getArchivesUnfolded();
+        archivesToDownload = state.getArchivesToDownload();
+        bytesToDownload = state.getBytesToDownload();
+        proposal = state.getResumeProposal();
+        failure = state.getFailure();
+        preparationFailed = state.isPreparationFailed();
+        List<String> all = new ArrayList<>(state.getWarnings());
+        if (proposal != null) {
+            all.addAll(proposal.warnings());
+        }
+        warnings = List.copyOf(all);
+        List<WorkItemExecution> listed = List.copyOf(state.getWorkItems());
+        invalidate(); // the statuses evolve in place: the same rows are counted again
+        if (ordered.isEmpty()) {
+            // the date is known at the listing: no need to wait for the resume order (the same, by date then name)
+            if (sortedFrom == null || !sameItems(listed, sortedFrom) || !strictlySorted(items)) {
+                items = listed.stream().sorted(DATE_ORDER).toList();
+            }
+            sortedFrom = listed;
+        } else {
+            sortedFrom = null;
+            Set<WorkItemExecution> known = Collections.newSetFromMap(new IdentityHashMap<>());
+            known.addAll(ordered);
+            List<WorkItemExecution> rows = new ArrayList<>(ordered);
+            listed.stream().filter(i -> !known.contains(i)).forEach(rows::add);
+            items = List.copyOf(rows);
+        }
+        if (status == null) {
+            return;
+        }
+        if (executing) {
+            phase = switch (status) {
+                case PAUSED -> Phase.PAUSED;
+                // a streaming run failing before the listing (steps, state file): told like a preparation
+                case ERROR -> streaming && preparationFailed ? Phase.PREPARE_FAILED : Phase.FINISHED;
+                case SUCCESS, CANCELLED -> Phase.FINISHED;
+                default -> Phase.RUNNING;
+            };
+        } else if (!analysing.isEmpty() && (status == PipelineStatus.RUNNING || status == PipelineStatus.PAUSED)) {
+            phase = Phase.ANALYSING;
+        } else {
+            analysing = List.of(); // the analysis is over: the plan is PREPARED again
+            phase = switch (status) {
+                case PREPARED -> Phase.PREPARED;
+                case ERROR -> Phase.PREPARE_FAILED;
+                case CANCELLED -> Phase.PREPARE_STOPPED;
+                default -> Phase.PREPARING;
+            };
+        }
+    }
+
+    /** The same items, in the same order (the engine's objects: by identity). */
+    private static boolean sameItems(List<WorkItemExecution> a, List<WorkItemExecution> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (a.get(i) != b.get(i)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Each row strictly before the next in {@link #DATE_ORDER}: sorting them again would give the same rows (with a
+     * tie the order of the listing decides, so they are sorted again).
+     */
+    private static boolean strictlySorted(List<WorkItemExecution> rows) {
+        for (int i = 1; i < rows.size(); i++) {
+            if (DATE_ORDER.compare(rows.get(i - 1), rows.get(i)) >= 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** What the rows give, in one pass over them (see {@link #derived}). */
+    private record Derived(Plan.Counts counts, int copied, int prepared, int analysedOfListed, int skippedByResumePoint,
+                           int conflictsSame, int conflictsDifferent, boolean conflictsFull,
+                           int written, long writtenBytes, Progress progress, Checks checks) {
+    }
+
+    private Derived derived() {
+        if (derived == null) {
+            derived = derive();
+        }
+        return derived;
+    }
+
+    private Derived derive() {
+        int copied = 0;
+        int prepared = 0;
+        int analysedOfListed = 0;
+        int skippedByResumePoint = 0;
+        int same = 0;
+        int different = 0;
+        boolean full = false;
+        int written = 0;
+        long writtenBytes = 0;
+        for (WorkItemExecution item : items) {
+            ItemStatus s = item.getStatus();
+            if (s == ItemStatus.DONE) {
+                copied++;
+            }
+            if (item.isPrepared()) {
+                prepared++;
+                if (!item.isAnalysisDeferred()) {
+                    analysedOfListed++;
+                }
+            }
+            if (item.isSkippedByResumePoint()) {
+                skippedByResumePoint++;
+            }
+            if (isConflict(item)) {
+                Kind kind = item.getTargetCheck().kind();
+                full |= kind == Kind.IDENTICAL || kind == Kind.DIFFERENT;
+                if (kind == Kind.SAME_SIZE || kind == Kind.IDENTICAL) {
+                    same++;
+                } else {
+                    different++;
+                }
+            }
+            // the files the copy will write: selected, not announced left out by a full conflict check
+            if (Plan.Counts.isSelected(s) && (item.getTargetCheck() == null || !item.getTargetCheck().skipped())) {
+                written++;
+                writtenBytes += size(item);
+            }
+        }
+        return new Derived(Plan.Counts.of(items), copied, prepared, analysedOfListed, skippedByResumePoint,
+                same, different, full, written, writtenBytes, computeProgress(), Checks.of(items));
+    }
+
+    /** A manual resume point, already applied with {@code Plan.preview}: shown on the resume line and executed. */
+    public void setOverride(ResumePoint override) {
+        this.override = override;
+    }
+
+    public ResumePoint override() {
+        return override;
+    }
+
+    public void setFilter(Filter filter) {
+        this.filter = filter;
+        visible = null;
+    }
+
+    public Filter filter() {
+        return filter;
+    }
+
+    /** The filters to offer: SUGGESTED_ZONE only with a flagged row (the gps-zone plugin) or while it is chosen. */
+    public List<Filter> filters() {
+        return Arrays.stream(Filter.values())
+                .filter(f -> f != Filter.SUGGESTED_ZONE || filter == f || items.stream().anyMatch(PlanViewModel::isSuggested))
+                .toList();
+    }
+
+    /** The "automatic execution" box of mode plan: a one-shot toggle of the view, never stored (spec execution-mode §1). */
+    public void setAutoExecute(boolean autoExecute) {
+        this.autoExecute = autoExecute;
+    }
+
+    public boolean isAutoExecute() {
+        return autoExecute;
+    }
+
+    /**
+     * True once per preparation, when the plan just became ready, the box is checked (or the mode is auto) and
+     * there is something to copy: the controller then starts the copy.
+     */
+    public boolean consumeAutoExecute() {
+        if (autoExecuteArmed && (autoExecute || executionMode == ExecutionMode.AUTO) && phase == Phase.PREPARED
+                && counts().selected() > 0) {
+            autoExecuteArmed = false;
+            return true;
+        }
+        if (phase != Phase.PREPARING) {
+            autoExecuteArmed = false;
+        }
+        return false;
+    }
+
+    /** The summary of the execution, once, when it has just finished: for the recent pipelines. */
+    public Optional<LastRun> consumeFinishedRun(Instant now) {
+        if (phase != Phase.FINISHED || finishedReported) {
+            return Optional.empty();
+        }
+        finishedReported = true;
+        Plan.Counts counts = counts();
+        return Optional.of(new LastRun(now, status, copied(), counts.skipped(), counts.errors()));
+    }
+
+    private int copied() {
+        return derived().copied();
+    }
+
+    // ---- state ----
+
+    public Phase phase() {
+        return phase;
+    }
+
+    /** A preparation, an analysis or an execution holds the engine. */
+    public boolean isActive() {
+        return phase == Phase.PREPARING || phase == Phase.ANALYSING || phase == Phase.RUNNING || phase == Phase.PAUSED;
+    }
+
+    public boolean isExecutionActive() {
+        return phase == Phase.RUNNING || phase == Phase.PAUSED;
+    }
+
+    /** "← Pipelines", "Edit…" and "Prepare the plan": not while the engine is busy. */
+    public boolean canGoBack() {
+        return !isActive();
+    }
+
+    public boolean canPrepare() {
+        return !isActive() && startRefusal() == null;
+    }
+
+    /**
+     * Why the button that starts the run stays disabled: no input step; or, for the one-step modes (their button
+     * copies), a pipeline that does nothing with the files. Null when it can start.
+     */
+    private String startRefusal() {
+        if (preparationRefusal != null) {
+            return preparationRefusal;
+        }
+        return executionMode != ExecutionMode.PLAN ? nothingDoneRefusal : null;
+    }
+
+    /** What the pipeline read says when it does nothing with the files (no output nor process step); set on each read. */
+    public void setNothingDoneRefusal(Optional<String> refusal) {
+        this.nothingDoneRefusal = refusal.orElse(null);
+    }
+
+    public boolean canCopy() {
+        return phase == Phase.PREPARED && counts().selected() > 0 && executionRefusal == null;
+    }
+
+    /** What the pipeline read says about its preparation (no input step); set again each time it is read. */
+    public void setPreparationRefusal(Optional<String> refusal) {
+        this.preparationRefusal = refusal.orElse(null);
+    }
+
+    /** What the engine says about the prepared plan ({@code Plan.executionRefusal}); forgotten by the next preparation. */
+    public void setExecutionRefusal(Optional<String> refusal) {
+        this.executionRefusal = refusal.orElse(null);
+    }
+
+    /**
+     * The warning shown beside the buttons when Prepare or Copy stays disabled because of the pipeline or the
+     * plan: no input step, the pipeline does nothing with the files, no file to copy. Empty otherwise (a running
+     * operation is told by the status line).
+     */
+    public Optional<String> warning() {
+        if (startRefusal() != null) {
+            return Optional.of(startRefusal());
+        }
+        if (phase != Phase.PREPARED) {
+            return Optional.empty();
+        }
+        if (executionRefusal != null) {
+            return Optional.of(executionRefusal);
+        }
+        if (counts().selected() == 0) {
+            return Optional.of(ResourcesEngine.getString("plan.warning.nothing-to-copy"));
+        }
+        return Optional.empty();
+    }
+
+    public boolean canPause() {
+        return phase == Phase.RUNNING;
+    }
+
+    public boolean canResume() {
+        return phase == Phase.PAUSED;
+    }
+
+    /** "Stop": during a preparation, an execution or an analysis of the files selected again. */
+    public boolean canStop() {
+        return phase == Phase.PREPARING || isExecutionActive() || phase == Phase.ANALYSING;
+    }
+
+    /** "change…" and "Resume from here": a prepared plan, before its execution. */
+    public boolean canChangeResumePoint() {
+        return phase == Phase.PREPARED && proposal != null;
+    }
+
+    public void setChosenPoint(ResumePoint chosenPoint) {
+        this.chosenPoint = chosenPoint;
+    }
+
+    /** The resume point chosen for the next preparations, null for the automatic one. */
+    public ResumePoint chosenPoint() {
+        return chosenPoint;
+    }
+
+    /**
+     * "change…" outside a prepared plan (spec manual-point §3): the point of the next preparation; not while the
+     * engine is busy.
+     */
+    public boolean canChooseResumePoint() {
+        return !isActive() && phase != Phase.PREPARED;
+    }
+
+    /**
+     * A preparation stopped after its listing: "Resume from here" chooses the point of the next preparation,
+     * "Analyse" analyses some rows; nothing starts the stopped analysis again by itself.
+     */
+    public boolean isStoppedAfterTheListing() {
+        return phase == Phase.PREPARE_STOPPED && listingComplete;
+    }
+
+    /**
+     * The resume point "Resume from here" gives for this row: from its key, included (the date known at the listing
+     * on a stopped preparation, before the resume order freezes it).
+     */
+    public Optional<ResumePoint> resumePointFrom(WorkItemExecution item) {
+        if (canChangeResumePoint()) {
+            return item.getResumeKey().map(ResumePoint::from); // the key the resume order froze (none: no date)
+        }
+        if (isStoppedAfterTheListing()) {
+            return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).map(ResumePoint::from);
+        }
+        return Optional.empty();
+    }
+
+    /** Among these rows, those with a planned processing: the analysed ones (any phase). */
+    public static List<WorkItemExecution> detailable(List<WorkItemExecution> rows) {
+        return rows.stream().filter(i -> i.getProjection() != null).toList();
+    }
+
+    /** Where the planned processing of these rows opens: on the clicked row when it is one of them, else the first. */
+    public static int detailStart(List<WorkItemExecution> detailable, WorkItemExecution clicked) {
+        return Math.max(0, detailable.indexOf(clicked));
+    }
+
+    /** Among these rows, those "Analyse" analyses: a prepared plan, skipped rows not analysed (skipped at the listing). */
+    public List<WorkItemExecution> analysable(List<WorkItemExecution> rows) {
+        if (isStoppedAfterTheListing()) {
+            // a stopped preparation (spec manual-point §2): the rows the stop left unanalysed, or skipped unanalysed
+            return rows.stream().filter(i -> i.getStatus() == ItemStatus.PENDING && (!i.isPrepared() || i.isAnalysisDeferred())
+                    || i.isAnalysisDeferred() && i.getStatus() == ItemStatus.SKIPPED).toList();
+        }
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> i.isAnalysisDeferred() && i.getStatus() == ItemStatus.SKIPPED).toList();
+    }
+
+    // ---- files ignored by the user (context menu of the rows) ----
+
+    /** Among these rows, those "Ignore for this copy" leaves out: a prepared plan, rows to copy or skipped by the resume point. */
+    public List<WorkItemExecution> ignorable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> !i.isIgnored()
+                && (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)).toList();
+    }
+
+    /** Among these rows, those "Include again" brings back: a prepared plan, rows ignored for this run. */
+    public List<WorkItemExecution> unignorable(List<WorkItemExecution> rows) {
+        return phase == Phase.PREPARED ? rows.stream().filter(WorkItemExecution::isIgnored).toList() : List.of();
+    }
+
+    // ---- own out pattern (context menu of the rows, spec own-out-pattern §3) ----
+
+    /** The out pattern of the files without own one; empty when the plan's out step takes no own pattern. */
+    public Optional<String> defaultOutPattern() {
+        return defaultOutPattern;
+    }
+
+    public void setDefaultOutPattern(Optional<String> defaultOutPattern) {
+        this.defaultOutPattern = defaultOutPattern;
+    }
+
+    /** Among these rows, those "Out pattern" applies to: a prepared plan with a default pattern, analysed rows. */
+    public List<WorkItemExecution> patternable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED || defaultOutPattern.isEmpty()) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> i.getProjection() != null).toList();
+    }
+
+    /** Among these rows, those with an own out pattern ("Reset the out pattern"). */
+    public List<WorkItemExecution> withOwnPattern(List<WorkItemExecution> rows) {
+        return phase == Phase.PREPARED ? rows.stream().filter(Plan::hasOwnPattern).toList() : List.of();
+    }
+
+    // ---- time zone correction (context menu of the rows) ----
+
+    /** The shot time in the corrected zone, as "correctionText" tells it. */
+    private static final DateTimeFormatter CORRECTED_DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+
+    /** Among these rows, those "Correct the time zone" applies to: a prepared plan, analysed, to copy or skipped, with a capture date. */
+    public List<WorkItemExecution> correctable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        return rows.stream().filter(i -> !i.isAnalysisDeferred()
+                && (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)
+                && i.getWorkItem().getMetadatas().getTime(WorkItemMetadata.CAPTURE_DATE).isPresent()).toList();
+    }
+
+    /** Among these rows, those "Cancel the correction" applies to: a prepared plan, rows whose zone was corrected. */
+    public List<WorkItemExecution> uncorrectable(List<WorkItemExecution> rows) {
+        if (phase != Phase.PREPARED) {
+            return List.of();
+        }
+        // Plan.clearZone only acts on pending or skipped rows: a row whose analysis failed is left out
+        return rows.stream().filter(i -> (i.getStatus() == ItemStatus.PENDING || i.getStatus() == ItemStatus.SKIPPED)
+                && i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.CAPTURE_ZONE).isPresent()).toList();
+    }
+
+    /** The camera clock to show first in the dialog: a zone, and whether it is the place without summer time. */
+    public record ClockPrefill(ZoneId zone, boolean noDst) {
+    }
+
+    /** The zone under that metadata key when every row has the same one. */
+    public static Optional<ZoneId> sharedZone(List<WorkItemExecution> rows, String key) {
+        Set<Optional<ZoneId>> zones = rows.stream().map(i -> i.getWorkItem().getMetadatas().getZone(key)).collect(Collectors.toSet());
+        return zones.size() == 1 ? zones.iterator().next() : Optional.empty();
+    }
+
+    /** The clock to prefill for a place and the clock the rows share: the place and "no summer time" when it is the place's winter offset. */
+    public static ClockPrefill clockPrefill(ZoneId place, Optional<ZoneId> sharedClock) {
+        if (sharedClock.isEmpty()) {
+            return new ClockPrefill(place, false);
+        }
+        ZoneId clock = sharedClock.get();
+        boolean winterOfPlace = clock instanceof ZoneOffset offset
+                && offset.equals(place.getRules().getStandardOffset(Instant.now()));
+        return winterOfPlace ? new ClockPrefill(place, true) : new ClockPrefill(clock, false);
+    }
+
+    /** How many of these rows are photos without a recorded offset (a stale flag without a capture date does not count). */
+    public static long clockUnknownCount(List<WorkItemExecution> rows) {
+        return rows.stream().map(i -> i.getWorkItem().getMetadatas())
+                .filter(m -> Boolean.TRUE.equals(m.raw().get(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN))
+                        && m.getTime(WorkItemMetadata.CAPTURE_DATE).isPresent())
+                .count();
+    }
+
+    /** "Time zone corrected: X, shot at …" for a row whose zone was corrected; empty otherwise. */
+    public static Optional<String> correctionText(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.CAPTURE_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        if (zone.isEmpty() || shot.isEmpty()) {
+            return Optional.empty();
+        }
+        return Optional.of(ResourcesEngine.getString("plan.zone.corrected", zone.get().getId(),
+                CORRECTED_DATE.format(shot.get().atZone(zone.get()))));
+    }
+
+    // ---- time zone suggested by the GPS (optional gps-zone plugin, spec gps-zone-check §3, §6) ----
+
+    /** Among these rows, those "Apply the proposed time zone" applies to: the correctable ones with a suggested zone. */
+    public List<WorkItemExecution> suggestible(List<WorkItemExecution> rows) {
+        return correctable(rows).stream()
+                .filter(i -> i.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent()).toList();
+    }
+
+    /** These rows grouped by their suggested zone, in order of appearance; the rows without suggestion are left out. */
+    public static Map<ZoneId, List<WorkItemExecution>> bySuggestedZone(List<WorkItemExecution> rows) {
+        Map<ZoneId, List<WorkItemExecution>> groups = new LinkedHashMap<>();
+        for (WorkItemExecution row : rows) {
+            row.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE)
+                    .ifPresent(zone -> groups.computeIfAbsent(zone, z -> new ArrayList<>()).add(row));
+        }
+        return groups;
+    }
+
+    /**
+     * Applies each suggested zone to its rows ({@link #bySuggestedZone}) with {@code correct}, which may fail (the
+     * state cannot be written). The first failure stops the next zones and is returned: the zones applied before
+     * it stay applied, their rows are to analyse again whatever the outcome.
+     */
+    public static Optional<RuntimeException> applySuggestedZones(List<WorkItemExecution> rows,
+                                                                BiConsumer<ZoneId, List<WorkItemExecution>> correct) {
+        for (Map.Entry<ZoneId, List<WorkItemExecution>> group : bySuggestedZone(rows).entrySet()) {
+            try {
+                correct.accept(group.getKey(), group.getValue());
+            } catch (RuntimeException e) {
+                return Optional.of(e);
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static final DateTimeFormatter OFFSET_TEXT = DateTimeFormatter.ofPattern("xxx");
+
+    /** "Camera badly set: noted +01:00, place X (-06:00, from the GPS)" for a row with a suggested zone; empty otherwise. */
+    public static Optional<String> suggestionText(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.SUGGESTED_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        if (zone.isEmpty() || shot.isEmpty()) {
+            return Optional.empty();
+        }
+        String noted = metadata.raw().get(WorkItemMetadata.RECORDED_OFFSET) instanceof ZoneOffset offset
+                ? OFFSET_TEXT.format(offset) : "?";
+        return Optional.of(ResourcesEngine.getString("plan.zone.suggested", noted, zone.get().getId(),
+                OFFSET_TEXT.format(zone.get().getRules().getOffset(shot.get()))));
+    }
+
+    /**
+     * "12 photos of a badly set camera": every flagged row, also those not copied (a plan run only to check the whole
+     * card, filter {@link Filter#SUGGESTED_ZONE}); empty without any.
+     */
+    public Optional<String> suggestionSummary() {
+        long count = items.stream().filter(PlanViewModel::isSuggested).count();
+        return count == 0 ? Optional.empty() : Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", count));
+    }
+
+    private static boolean isSuggested(WorkItemExecution item) {
+        return item.getWorkItem().getMetadatas().getZone(WorkItemMetadata.SUGGESTED_ZONE).isPresent();
+    }
+
+    /** A mark drawn in the Target cell. */
+    public enum TargetMark {
+        /** The file has its own out pattern: a pencil. */
+        OWN_PATTERN
+    }
+
+    /** The marks of a Target cell, and its tooltip: one line per mark, in their order, then the folders; null without any. */
+    public record TargetMarks(List<TargetMark> marks, String tooltip) {
+    }
+
+    /**
+     * The marks of the Target cell of this row (null: an empty cell) and its tooltip, built on {@code folders} (the
+     * tooltip of the target folders, null when there is none).
+     */
+    public static TargetMarks targetMarks(WorkItemExecution item, String folders) {
+        List<TargetMark> marks = new ArrayList<>();
+        List<String> lines = new ArrayList<>();
+        Optional<String> own = item == null ? Optional.empty() : item.getWorkItem().getOutPattern();
+        if (own.isPresent()) {
+            marks.add(TargetMark.OWN_PATTERN);
+            lines.add(ResourcesEngine.getString("plan.target.own-pattern", own.get()));
+        }
+        if (folders != null) {
+            lines.add(folders);
+        }
+        return new TargetMarks(List.copyOf(marks), lines.isEmpty() ? null : String.join("\n", lines));
+    }
+
+    /**
+     * The files "Always ignore" excludes from the pipeline for these rows: their listed local files, once each.
+     * Before and after an execution, never while the engine is busy.
+     */
+    public List<Path> excludable(List<WorkItemExecution> rows) {
+        if (isActive()) {
+            return List.of();
+        }
+        return rows.stream().map(WorkItemExecution::getListedPath).flatMap(Optional::stream).distinct().toList();
+    }
+
+    public List<WorkItemExecution> items() {
+        return items;
+    }
+
+    /** Once the copy started, "To copy" is what is left: not copied yet (the copied ones are DONE). */
+    private static boolean isLeftToCopy(ItemStatus status) {
+        return status == ItemStatus.PENDING || status == ItemStatus.WAITING_RESOURCES || status == ItemStatus.RUNNING;
+    }
+
+    /**
+     * The row to scroll to (shown at the top) so that the resume junction is in view: the last {@code context}
+     * rows not selected (already imported, skipped or in error), then the first selected one; the top without
+     * resume, the last rows when nothing is selected. The rows are in resume order.
+     */
+    public static int resumeScrollIndex(List<WorkItemExecution> rows, int context) {
+        int junction = rows.size();
+        for (int i = 0; i < rows.size(); i++) {
+            if (Plan.Counts.isSelected(rows.get(i).getStatus())) {
+                junction = i;
+                break;
+            }
+        }
+        return Math.max(0, junction - context);
+    }
+
+    /** The rows of the current filter (the same list until the rows or the filter change). */
+    public List<WorkItemExecution> visibleItems() {
+        if (visible == null) {
+            visible = filter == Filter.ALL ? items : filtered();
+        }
+        return visible;
+    }
+
+    private List<WorkItemExecution> filtered() {
+        return items.stream().filter(i -> switch (filter) {
+            case ALL -> true;
+            case TO_COPY -> executing ? isLeftToCopy(i.getStatus()) : Plan.Counts.isSelected(i.getStatus());
+            case SKIPPED -> i.getStatus() == ItemStatus.SKIPPED;
+            case ERRORS -> i.getStatus() == ItemStatus.ERROR;
+            case CONFLICTS -> isConflict(i);
+            case SUGGESTED_ZONE -> isSuggested(i);
+        }).toList();
+    }
+
+    /** A file left to copy whose target already exists, as the plan checked it. */
+    private static boolean isConflict(WorkItemExecution item) {
+        TargetCheck check = item.getTargetCheck();
+        return check != null && check.exists() && isLeftToCopy(item.getStatus());
+    }
+
+    /**
+     * "⚠ 42 files already exist at the destination (40 same size, 2 different size)", or identical / different after a
+     * full check (spec conflict-check §5): the files to copy only, until the copy starts; empty without any.
+     */
+    public Optional<String> conflictText() {
+        if (executing || !(phase == Phase.PREPARING || phase == Phase.PREPARED || phase == Phase.ANALYSING
+                || phase == Phase.PREPARE_STOPPED)) {
+            return Optional.empty();
+        }
+        Derived d = derived();
+        int same = d.conflictsSame();
+        int different = d.conflictsDifferent();
+        if (same + different == 0) {
+            return Optional.empty();
+        }
+        return Optional.of(ResourcesEngine.getString(d.conflictsFull() ? "plan.conflicts.full" : "plan.conflicts.quick",
+                same + different, same, different));
+    }
+
+    /** "Archives unfolded: 2 - to download: 1 (2 KB)": once an archive was unfolded; empty before. */
+    public Optional<String> archivesText() {
+        return archivesUnfolded == 0 ? Optional.empty()
+                : Optional.of(ResourcesEngine.getString("plan.archives", archivesUnfolded, archivesToDownload,
+                displaySize(bytesToDownload, 1)));
+    }
+
+    public Plan.Counts counts() {
+        return derived().counts();
+    }
+
+    /**
+     * Among the files selected when the copy started; while streaming (nothing selected at the start), among the
+     * files listed so far that the resume point does not skip.
+     */
+    public Progress progress() {
+        return derived().progress();
+    }
+
+    private Progress computeProgress() {
+        int done = 0;
+        long doneBytes = 0;
+        long totalBytes = 0;
+        Collection<WorkItemExecution> counted = streaming
+                ? items.stream().filter(i -> !i.isSkippedByResumePoint()).toList()
+                : selectedAtStart;
+        for (WorkItemExecution item : counted) {
+            long size = size(item);
+            totalBytes += size;
+            ItemStatus s = item.getStatus();
+            if (s == ItemStatus.DONE || s == ItemStatus.SKIPPED || s == ItemStatus.ERROR) {
+                done++;
+                doneBytes += size;
+            }
+        }
+        return new Progress(done, counted.size(), doneBytes, totalBytes);
+    }
+
+    /** The bar of the execution: {@link #progress()}, {@link #INDETERMINATE} while a streaming run still lists (the total grows). */
+    public double executionFraction() {
+        return streaming && listing ? INDETERMINATE : progress().fraction();
+    }
+
+    /** Where the preparation is (only meaningful in PREPARING). */
+    public PrepareStage prepareStage() {
+        if (listing) {
+            return PrepareStage.LISTING;
+        }
+        if (preparedCount() < items.size()) {
+            return PrepareStage.ANALYSING;
+        }
+        return derived().checks().pending() > 0 ? PrepareStage.CHECKING : PrepareStage.RESOLVING;
+    }
+
+    /**
+     * The bar of the preparation: the analysed share of the listed files, then the checked share of the targets to
+     * check, {@link #INDETERMINATE} otherwise; in {@link Phase#ANALYSING}, the same for the files selected again.
+     */
+    public double prepareFraction() {
+        if (phase == Phase.ANALYSING) {
+            Checks checks = checksAfterAnalysingAgain();
+            return checks != null ? checks.fraction() : (double) analysedCount() / analysing.size();
+        }
+        return switch (prepareStage()) {
+            case ANALYSING -> (double) preparedCount() / items.size();
+            case CHECKING -> derived().checks().fraction();
+            case LISTING, RESOLVING -> INDETERMINATE;
+        };
+    }
+
+    /** Every file selected again analysed but some of their targets still being checked: those checks; else null. */
+    private Checks checksAfterAnalysingAgain() {
+        if (analysedCount() < analysing.size()) {
+            return null;
+        }
+        Checks checks = Checks.of(analysing);
+        return checks.pending() > 0 ? checks : null;
+    }
+
+    /** Among the files being analysed, those no longer deferred (analysed, or failed). */
+    private int analysedCount() {
+        return (int) analysing.stream().filter(i -> !i.isAnalysisDeferred()).count();
+    }
+
+    private int preparedCount() {
+        return derived().prepared();
+    }
+
+    /** Among the listed files, those analysed (or failed): prepared, their analysis not deferred. */
+    private int analysedOfListed() {
+        return derived().analysedOfListed();
+    }
+
+    private static long size(WorkItemExecution item) {
+        Long size = item.getWorkItem().getMetadatas().getSize();
+        return size == null ? 0 : size;
+    }
+
+    /** The configuration warnings of the steps, then the resume ones (spec desktop-ui §2). */
+    public List<String> warnings() {
+        return warnings;
+    }
+
+    // ---- texts ----
+
+    /** A size for the display, in the current locale and language ("292,97 Ko"). */
+    private static String displaySize(long size, int decimals) {
+        return FileUtil.toAutoUnitSize(size, decimals, Locale.getDefault());
+    }
+
+    /** The target column (spec pattern-helper §4.3): the first directory and "(+N)", or why there is none. */
+    public static String targetText(TargetProjection projection) {
+        return switch (projection) {
+            case TargetProjection.Targets t -> t.directories().isEmpty() ? ""
+                    : t.directories().getFirst() + (t.directories().size() > 1
+                    ? " " + ResourcesEngine.getString("plan.target.more", t.directories().size() - 1) : "");
+            case TargetProjection.Filtered f -> ResourcesEngine.getString("dryrun.filtered", f.action());
+            case TargetProjection.Unknown u -> ResourcesEngine.getString("dryrun.unsupported", u.action());
+            case TargetProjection.Failed f -> f.message();
+            case TargetProjection.None n -> "";
+        };
+    }
+
+    /** Every directory, one per line, when there are several; null otherwise. */
+    public static String targetTooltip(TargetProjection projection) {
+        return projection instanceof TargetProjection.Targets t && t.directories().size() > 1
+                ? t.directories().stream().map(Path::toString).collect(Collectors.joining("\n")) : null;
+    }
+
+    /** The "Companions" column: how many files go with the item, empty when none. */
+    public static String companionsText(WorkItemExecution item) {
+        int count = item.getWorkItem().getCompanions().size();
+        return count == 0 ? "" : String.valueOf(count);
+    }
+
+    /** The companions, one per line with their role ("IMG_1.xmp (copy)"); null when none. */
+    public static String companionsTooltip(WorkItemExecution item) {
+        List<Companion> companions = item.getWorkItem().getCompanions();
+        return companions.isEmpty() ? null : companions.stream()
+                .map(c -> c.item().getNameDisplay() + " (" + roleText(c.role()) + ")")
+                .collect(Collectors.joining("\n"));
+    }
+
+    private static String roleText(CompanionRole role) {
+        return ResourcesEngine.getString("plan.companion.role." + role.name());
+    }
+
+    /**
+     * The companions in the detail, each with its role and, when copied, its target: the directory of the main target
+     * and the companion name derived from the main target file name; a read one has none.
+     */
+    private static List<String> companionLines(WorkItem source, ItemDetail detail) {
+        Path mainTarget = detail.targets().isEmpty() ? null : detail.targets().getFirst();
+        List<String> lines = new ArrayList<>();
+        for (Companion c : source.getCompanions()) {
+            String name = c.item().getNameDisplay();
+            String role = roleText(c.role());
+            if (c.role() == CompanionRole.READ) {
+                lines.add("   " + ResourcesEngine.getString("plan.detail.companion.read", name, role));
+            } else if (mainTarget != null && mainTarget.getFileName() != null) {
+                Path target = mainTarget.resolveSibling(c.targetName(mainTarget.getFileName().toString()));
+                lines.add("   " + ResourcesEngine.getString("plan.detail.companion", name, role, target));
+            } else {
+                lines.add("   " + name + " (" + role + ")"); // no target to derive from
+            }
+        }
+        return lines;
+    }
+
+    /**
+     * The planned processing of an item ("Planned processing…" of the row menu): the source, its status, each
+     * process step and what it produced, then every file the out step would write, or why the dry run stopped.
+     */
+    public static String detailText(WorkItemExecution item, ItemDetail detail) {
+        WorkItem source = item.getWorkItem();
+        List<String> lines = new ArrayList<>();
+        lines.add("📂 " + source.getNameDisplay());
+        lines.add("   " + Stream.of(source.getSourceLocationDisplay(), sizeText(item), dateText(item))
+                .filter(s -> s != null && !s.isEmpty())
+                .collect(Collectors.joining(" · ")));
+        // the full status: for a file the resume point skips, its reason (the column only says "Skipped")
+        Optional<String> reason = statusTooltip(item);
+        lines.add(ResourcesEngine.getString("plan.detail.status", reason.isPresent()
+                ? ResourcesEngine.getString("item.status.SKIPPED", reason.get()) : statusText(item)));
+        correctionText(item).ifPresent(lines::add);
+        // a remark left at execution by a process step (the dry-run ones are on the step lines)
+        if (source.getMetadatas().raw().get(WorkItemMetadata.NOTE) instanceof String note && !note.isEmpty()) {
+            lines.add("⚠ " + note);
+        }
+        lines.add("");
+        for (Projection.Step step : detail.steps()) {
+            lines.add("⚙ " + step.action() + " → " + String.join(", ", step.produced())
+                    + (step.note() == null ? "" : " — " + step.note()));
+        }
+        switch (detail.outcome()) {
+            case TargetProjection.Targets t -> {
+                for (int i = 0; i < detail.targets().size(); i++) {
+                    lines.add((i == 0 ? "💾 " : "   ") + detail.targets().get(i));
+                }
+            }
+            case TargetProjection.Filtered f ->
+                    lines.add("⚙ " + f.action() + " → " + ResourcesEngine.getString("plan.detail.filtered"));
+            case TargetProjection.Unknown u ->
+                    lines.add("⚙ " + u.action() + " → " + ResourcesEngine.getString("plan.detail.unsupported"));
+            case TargetProjection.Failed f -> lines.add("⚠ " + f.message());
+            case TargetProjection.None n -> lines.add("💾 " + ResourcesEngine.getString("plan.detail.no-target"));
+        }
+        lines.addAll(companionLines(source, detail));
+        if (!detail.branches().isEmpty()) {
+            lines.add("");
+            lines.add("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+            detail.branches().forEach(branch -> lines.addAll(branchLines(branch)));
+        }
+        return String.join("\n", lines);
+    }
+
+    /**
+     * A secondary output in the detail (spec secondary-outputs §6): what it did once the item is copied (its outcome,
+     * its error, the files it wrote), else where it would write (the directories of its dry run) or why it cannot tell.
+     */
+    private static List<String> branchLines(ItemDetail.BranchDetail branch) {
+        String head = "   " + ResourcesEngine.getString("editor.secondary.quoted", branch.name()) + " → ";
+        List<String> lines = new ArrayList<>();
+        WorkItemExecution.BranchResult result = branch.result();
+        if (result != null) {
+            String message = result.message() == null || result.message().isEmpty() ? "" : " — " + result.message();
+            lines.add(head + ResourcesEngine.getString("plan.detail.branch." + result.outcome().name()) + message);
+            result.targets().forEach(target -> lines.add("      💾 " + target));
+            return lines;
+        }
+        switch (branch.projection()) {
+            case TargetProjection.Targets t when !branch.targets().isEmpty() -> {
+                lines.add(head + branch.targets().getFirst());
+                branch.targets().stream().skip(1).forEach(file -> lines.add("      " + file));
+            }
+            case TargetProjection.Targets t when !t.directories().isEmpty() -> {
+                lines.add(head + t.directories().getFirst());
+                t.directories().stream().skip(1).forEach(directory -> lines.add("      " + directory));
+            }
+            case TargetProjection.Targets t -> lines.add(head + ResourcesEngine.getString("plan.detail.branch.unknown"));
+            case TargetProjection.None n -> lines.add(head + ResourcesEngine.getString("plan.detail.branch.unknown"));
+            default -> lines.add(head + targetText(branch.projection()));
+        }
+        return lines;
+    }
+
+    /** The "Size" column: the item's size for the display, "?" when unknown. */
+    public static String sizeText(WorkItemExecution item) {
+        Long size = item.getWorkItem().getMetadatas().getSize();
+        return size == null ? "?" : displaySize(size, 2);
+    }
+
+    /**
+     * "Copy N files (X GB)": the files the copy will write. Those a full conflict check announces left out (identical,
+     * "ifIdentical": "skip") are not counted: "Copy N files (X GB), M already there left out".
+     */
+    public String copyLabel() {
+        Derived d = derived();
+        String size = displaySize(d.writtenBytes(), 1);
+        int leftOut = d.counts().selected() - d.written();
+        return leftOut == 0 ? ResourcesEngine.getString("plan.copy", d.written(), size)
+                : ResourcesEngine.getString("plan.copy.left-out", d.written(), size, leftOut);
+    }
+
+    /**
+     * "12 / 40 files, 1.2 GB / 3.5 GB"; while preparing, its step: "Listing the source… 120 files",
+     * "Analysing the files… 40 / 120", "Checking the targets… 90 / 120", "Computing the resume point…".
+     */
+    public String progressText() {
+        if (phase == Phase.PREPARING) {
+            return switch (prepareStage()) {
+                case LISTING -> ResourcesEngine.getString("plan.preparing", items.size());
+                case ANALYSING -> ResourcesEngine.getString("plan.analysing", preparedCount(), items.size());
+                case CHECKING -> ResourcesEngine.getString("plan.checking", derived().checks().done(),
+                        derived().checks().total());
+                case RESOLVING -> ResourcesEngine.getString("plan.resolving");
+            };
+        }
+        if (phase == Phase.ANALYSING) {
+            Checks checks = checksAfterAnalysingAgain();
+            return checks != null ? ResourcesEngine.getString("plan.checking", checks.done(), checks.total())
+                    : ResourcesEngine.getString("plan.analysing-again", analysedCount(), analysing.size());
+        }
+        Progress p = progress();
+        return ResourcesEngine.getString("plan.progress", p.doneFiles(), p.totalFiles(),
+                displaySize(p.doneBytes(), 1), displaySize(p.totalBytes(), 1));
+    }
+
+    /**
+     * The status line under the table: the run-end action running (the final status comes once they are over),
+     * preparation failure, end of the run; empty otherwise (the preparation is told by the bar).
+     */
+    public String statusLine() {
+        if (runEndStep != null) {
+            return ResourcesEngine.getString("plan.run-end", runEndStep);
+        }
+        return switch (phase) {
+            case PREPARE_FAILED -> ResourcesEngine.getString("plan.prepare-failed", errorText(failure));
+            // stopped while listing: files may be missing, its rows are not offered (spec manual-point §2)
+            case PREPARE_STOPPED -> listingComplete
+                    ? ResourcesEngine.getString("plan.prepare-stopped", items.size(), analysedOfListed())
+                    : ResourcesEngine.getString("plan.prepare-stopped.listing", items.size());
+            case FINISHED -> ResourcesEngine.getString("plan.finished", pipelineStatusText(status),
+                    copied(), counts().skipped(), counts().errors());
+            default -> "";
+        };
+    }
+
+    /**
+     * "Resume: after DSC_4821 (28/09 17:42) [cursor]"; before a prepared plan (spec manual-point §3), the point the
+     * next preparation will use: the chosen one, or "automatic". Empty during and after an execution without proposal.
+     */
+    public Optional<String> resumeText() {
+        if (phase == Phase.NOT_PREPARED || phase == Phase.PREPARING || phase == Phase.PREPARE_FAILED
+                || phase == Phase.PREPARE_STOPPED) {
+            return Optional.of(chosenPoint == null ? ResourcesEngine.getString("plan.resume.auto")
+                    : pointText(chosenPoint, ResumeSource.MANUAL));
+        }
+        if (proposal == null) {
+            return Optional.empty();
+        }
+        ResumePoint point = override != null ? override : proposal.point();
+        ResumeSource source = override != null ? ResumeSource.MANUAL : proposal.source();
+        return Optional.of(pointText(point, source));
+    }
+
+    private static String pointText(ResumePoint point, ResumeSource source) {
+        String sourceText = label("plan.resume.source." + source.name(), source.name());
+        ItemKey key = point.key();
+        if (point.kind() == ResumePoint.Kind.NOT_AT_DESTINATION) {
+            return ResourcesEngine.getString("plan.resume.missing", sourceText);
+        }
+        if (point.kind() == ResumePoint.Kind.ALL || key == null) {
+            return ResourcesEngine.getString("plan.resume.all", sourceText);
+        }
+        if (key.name().isEmpty()) {
+            return ResourcesEngine.getString("plan.resume.from-date",
+                    DAY.format(key.date().atZone(ZoneId.systemDefault())), sourceText);
+        }
+        String date = RESUME_DATE.format(key.date().atZone(ZoneId.systemDefault()));
+        String kind = point.kind() == ResumePoint.Kind.AFTER ? "plan.resume.after" : "plan.resume.from";
+        return ResourcesEngine.getString(kind, key.name(), date, sourceText);
+    }
+
+    /**
+     * The number of files the resume point in force skips, for the resume banner: "already imported" for a detected
+     * point, "before the chosen point" for a manual one; empty when it skips none.
+     */
+    public Optional<String> resumeCountText() {
+        if (resumeText().isEmpty()) {
+            return Optional.empty();
+        }
+        int count = derived().skippedByResumePoint();
+        if (count == 0) {
+            return Optional.empty();
+        }
+        // a manual point: an override, the proposal of a chosen point, or the chosen point of a preparation running
+        boolean manual = override != null || proposal != null && proposal.source() == ResumeSource.MANUAL
+                || proposal == null && chosenPoint != null;
+        String key = manual ? "plan.resume.count.before" : "plan.resume.count.imported";
+        return Optional.of(ResourcesEngine.getString(key, count));
+    }
+
+    /** Only the files to copy (or copied, or in error) show their target: a skipped file is not written. */
+    public static boolean showsTarget(WorkItemExecution item) {
+        return item.getStatus() != ItemStatus.SKIPPED;
+    }
+
+    /**
+     * The reason of a file the resume point skips: its status only says "Skipped" (the header tells why); for a file
+     * to copy whose target exists, what the copy will do with it (spec conflict-check §5).
+     */
+    public static Optional<String> statusTooltip(WorkItemExecution item) {
+        if (item.isSkippedByResumePoint()) {
+            return Optional.ofNullable(item.getSkipReason());
+        }
+        TargetCheck check = item.getTargetCheck();
+        return item.getStatus() == ItemStatus.PENDING && check != null && check.exists()
+                ? Optional.ofNullable(check.message()) : Optional.empty();
+    }
+
+    /** "To copy", "Waiting — resources", "Copying 42 %", "Copied", "Skipped — reason", "Error — message" (spec desktop-ui §2). */
+    public static String statusText(WorkItemExecution item) {
+        return switch (item.getStatus()) {
+            case PENDING -> {
+                if (!item.isPrepared()) {
+                    // listed, not analysed yet (preparing, or the preparation stopped): not known to be copied
+                    yield ResourcesEngine.getString("item.status.NOT_ANALYSED");
+                }
+                String pending = ResourcesEngine.getString("item.status.PENDING");
+                TargetCheck check = item.getTargetCheck();
+                yield check != null && check.exists()
+                        ? pending + " " + ResourcesEngine.getString("item.status.PENDING.exists." + check.kind().name())
+                        : pending;
+            }
+            case WAITING_RESOURCES -> ResourcesEngine.getString("item.status.WAITING_RESOURCES",
+                    String.join(", ", item.getWaitingFor()));
+            case RUNNING -> {
+                WorkStatus ws = item.getWorkStatus();
+                yield ws != null && ws.actionPercent() >= 0
+                        ? ResourcesEngine.getString("item.status.RUNNING.percent", String.valueOf(ws.actionPercent()))
+                        : ResourcesEngine.getString("item.status.RUNNING");
+            }
+            case DONE -> ResourcesEngine.getString("item.status.DONE");
+            case SKIPPED -> item.isSkippedByResumePoint() || item.getSkipReason() == null || item.getSkipReason().isBlank()
+                    ? ResourcesEngine.getString("item.status.SKIPPED.no-reason")
+                    : ResourcesEngine.getString("item.status.SKIPPED", item.getSkipReason());
+            case ERROR -> ResourcesEngine.getString("item.status.ERROR", errorText(item.getError()));
+        };
+    }
+
+    /** The message of a failure, its class simple name when it has none ("" without failure). */
+    static String errorText(Throwable failure) {
+        if (failure == null) {
+            return "";
+        }
+        String message = failure.getMessage();
+        return message == null || message.isBlank() ? failure.getClass().getSimpleName() : message;
+    }
+
+    /** The "Date" column: the resume key date, the capture or modification date before the preparation. */
+    public static String dateText(WorkItemExecution item) {
+        ItemKey key = dateKey(item);
+        return key == null ? "" : ITEM_DATE.format(key.date().atZone(ZoneId.systemDefault()));
+    }
+
+    /**
+     * A "Date" cell: its text, whether a clock is drawn before it (the zone of the row was corrected) and its tooltip
+     * (null when not corrected).
+     */
+    public record DateCell(String text, boolean corrected, boolean suggested, String tooltip) {
+    }
+
+    /**
+     * The "Date" cell of this row: the file date as {@link #dateText}; for a row whose zone was corrected, the corrected
+     * shot date in that zone with a clock, and a tooltip telling the zone and the file date. The sort stays on the
+     * file date ({@link #DATE_ORDER}).
+     */
+    public static DateCell dateCell(WorkItemExecution item) {
+        WorkItemMetadata metadata = item.getWorkItem().getMetadatas();
+        Optional<ZoneId> zone = metadata.getZone(WorkItemMetadata.CAPTURE_ZONE);
+        Optional<Instant> shot = metadata.getTime(WorkItemMetadata.CAPTURE_DATE);
+        String fileDate = dateText(item);
+        boolean corrected = zone.isPresent() && shot.isPresent();
+        Optional<String> suggestion = suggestionText(item);
+        List<String> lines = new ArrayList<>();
+        if (corrected) {
+            lines.add(ResourcesEngine.getString("plan.date.corrected", zone.get().getId(), fileDate));
+        }
+        suggestion.ifPresent(lines::add);
+        return new DateCell(corrected ? ITEM_DATE.format(shot.get().atZone(zone.get())) : fileDate, corrected,
+                suggestion.isPresent(), lines.isEmpty() ? null : String.join("\n", lines));
+    }
+
+    /** What the "Date" column shows, null without date. */
+    private static ItemKey dateKey(WorkItemExecution item) {
+        return item.getResumeKey().or(() -> ItemKey.of(item.getWorkItem())).orElse(null);
+    }
+
+    /** The label of a terminal pipeline status ("Success", "Failed", "Stopped"); the raw name for another one. */
+    public static String pipelineStatusText(PipelineStatus status) {
+        if (status == null) {
+            return "";
+        }
+        return label("pipeline.status." + status.name(), status.name());
+    }
+
+    /** "28/09/2026 17:42 — Success: 120 copied, 3 skipped, 1 error(s)", or "Never run". */
+    public static String lastRunText(LastRun run) {
+        if (run == null) {
+            return ResourcesEngine.getString("recent.never-run");
+        }
+        return ResourcesEngine.getString("recent.last-run", ITEM_DATE.format(run.at().atZone(ZoneId.systemDefault())),
+                pipelineStatusText(run.status()), run.copied(), run.skipped(), run.errors());
+    }
+
+    /** The look of a badge of the last run. */
+    public enum BadgeKind { SUCCESS, ERROR, NEUTRAL }
+
+    /** A small label of the last run line: its text and its look. */
+    public record Badge(String text, BadgeKind kind) {
+    }
+
+    /** The date of a last run, "dd/MM/yyyy HH:mm". */
+    public static String lastRunDate(LastRun run) {
+        return ITEM_DATE.format(run.at().atZone(ZoneId.systemDefault()));
+    }
+
+    /**
+     * The badges of the last run line: the status, then the copied, skipped and error counts (the error
+     * badge is red only when there is an error); none when the pipeline never ran.
+     */
+    public static List<Badge> lastRunBadges(LastRun run) {
+        if (run == null) {
+            return List.of();
+        }
+        String status = pipelineStatusText(run.status());
+        Badge statusBadge = switch (run.status()) {
+            case SUCCESS -> new Badge("✓ " + status, BadgeKind.SUCCESS);
+            case ERROR -> new Badge("✗ " + status, BadgeKind.ERROR);
+            default -> new Badge(status, BadgeKind.NEUTRAL);
+        };
+        return List.of(statusBadge,
+                new Badge(ResourcesEngine.getString("plan.badge.copied", run.copied()), BadgeKind.NEUTRAL),
+                new Badge(ResourcesEngine.getString("plan.badge.skipped", run.skipped()), BadgeKind.NEUTRAL),
+                new Badge(ResourcesEngine.getString(run.errors() > 1 ? "plan.badge.errors" : "plan.badge.error", run.errors()),
+                        run.errors() > 0 ? BadgeKind.ERROR : BadgeKind.NEUTRAL));
+    }
+
+    /** The resume mode of the header: "no resume", "cursor, then destination"...; the raw mode when unknown. */
+    public static String resumeModeText(String mode) {
+        // no resume block and mode "none" behave the same: one label
+        return mode == null ? label("plan.resume-mode.none", "none") : label("plan.resume-mode." + mode, mode);
+    }
+
+    /** The translation of a key built from a value, or that raw value when the bundle has no such key. */
+    private static String label(String key, String raw) {
+        String text = ResourcesEngine.getString(key);
+        return text.startsWith("%") ? raw : text; // "%key": no such key
+    }
+}

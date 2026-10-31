@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.archive",
+  "code": "archive",
+  "description": {
+    "en": "At the end of a run, zips the files it wrote with a SHA256SUMS manifest, or writes the manifest alone.",
+    "fr": "\u00c0 la fin d'un run, archive en ZIP les fichiers \u00e9crits avec un manifeste SHA256SUMS, ou \u00e9crit le seul manifeste.",
+    "it": "Alla fine di un run, archivia in ZIP i file scritti con un manifesto SHA256SUMS, oppure scrive il solo manifesto."
+  },
+  "changes": {
+    "en": "First version.",
+    "fr": "Premi\u00e8re version.",
+    "it": "Prima versione."
+  }
+}

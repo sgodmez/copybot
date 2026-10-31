@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-plugin</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>copybot-plugin-gps-zone</artifactId>
+    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
+    <version>1.0.2</version>
+
+    <properties>
+        <!-- IPlugin.getPluginCode(): the folder of the release archive -->
+        <plugin.code>gps-zone</plugin.code>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <!-- offline time zone boundaries; data of Timezone Boundary Builder, ODbL (see NOTICE) -->
+            <groupId>net.iakovlev</groupId>
+            <artifactId>timeshape</artifactId>
+            <version>2026b.29</version>
+            <exclusions>
+                <!-- declared by timeshape but used by none of its classes: 600 KB less in the plugin archive -->
+                <exclusion>
+                    <groupId>com.fasterxml.jackson.core</groupId>
+                    <artifactId>jackson-core</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <dependency>
+            <!--
+                timeshape logs through slf4j 1.7: this binding of the same version sends it to java.util.logging,
+                hence to the application's logs (without one, slf4j warns on the console and drops everything).
+                Inside the plugin only: the application does not provide slf4j to the plugins.
+            -->
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-jdk14</artifactId>
+            <version>1.7.30</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- GpsZonePluginIT: the packaged plugin (target/classes and target/lib) loaded by the engine -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.gpszone</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!-- the paths of the engine module and its own modules, for the module path of GpsZonePluginIT -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>module-paths</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                    As in the application, only the engine is a module of the boot layer: the plugin, its libraries
+                    and the test are on the class path (unnamed), so that the engine loads them from target/ in a
+                    layer of their own (an automatic module of the layer reads every module, a copy of the plugin
+                    in the boot layer would clash).
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                    <argLine>--module-path ${com.copybot:copybot-engine:jar}${path.separator}${com.google.code.gson:gson:jar}${path.separator}${info.picocli:picocli:jar} --add-modules com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=ALL-UNNAMED --enable-native-access=com.copybot.engine</argLine>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                    target/copybot-plugin-gps-zone-<version>.zip, configured in copybot-plugin/pom.xml. Last: at the
+                    package phase it must run after the copy of the libraries (plugins run in the order declared).
+                -->
+                <artifactId>maven-assembly-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

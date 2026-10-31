@@ -1,0 +1,397 @@
+package com.copybot.engine;
+
+import com.copybot.engine.pipeline.ItemStatus;
+import com.copybot.engine.pipeline.PipelineChecks;
+import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStep;
+import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.resume.ItemKey;
+import com.copybot.engine.resume.ResumePoint;
+import com.copybot.engine.resume.ResumeProposal;
+import com.copybot.exception.CopybotException;
+import com.copybot.logger.CopybotLogger;
+import com.copybot.plugin.api.action.IOutAction;
+import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.resources.ResourcesEngine;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+
+/** A prepared pipeline: what would be imported, and from where, before anything is written. */
+public final class Plan {
+
+    private static final CopybotLogger LOG = CopybotLogger.getLogger(Plan.class);
+
+    /**
+     * What the plan holds for the current item statuses (spec desktop-ui §5): right after the
+     * preparation or a {@link #preview}, the selected items are the PENDING ones.
+     *
+     * @param selected      items to copy, being copied or copied (PENDING, WAITING_RESOURCES, RUNNING, DONE)
+     * @param skipped       SKIPPED items
+     * @param errors        ERROR items
+     * @param selectedBytes total size of the selected items (an item without size counts 0)
+     */
+    public record Counts(int selected, int skipped, int errors, long selectedBytes) {
+
+        public static Counts of(Collection<WorkItemExecution> items) {
+            int selected = 0;
+            int skipped = 0;
+            int errors = 0;
+            long bytes = 0;
+            for (WorkItemExecution item : items) {
+                switch (item.getStatus()) {
+                    case SKIPPED -> skipped++;
+                    case ERROR -> errors++;
+                    default -> {
+                        selected++;
+                        Long size = item.getWorkItem().getMetadatas().getSize();
+                        bytes += size == null ? 0 : size;
+                    }
+                }
+            }
+            return new Counts(selected, skipped, errors, bytes);
+        }
+
+        /** True for the statuses counted as selected. */
+        public static boolean isSelected(ItemStatus status) {
+            return status != ItemStatus.SKIPPED && status != ItemStatus.ERROR;
+        }
+    }
+
+    private final MainExecutor executor;
+    /** The engine that prepared it, null for a plan built by a test around an executor. */
+    private final CopybotEngine engine;
+
+    // visible for tests: a plan outside any engine
+    Plan(MainExecutor executor) {
+        this(executor, null);
+    }
+
+    Plan(MainExecutor executor, CopybotEngine engine) {
+        this.executor = executor;
+        this.engine = engine;
+    }
+
+    /**
+     * Abandons this plan (the view forgets it: pipeline read again, view closed): what it holds is released (the work
+     * folder of its archives, spec grouping/archives), at once or, while it is being prepared or analysed, when that
+     * operation ends; it can no longer be executed nor analysed ({@link CopybotEngine#execute} refuses it, as it
+     * refuses a plan replaced by a more recent preparation). Idempotent; no effect on a plan already executed or being
+     * executed (its execution releases what it holds). Non-blocking but for the removal of the work folder; callable
+     * from any thread.
+     */
+    public void discard() {
+        if (engine != null) {
+            engine.discard(executor);
+        } else {
+            executor.archives().release();
+        }
+    }
+
+    MainExecutor getExecutor() {
+        return executor;
+    }
+
+    public PipelineState getState() {
+        return executor.getState();
+    }
+
+    /** Why this plan cannot be executed (no input, or neither output nor process step), empty when it can. */
+    public Optional<String> executionRefusal() {
+        PipelineConfig config = executor.pipelineConfig();
+        return config == null ? Optional.empty() : PipelineChecks.executionRefusal(config);
+    }
+
+    /** False when the pipeline does nothing with the files: it can be inspected but not executed. */
+    public boolean canExecute() {
+        return executionRefusal().isEmpty();
+    }
+
+    public ResumeProposal getProposal() {
+        return executor.getProposal();
+    }
+
+    /** Listed items in resume order (items without date last). */
+    public List<WorkItemExecution> getOrderedItems() {
+        return executor.getOrderedItems();
+    }
+
+    /** The counters of the listed items, for their current statuses. */
+    public Counts counts() {
+        return Counts.of(getOrderedItems());
+    }
+
+    /**
+     * Where the out step would write what this item becomes after the dry run of the process steps
+     * ({@link IOutAction#resolveTarget}), without writing anything (spec pattern-helper §4.3). Callable while
+     * the plan is being prepared (any thread): the items analysed so far have their target, the others none.
+     */
+    public TargetProjection projectionOf(WorkItemExecution item) {
+        PipelineStep<IOutAction> out = executor.findOutStep();
+        if (out == null) {
+            return TargetProjection.NONE;
+        }
+        Projection projection = item.getProjection();
+        if (projection == null && (executor.isPreparing() || item.isAnalysisDeferred())) { // not analysed (yet)
+            return TargetProjection.NONE;
+        }
+        if (projection == null) { // not prepared (error before the barrier): the item as it is
+            projection = new Projection.Projected(List.of(item.getWorkItem()));
+        }
+        return outcome(out, projection, new ArrayList<>());
+    }
+
+    /**
+     * The planned processing of this item (desktop UI): the trace of the dry run of the process steps, then
+     * where the out step would write each produced item. Empty while the item is not analysed yet, or when it
+     * failed before its dry run. Callable from any thread, like {@link #projectionOf}.
+     */
+    public Optional<ItemDetail> detailOf(WorkItemExecution item) {
+        Projection projection = item.getProjection();
+        if (projection == null) {
+            return Optional.empty();
+        }
+        PipelineStep<IOutAction> out = executor.findOutStep();
+        List<Path> files = new ArrayList<>();
+        TargetProjection outcome = out == null && projection instanceof Projection.Projected
+                ? TargetProjection.NONE : outcome(out, projection, files);
+        return Optional.of(new ItemDetail(projection.trace(), outcome,
+                outcome instanceof TargetProjection.Targets ? files : List.of(), branchDetails(item)));
+    }
+
+    /**
+     * The secondary outputs of an item: its real result once it has one, else the target projected by the dry run of
+     * the branch processes on a copy like the one the branch gets (no companion, source kept, no own out pattern).
+     */
+    private List<ItemDetail.BranchDetail> branchDetails(WorkItemExecution item) {
+        List<ItemDetail.BranchDetail> details = new ArrayList<>();
+        for (StepResolver.Branch branch : executor.secondaryBranches()) {
+            WorkItemExecution.BranchResult result = item.getBranchResults().stream()
+                    .filter(r -> r.name().equals(branch.name())).findFirst().orElse(null);
+            TargetProjection projection = TargetProjection.NONE;
+            List<Path> files = new ArrayList<>();
+            if (result == null) {
+                WorkItem copy = item.getWorkItem().copyForDryRun().withoutCompanions().withSourceKept();
+                copy.setOutPattern(null);
+                projection = outcome(branch.out(), DryRunner.project(copy, branch.steps()), files);
+            }
+            details.add(new ItemDetail.BranchDetail(branch.name(), projection,
+                    projection instanceof TargetProjection.Targets ? files : List.of(), result));
+        }
+        return details;
+    }
+
+    /** How the dry run ended; out is only used (non null then) when it projected items, whose files go to files. */
+    private static TargetProjection outcome(PipelineStep<IOutAction> out, Projection projection, List<Path> files) {
+        return switch (projection) {
+            case Projection.Filtered f -> new TargetProjection.Filtered(f.action());
+            case Projection.Unsupported u -> new TargetProjection.Unknown(u.action());
+            case Projection.Failed f -> new TargetProjection.Failed(ResourcesEngine.getString("dryrun.failed", f.action(), f.message()));
+            case Projection.Projected p -> targets(out, p.items(), files);
+        };
+    }
+
+    /** A failure of the out step is shown and logged without its secret values. */
+    private static TargetProjection targets(PipelineStep<IOutAction> out, List<WorkItem> items, List<Path> files) {
+        List<Path> directories = new ArrayList<>();
+        for (WorkItem produced : items) {
+            try {
+                Optional<Path> target = out.getAction().resolveTarget(produced);
+                if (target.isEmpty()) {
+                    return TargetProjection.NONE;
+                }
+                // absolute, like the resume probe: a pattern without directory part writes to the current one
+                Path file = target.get().toAbsolutePath().normalize();
+                files.add(file);
+                directories.add(file.getParent());
+            } catch (RuntimeException e) {
+                // e.g. a pattern variable this item has no value for
+                RuntimeException hidden = out.getRedactor().redact(e);
+                LOG.debug(hidden, "plan.target.failed", produced.getNameDisplay(), String.valueOf(hidden));
+                return new TargetProjection.Failed(hidden.getMessage() != null ? hidden.getMessage()
+                        : hidden.getClass().getName());
+            } catch (Error e) {
+                throw Redaction.rethrow(out.getRedactor(), e); // hidden as well, the JVM failing as it is
+            }
+        }
+        return new TargetProjection.Targets(directories);
+    }
+
+    /** Re-applies a manual resume point to the item statuses, without executing anything (dry-run display). */
+    public void preview(ResumePoint override) {
+        executor.applyOverride(override);
+    }
+
+    /**
+     * The items to copy whose analysis was deferred at the listing (before the state cursor), selected again by a
+     * manual resume point, and the skipped ones asked for ({@link #requestAnalysis}): {@link CopybotEngine#analyse}
+     * analyses them so that they get their target. Empty in every other case (spec deferred-analysis §1).
+     */
+    public List<WorkItemExecution> toAnalyse() {
+        return executor.toAnalyse();
+    }
+
+    /**
+     * Asks the next {@link CopybotEngine#analyse} to also analyse these skipped files (analysis deferred at the
+     * listing), so that their planned processing is known: they stay skipped, for the same reason. The files already
+     * analysed are left out; then {@link #toAnalyse()} includes them. On a preparation stopped after its listing
+     * ({@link #isStoppedAfterTheListing()}), the files the stop left unanalysed too: the analysis leaves the plan stopped.
+     */
+    public void requestAnalysis(Collection<WorkItemExecution> items) {
+        executor.requestAnalysis(items);
+    }
+
+    /**
+     * Stops the preparation of this plan while {@link CopybotEngine#prepare} runs: it ends CANCELLED, what was
+     * listed and analysed so far kept in its state, and the engine is free once prepare() has returned. No effect
+     * once the plan is prepared (a late request must not cancel its execution). Non-blocking, callable from any thread.
+     */
+    public void cancelPreparation() {
+        executor.cancelPreparation();
+    }
+
+    /**
+     * Stops a running {@link CopybotEngine#analyse}:the plan stays PREPARED, the items not analysed yet are
+     * analysed by the execution. No effect when no analysis runs. Callable from any thread.
+     */
+    public void cancelAnalysis() {
+        executor.cancelAnalysis();
+    }
+
+    /**
+     * Leaves these items out of the run, whatever the resume point (SKIPPED, "ignored by the user"); a failed
+     * item stays as it is. An ignored item counts as passed for the resume cursor: it is not proposed again.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     */
+    public void ignore(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setIgnored(items, true, override);
+    }
+
+    /**
+     * Brings ignored items back: the resume point in force decides again whether they are copied.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     */
+    public void unignore(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setIgnored(items, false, override);
+    }
+
+    /**
+     * The out pattern of the files without own pattern (the out step's), empty when the out step supports no own
+     * pattern or there is no out step (spec own-out-pattern §2).
+     */
+    public Optional<String> defaultOutPattern() {
+        return executor.defaultOutPattern();
+    }
+
+    /**
+     * Gives these files their own out pattern; null, blank or {@link #defaultOutPattern()} removes it. A pattern is
+     * given to the analysed files only (with a projection), removed from all of them; the target of the analysed ones
+     * is checked again (conflictCheck) and the patterns are kept in the state file of the pipeline (spec
+     * own-out-pattern §2). Blocking: never on the JavaFX thread.
+     *
+     * @throws IllegalStateException the plan is neither PREPARED nor {@link #isStoppedAfterTheListing()}, or
+     *                               {@link #defaultOutPattern()} is empty
+     * @throws CopybotException      pattern.syntax (an invalid pattern) or resume.state.write-error: nothing changed
+     */
+    public void setOutPattern(Collection<WorkItemExecution> items, String pattern) {
+        executor.setOutPattern(items, pattern);
+    }
+
+    /** True when this file has its own out pattern. */
+    public static boolean hasOwnPattern(WorkItemExecution item) {
+        return item.getWorkItem().getOutPattern().isPresent();
+    }
+
+    /**
+     * Corrects the time zone of these analysed files (spec timezone-correction §3): where they were shot, and what
+     * the camera clock was set to when it was not the local time there. They are to analyse again
+     * ({@link #toAnalyse()}): {@link CopybotEngine#analyse} gives them their new capture date and target, keeps their
+     * status (skipped for the same reason, ignored still ignored), and with the resume point "not at the destination"
+     * checks their new target at the destination. The files not analysed yet are left out. The last correction of a
+     * file replaces the previous one. Kept in the state file beside the own out patterns, with the same key: the next
+     * listing, whatever the resume mode, gives the files their zone again before their analysis.
+     *
+     * @param place the zone of the place where the files were shot
+     * @param clock the zone the camera clock was set to, null for the one of the place
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     * @throws CopybotException      resume.state.write-error: nothing changed
+     */
+    public void correctZone(Collection<WorkItemExecution> items, ZoneId place, ZoneId clock, ResumePoint override) {
+        executor.setCaptureZone(items, Objects.requireNonNull(place, "place"), clock, override);
+    }
+
+    /**
+     * Cancels the time zone correction of these files ({@link #correctZone}), also in the state file: the analysed
+     * ones are analysed again as they were listed; the ones not analysed (a correction restored at the listing,
+     * before the resume point) just lose it.
+     *
+     * @param override the manual resume point in force, null for the proposed one
+     * @throws IllegalStateException the plan is not PREPARED
+     * @throws CopybotException      resume.state.write-error: nothing changed
+     */
+    public void clearZone(Collection<WorkItemExecution> items, ResumePoint override) {
+        executor.setCaptureZone(items, null, null, override);
+    }
+
+    /**
+     * Resume from this listed file (its name when it was listed), included.
+     *
+     * @throws CopybotException resume.from-file.not-found, or resume.from-file.no-date for a listed file
+     *                          without any date (it has no place in the resume order)
+     */
+    public ResumePoint fromFile(String fileName) {
+        return getOrderedItems().stream()
+                .map(WorkItemExecution::getResumeKey)
+                .flatMap(Optional::stream)
+                .filter(key -> fileName.equals(key.name()))
+                .findFirst()
+                .map(ResumePoint::from)
+                .orElseThrow(() -> getOrderedItems().stream()
+                        .anyMatch(item -> item.getResumeKey().isEmpty()
+                                && fileName.equals(item.getWorkItem().getNameDisplay()))
+                        ? CopybotException.ofResource("resume.from-file.no-date", fileName)
+                        : CopybotException.ofResource("resume.from-file.not-found", fileName));
+    }
+
+    /**
+     * Resume from a file chosen on disk, included: the key the listing gives it (its modification date to the
+     * second, its name), so that a point can be chosen before any listing (spec manual-point §3).
+     *
+     * @throws java.io.UncheckedIOException the file cannot be read
+     */
+    public static ResumePoint fromFile(Path file) {
+        try {
+            return ResumePoint.from(new ItemKey(Files.getLastModifiedTime(file).toInstant(), file.getFileName().toString()));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /**
+     * A stopped preparation whose listing is complete (spec manual-point §2): a resume point can be chosen from its rows,
+     * {@link #requestAnalysis} and {@link CopybotEngine#analyse} analyse some of its files; Prepare starts again. False for a preparation stopped while listing: files not listed yet would be left out.
+     */
+    public boolean isStoppedAfterTheListing() {
+        return executor.isStoppedAfterTheListing();
+    }
+
+    /** Resume from the start of this day (system time zone), included. */
+    public static ResumePoint fromDate(LocalDate date) {
+        return ResumePoint.from(new ItemKey(date.atStartOfDay(ZoneId.systemDefault()).toInstant(), ""));
+    }
+}

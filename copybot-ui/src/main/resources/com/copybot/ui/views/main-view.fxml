@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.scene.control.Button?>
+<?import javafx.scene.control.Label?>
+<?import javafx.scene.control.Menu?>
+<?import javafx.scene.control.MenuBar?>
+<?import javafx.scene.control.MenuItem?>
+<?import javafx.scene.control.Tooltip?>
+<?import javafx.scene.layout.BorderPane?>
+<?import javafx.scene.layout.HBox?>
+<?import javafx.scene.layout.Region?>
+<?import javafx.scene.layout.VBox?>
+
+<BorderPane fx:id="root" prefHeight="768.0" prefWidth="1024.0" xmlns="http://javafx.com/javafx/null" xmlns:fx="http://javafx.com/fxml/1" fx:controller="com.copybot.ui.MainController">
+   <top>
+      <VBox>
+         <children>
+            <MenuBar>
+               <menus>
+                  <Menu mnemonicParsing="false" text="%menu.file">
+                     <items>
+                        <MenuItem mnemonicParsing="false" onAction="#onOpenPipelineClick" text="%home.open" />
+                        <MenuItem mnemonicParsing="false" onAction="#onExitClick" text="%menu.file.exit" />
+                     </items>
+                  </Menu>
+                  <Menu mnemonicParsing="false" text="%menu.edit">
+                     <items>
+                        <MenuItem fx:id="preferencesItem" mnemonicParsing="false" onAction="#onPreferencesClick" text="%menu.edit.preferences" />
+                        <MenuItem mnemonicParsing="false" onAction="#onPluginsClick" text="%menu.tools.plugins" />
+                        <MenuItem mnemonicParsing="false" onAction="#onResourcesClick" text="%menu.tools.resources" />
+                        <MenuItem mnemonicParsing="false" onAction="#onSecretsClick" text="%menu.edit.secrets" />
+                        <MenuItem mnemonicParsing="false" onAction="#onUpdatesClick" text="%menu.edit.updates" />
+                     </items>
+                  </Menu>
+                  <Menu mnemonicParsing="false" text="%menu.help">
+                     <items>
+                        <MenuItem mnemonicParsing="false" onAction="#onAboutClick" text="%menu.help.about" />
+                     </items>
+                  </Menu>
+               </menus>
+            </MenuBar>
+            <!-- a newer release, plugin updates: shown by MainController.refreshUpdateBanner -->
+            <HBox fx:id="updateBanner" alignment="CENTER_LEFT" managed="false" spacing="10.0" style="-fx-background-color: #e3f2fd; -fx-padding: 4 8 4 8;" visible="false">
+               <children>
+                  <Label fx:id="updateLabel" style="-fx-text-fill: #0d47a1;" />
+                  <Button fx:id="updateViewButton" mnemonicParsing="false" onAction="#onUpdatesClick" text="%update.view" />
+                  <Region HBox.hgrow="ALWAYS" />
+                  <Button mnemonicParsing="false" onAction="#onUpdateDismissClick" text="&#x2715;">
+                     <tooltip>
+                        <Tooltip text="%update.dismiss" />
+                     </tooltip>
+                  </Button>
+               </children>
+            </HBox>
+         </children>
+      </VBox>
+   </top>
+</BorderPane>

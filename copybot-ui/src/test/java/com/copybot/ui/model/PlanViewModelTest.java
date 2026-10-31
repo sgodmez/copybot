@@ -1,0 +1,2052 @@
+package com.copybot.ui.model;
+
+import com.copybot.engine.ItemDetail;
+import com.copybot.engine.Plan;
+import com.copybot.engine.Projection;
+import com.copybot.engine.TargetProjection;
+import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.PipelineState;
+import com.copybot.engine.pipeline.PipelineStatus;
+import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.resume.ItemKey;
+import com.copybot.engine.resume.ResumePoint;
+import com.copybot.engine.resume.ResumeProposal;
+import com.copybot.engine.resume.ResumeSource;
+import com.copybot.plugin.api.action.Companion;
+import com.copybot.plugin.api.action.CompanionLink;
+import com.copybot.plugin.api.action.CompanionRole;
+import com.copybot.plugin.api.action.TargetCheck;
+import com.copybot.plugin.api.action.TargetCheck.Kind;
+import com.copybot.plugin.api.action.WorkItem;
+import com.copybot.plugin.api.action.WorkItemMetadata;
+import com.copybot.plugin.api.action.WorkStatus;
+import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.model.PlanViewModel.Filter;
+import com.copybot.ui.model.PlanViewModel.Phase;
+import com.copybot.ui.model.PlanViewModel.PrepareStage;
+import com.copybot.ui.model.PlanViewModel.Progress;
+import com.copybot.ui.model.RecentPipelines.LastRun;
+import com.copybot.utils.FileUtil;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.IOException;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+/** The plan view without JavaFX (spec desktop-ui §2, §7). */
+public class PlanViewModelTest {
+
+    @TempDir
+    Path tempDir;
+
+    private static final Instant SHOT = Instant.parse("2026-09-28T15:42:00Z");
+
+    @BeforeAll
+    public static void registerUiBundle() {
+        ResourcesEngine.registerBundle("com.copybot.ui.i18n.uiBundle");
+    }
+
+    private WorkItemExecution item(String name, long size) throws IOException {
+        WorkItem wi = new WorkItem(tempDir.resolve(name));
+        wi.getMetadatas().setSize(size);
+        wi.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, SHOT);
+        return new WorkItemExecution(wi, List.of());
+    }
+
+    private static PipelineState state(PipelineStatus status, WorkItemExecution... items) {
+        PipelineState state = new PipelineState();
+        state.setStatus(status);
+        state.getWorkItems().addAll(List.of(items));
+        return state;
+    }
+
+    private static ResumeProposal proposal(ResumePoint point, ResumeSource source, String... warnings) {
+        return new ResumeProposal(point, source, List.of(warnings));
+    }
+
+    /** A model whose "automatic execution" box is checked or not. */
+    private static PlanViewModel model(boolean autoExecute) {
+        PlanViewModel model = new PlanViewModel();
+        model.setAutoExecute(autoExecute);
+        return model;
+    }
+
+    /** A model with a prepared plan of these items (resume: everything). */
+    private static PlanViewModel prepared(boolean autoExecute, WorkItemExecution... items) {
+        PlanViewModel model = model(autoExecute);
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, items);
+        state.setResumeProposal(proposal(ResumePoint.all(), ResumeSource.NONE));
+        model.update(state, List.of(items));
+        return model;
+    }
+
+    private static void assertTranslated(String text) {
+        assertFalse(text.isEmpty());
+        assertFalse(text.startsWith("%"), text);
+    }
+
+    // ---- phases and buttons ----
+
+    @Test
+    public void nothingIsPreparedAtOpening() {
+        PlanViewModel model = new PlanViewModel();
+
+        assertEquals(Phase.NOT_PREPARED, model.phase());
+        assertTrue(model.canPrepare());
+        assertTrue(model.canGoBack());
+        assertFalse(model.canCopy());
+        assertFalse(model.canStop());
+        assertEquals(List.of(), model.items());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText(),
+                "the resume point can be chosen before preparing (spec manual-point §3)");
+        assertTrue(model.canChooseResumePoint());
+        assertFalse(model.canChangeResumePoint(), "nothing prepared to change");
+    }
+
+    @Test
+    public void thePreparationListsTheRowsAndLocksTheView() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution a = item("a.jpg", 1);
+
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, a), List.of());
+
+        assertEquals(Phase.PREPARING, model.phase());
+        assertEquals(List.of(a), model.items(), "the table fills during the listing");
+        assertFalse(model.canGoBack());
+        assertFalse(model.canPrepare());
+        assertTrue(model.canStop(), "a preparation can be stopped");
+        assertTrue(model.isActive());
+        assertTrue(model.progressText().contains("1"), model.progressText());
+        assertEquals("", model.statusLine(), "the preparation is told next to its bar");
+    }
+
+    @Test
+    public void whileListingTheRowsAreInDateOrderNotInListingOrder() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution video2026 = new WorkItemExecution(new WorkItem(tempDir.resolve("C0001.MP4")), List.of());
+        video2026.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2026-08-07T10:00:00Z"));
+        WorkItemExecution photo2023 = new WorkItemExecution(new WorkItem(tempDir.resolve("DSC00001.JPG")), List.of());
+        photo2023.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2023-12-24T10:00:00Z"));
+        WorkItemExecution undated = new WorkItemExecution(new WorkItem(tempDir.resolve("x.jpg")), List.of());
+
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, undated, video2026, photo2023), List.of()); // the card's order
+
+        assertEquals(List.of(photo2023, video2026, undated), model.items(), "by date as soon as listed, the undated last");
+    }
+
+    @Test
+    public void thePreparationBarListsThenAnalysesThenResolves() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        model.startPreparing();
+        assertEquals(PrepareStage.LISTING, model.prepareStage(), "listing until the engine says otherwise");
+
+        PipelineState state = state(PipelineStatus.RUNNING, a, b);
+        state.setListingInProgress(true);
+        model.update(state, List.of());
+        assertEquals(PrepareStage.LISTING, model.prepareStage());
+        assertEquals(PlanViewModel.INDETERMINATE, model.prepareFraction(), "the total is unknown while listing");
+        assertTrue(model.progressText().contains("2"), model.progressText());
+
+        state.setListingInProgress(false);
+        a.markPrepared();
+        model.update(state, List.of());
+        assertEquals(PrepareStage.ANALYSING, model.prepareStage());
+        assertEquals(0.5, model.prepareFraction());
+        assertTrue(model.progressText().contains("1 / 2"), model.progressText());
+
+        b.markPrepared();
+        model.update(state, List.of());
+        assertEquals(PrepareStage.RESOLVING, model.prepareStage(), "every file analysed: the resume point remains");
+        assertEquals(PlanViewModel.INDETERMINATE, model.prepareFraction());
+        assertTranslated(model.progressText());
+    }
+
+    @Test
+    public void everyFileAnalysedThePreparationTellsTheTargetChecksStillQueued() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        WorkItemExecution c = item("c.jpg", 1);
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.RUNNING, a, b, c);
+        a.markPrepared();
+        a.setTargetCheck(TargetCheck.free());
+        b.markPrepared();
+        b.setTargetCheckPending(true); // waiting for the destination disk
+        c.markPrepared(); // before the resume point: never checked
+        model.update(state, List.of());
+
+        assertEquals(PrepareStage.CHECKING, model.prepareStage(), "the analyses are over, not the checks");
+        assertEquals(0.5, model.prepareFraction());
+        assertEquals(ResourcesEngine.getString("plan.checking", 1, 2), model.progressText());
+        assertTranslated(model.progressText());
+
+        b.setTargetCheck(TargetCheck.free());
+        b.setTargetCheckPending(false);
+        model.update(state, List.of());
+        assertEquals(PrepareStage.RESOLVING, model.prepareStage());
+    }
+
+    @Test
+    public void theFilesSelectedAgainAnalysedTheViewTellsTheirChecksStillQueued() throws IOException {
+        WorkItemExecution old1 = deferredSelected("old1.jpg");
+        WorkItemExecution old2 = deferredSelected("old2.jpg");
+        PlanViewModel model = prepared(true, old1, old2);
+        model.setOverride(ResumePoint.all());
+        model.startAnalysing(List.of(old1, old2));
+
+        old1.markPrepared();
+        old1.setTargetCheck(TargetCheck.free());
+        old2.markPrepared();
+        old2.setTargetCheckPending(true);
+        model.update(state(PipelineStatus.RUNNING, old1, old2), List.of(old1, old2));
+
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.checking", 1, 2), model.progressText());
+        assertEquals(0.5, model.prepareFraction());
+    }
+
+    @Test
+    public void aPreparedPlanCanBeCopiedOrPreparedAgain() throws IOException {
+        PlanViewModel model = prepared(false, item("a.jpg", 1));
+
+        assertEquals(Phase.PREPARED, model.phase());
+        assertTrue(model.canCopy());
+        assertTrue(model.canPrepare());
+        assertTrue(model.canGoBack());
+        assertTrue(model.canChangeResumePoint());
+        assertFalse(model.isActive());
+    }
+
+    @Test
+    public void aFailedPreparation() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState failed = state(PipelineStatus.ERROR);
+        failed.setFailure(new IllegalStateException("card removed"));
+
+        model.update(failed, List.of());
+
+        assertEquals(Phase.PREPARE_FAILED, model.phase());
+        assertTrue(model.statusLine().contains("card removed"), model.statusLine());
+        assertTrue(model.canPrepare());
+        assertFalse(model.canCopy());
+    }
+
+    @Test
+    public void aStoppedPreparationKeepsWhatWasListedAndAnalysedButCannotBeCopied() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setAutoExecute(true);
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        WorkItemExecution listed = item("b.jpg", 1);
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, analysed, listed), List.of());
+
+        model.update(state(PipelineStatus.CANCELLED, analysed, listed), List.of());
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertEquals(List.of(analysed, listed), model.items(), "the partial plan stays in view");
+        assertFalse(model.isActive());
+        assertTrue(model.canPrepare(), "prepared again to be copied");
+        assertTrue(model.canGoBack());
+        assertFalse(model.canCopy());
+        assertFalse(model.canStop());
+        assertFalse(model.canChangeResumePoint());
+        assertFalse(model.consumeAutoExecute(), "a stopped preparation never starts the copy");
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText());
+        assertFalse(model.isStoppedAfterTheListing(), "stopped while listing (the state says the listing is not complete)");
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped.listing", 2), model.statusLine());
+    }
+
+    @Test
+    public void aPreparationStoppedBeforeListingAnythingKeepsTheViewEmpty() {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+
+        model.update(state(PipelineStatus.CANCELLED), List.of());
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertTrue(model.items().isEmpty());
+        assertTrue(model.canPrepare());
+    }
+
+    /** An item the preparation skipped at the listing without analysing it, selected again by a manual point. */
+    private WorkItemExecution deferredSelected(String name) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        item.deferAnalysis("before the cursor");
+        item.setReady();
+        return item;
+    }
+
+    @Test
+    public void theFilesSelectedAgainAreAnalysedWithTheViewLocked() throws IOException {
+        WorkItemExecution old1 = deferredSelected("old1.jpg");
+        WorkItemExecution old2 = deferredSelected("old2.jpg");
+        WorkItemExecution recent = item("recent.jpg", 1);
+        PlanViewModel model = prepared(true, old1, old2, recent);
+        model.setOverride(ResumePoint.all());
+
+        model.startAnalysing(List.of(old1, old2));
+
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertTrue(model.isActive(), "the engine is held");
+        assertFalse(model.isExecutionActive());
+        assertFalse(model.canCopy());
+        assertFalse(model.canPrepare());
+        assertFalse(model.canGoBack());
+        assertFalse(model.canChangeResumePoint(), "the point is not changed while the files are analysed");
+        assertTrue(model.resumePointFrom(recent).isEmpty());
+        assertTrue(model.ignorable(List.of(recent)).isEmpty());
+        assertTrue(model.canStop(), "the analysis can be stopped");
+        assertFalse(model.canPause());
+        assertTrue(model.resumeText().isPresent(), "the resume line stays");
+        assertEquals("", model.statusLine());
+        assertEquals(ResourcesEngine.getString("plan.analysing-again", 0, 2), model.progressText());
+        assertEquals(0.0, model.prepareFraction());
+
+        old1.markPrepared(); // analysed: no longer deferred
+        model.update(state(PipelineStatus.RUNNING, old1, old2, recent), List.of(old1, old2, recent));
+        assertEquals(Phase.ANALYSING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.analysing-again", 1, 2), model.progressText());
+        assertEquals(0.5, model.prepareFraction());
+
+        PipelineState done = state(PipelineStatus.PREPARED, old1, old2, recent);
+        done.setResumeProposal(proposal(ResumePoint.all(), ResumeSource.NONE));
+        model.update(done, List.of(old1, old2, recent));
+        assertEquals(Phase.PREPARED, model.phase(), "the plan is ready again, even when stopped before the end");
+        assertTrue(model.canCopy());
+        assertTrue(model.canChangeResumePoint());
+        assertEquals(ResumePoint.all(), model.override(), "the manual point is kept");
+        assertFalse(model.consumeAutoExecute(), "never an automatic execution after an analysis");
+    }
+
+    @Test
+    public void theExecutionCanBePausedResumedAndStopped() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        PlanViewModel model = prepared(false, a);
+
+        model.startExecuting();
+        assertEquals(Phase.RUNNING, model.phase());
+        assertTrue(model.canPause());
+        assertTrue(model.canStop());
+        assertFalse(model.canResume());
+        assertFalse(model.canGoBack(), "no way back during an execution");
+        assertFalse(model.canChangeResumePoint());
+
+        model.update(state(PipelineStatus.PAUSED, a), List.of(a));
+        assertEquals(Phase.PAUSED, model.phase());
+        assertTrue(model.canResume());
+        assertFalse(model.canPause());
+        assertTrue(model.canStop());
+
+        a.setDone();
+        model.update(state(PipelineStatus.SUCCESS, a), List.of(a));
+        assertEquals(Phase.FINISHED, model.phase());
+        assertTrue(model.canPrepare());
+        assertTrue(model.canGoBack());
+        assertFalse(model.canStop());
+        assertTranslated(model.statusLine());
+    }
+
+    /** Spec run-end: the final status comes once the end-of-run actions are over; meanwhile the bar names the one running. */
+    @Test
+    public void theStatusLineNamesTheRunEndActionRunning() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        PlanViewModel model = prepared(false, a);
+        model.startExecuting();
+        a.setDone();
+
+        PipelineState actions = state(PipelineStatus.RUNNING, a);
+        actions.setRunEndStep("Send an e-mail");
+        model.update(actions, List.of(a));
+        assertEquals(Phase.RUNNING, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.run-end", "Send an e-mail"), model.statusLine());
+
+        model.update(state(PipelineStatus.SUCCESS, a), List.of(a));
+        assertEquals(Phase.FINISHED, model.phase());
+        assertFalse(model.statusLine().contains("Send an e-mail"), model.statusLine());
+    }
+
+    @Test
+    public void nothingToCopyDisablesTheCopy() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setSkipped("already imported");
+
+        assertFalse(prepared(false, a).canCopy());
+    }
+
+    @Test
+    public void aPipelineThatDoesNothingCannotBeCopiedAndSaysWhy() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        PlanViewModel model = prepared(false, a);
+        assertTrue(model.canCopy());
+        assertTrue(model.warning().isEmpty());
+
+        model.setExecutionRefusal(Optional.of("nothing is done with the files"));
+
+        assertFalse(model.canCopy());
+        assertEquals(Optional.of("nothing is done with the files"), model.warning());
+        assertEquals(1, model.counts().selected(), "the plan is still shown");
+
+        model.startPreparing(); // a new preparation forgets the previous plan's refusal
+        assertTrue(model.warning().isEmpty());
+    }
+
+    @Test
+    public void nothingToCopyIsAWarning() throws IOException {
+        WorkItemExecution skipped = item("a.jpg", 1);
+        skipped.setSkipped("already imported");
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.warning.nothing-to-copy")),
+                prepared(false, skipped).warning());
+    }
+
+    // ---- scroll to the resume junction ----
+
+    /** n rows: the first `skipped` already imported, the others to copy. */
+    private List<WorkItemExecution> rows(int n, int skipped) throws IOException {
+        List<WorkItemExecution> rows = new java.util.ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            WorkItemExecution row = item("f" + i + ".jpg", 1);
+            if (i < skipped) {
+                row.setSkipped("already imported");
+            }
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    @Test
+    public void theTableScrollsToShowTheLastImportedRowsThenTheFirstToCopy() throws IOException {
+        assertEquals(15, PlanViewModel.resumeScrollIndex(rows(30, 20), 5), "rows 15-19 imported, then 20 to copy");
+    }
+
+    @Test
+    public void fewImportedRowsKeepTheTop() throws IOException {
+        assertEquals(0, PlanViewModel.resumeScrollIndex(rows(30, 3), 5));
+        assertEquals(0, PlanViewModel.resumeScrollIndex(rows(30, 0), 5), "no resume: from the top");
+    }
+
+    @Test
+    public void everythingImportedShowsTheLastRows() throws IOException {
+        assertEquals(25, PlanViewModel.resumeScrollIndex(rows(30, 30), 5));
+        assertEquals(0, PlanViewModel.resumeScrollIndex(List.of(), 5));
+    }
+
+    @Test
+    public void aPipelineWithoutInputCannotBePreparedAndSaysWhy() {
+        PlanViewModel model = new PlanViewModel();
+
+        model.setPreparationRefusal(Optional.of("nothing to list"));
+
+        assertFalse(model.canPrepare());
+        assertEquals(Optional.of("nothing to list"), model.warning());
+        model.reset(); // a reload keeps it until the pipeline is read again
+        assertFalse(model.canPrepare());
+
+        model.setPreparationRefusal(Optional.empty()); // the pipeline was fixed in the editor
+        assertTrue(model.canPrepare());
+        assertTrue(model.warning().isEmpty());
+    }
+
+    @Test
+    public void aPipelineThatDoesNothingCannotBeRunInOneStepButCanBePlanned() {
+        PlanViewModel model = new PlanViewModel();
+        model.setNothingDoneRefusal(Optional.of("does nothing"));
+
+        model.setExecutionMode(ExecutionMode.PLAN);
+        assertTrue(model.canPrepare(), "the plan can be looked at, the copy is refused afterwards");
+        assertTrue(model.warning().isEmpty());
+
+        for (ExecutionMode oneStep : List.of(ExecutionMode.AUTO, ExecutionMode.STREAMING)) {
+            model.setExecutionMode(oneStep);
+            assertFalse(model.canPrepare(), oneStep + ": its button copies");
+            assertEquals(Optional.of("does nothing"), model.warning(), oneStep.name());
+        }
+
+        model.setNothingDoneRefusal(Optional.empty()); // an output step was added in the editor
+        assertTrue(model.canPrepare());
+    }
+
+    @Test
+    public void aRunningPreparationIsNoWarning() {
+        PlanViewModel model = new PlanViewModel();
+
+        model.startPreparing();
+
+        assertTrue(model.warning().isEmpty(), "the status line tells it");
+    }
+
+    // ---- rows ----
+
+    @Test
+    public void theFilterKeepsTheMatchingRows() throws IOException {
+        WorkItemExecution pending = item("a.jpg", 1);
+        WorkItemExecution skipped = item("b.jpg", 1);
+        skipped.setSkipped("already imported");
+        WorkItemExecution failed = item("c.jpg", 1);
+        failed.setError(new IllegalStateException("unreadable"));
+        PlanViewModel model = prepared(false, pending, skipped, failed);
+
+        assertEquals(List.of(pending, skipped, failed), model.visibleItems());
+        model.setFilter(Filter.TO_COPY);
+        assertEquals(List.of(pending), model.visibleItems());
+        model.setFilter(Filter.SKIPPED);
+        assertEquals(List.of(skipped), model.visibleItems());
+        model.setFilter(Filter.ERRORS);
+        assertEquals(List.of(failed), model.visibleItems());
+    }
+
+    @Test
+    public void theRowsFollowTheResumeOrderThenTheForkedItems() throws IOException {
+        WorkItemExecution first = item("a.jpg", 1);
+        WorkItemExecution second = item("b.jpg", 1);
+        WorkItemExecution forked = item("a-small.jpg", 1);
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+
+        model.update(state(PipelineStatus.PREPARED, forked, second, first), List.of(first, second));
+
+        assertEquals(List.of(first, second, forked), model.items());
+    }
+
+    // ---- counters and texts ----
+
+    @Test
+    public void theCopyButtonTellsTheSelectedFilesAndSize() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1536);
+        WorkItemExecution b = item("b.jpg", 1536);
+        WorkItemExecution c = item("c.jpg", 1536);
+        c.setSkipped("already imported");
+        PlanViewModel model = prepared(false, a, b, c);
+
+        assertEquals(new Plan.Counts(2, 1, 0, 3072), model.counts());
+        String label = model.copyLabel();
+        assertTranslated(label);
+        assertTrue(label.contains("2"), label);
+        assertTrue(label.contains(FileUtil.toAutoUnitSize(3072, 1, Locale.getDefault())), label); // the display form
+    }
+
+    @Test
+    public void everyStatusHasItsText() throws IOException {
+        WorkItemExecution pending = item("a.jpg", 1);
+        WorkItemExecution waiting = item("b.jpg", 1);
+        waiting.setWaitingResources(0, Set.of("disk:D"));
+        WorkItemExecution running = item("c.jpg", 1);
+        running.setRunning(0);
+        running.reportProgress(0, new WorkStatus("copy", 42));
+        WorkItemExecution runningUnknown = item("d.jpg", 1);
+        runningUnknown.setRunning(0);
+        WorkItemExecution done = item("e.jpg", 1);
+        done.setDone();
+        WorkItemExecution skipped = item("f.jpg", 1);
+        skipped.setSkipped("already imported (cursor)");
+        WorkItemExecution failed = item("g.jpg", 1);
+        failed.setError(new IllegalStateException("disk full"));
+
+        for (WorkItemExecution item : List.of(pending, waiting, running, runningUnknown, done, skipped, failed)) {
+            assertTranslated(PlanViewModel.statusText(item));
+        }
+        assertTrue(PlanViewModel.statusText(waiting).contains("disk:D"));
+        assertTrue(PlanViewModel.statusText(running).contains("42"));
+        assertTrue(PlanViewModel.statusText(skipped).contains("already imported (cursor)"));
+        assertTrue(PlanViewModel.statusText(failed).contains("disk full"));
+        assertNotEquals(PlanViewModel.statusText(pending), PlanViewModel.statusText(done));
+    }
+
+    @Test
+    public void aRunningFileShowsThePercentItsStepReports() throws IOException {
+        WorkItemExecution running = item("a.jpg", 1);
+        running.setRunning(1);
+        String unknown = PlanViewModel.statusText(running);
+
+        running.reportProgress(1, new WorkStatus("copy", -1)); // running, progress unknown
+        assertEquals(unknown, PlanViewModel.statusText(running));
+        running.reportProgress(1, new WorkStatus(null, 42)); // a percent of the same action
+        assertTrue(PlanViewModel.statusText(running).contains("42"), PlanViewModel.statusText(running));
+        assertEquals("copy", running.getWorkStatus().actionName());
+
+        running.reportProgress(0, new WorkStatus("late", 99)); // a late report of an earlier step
+        assertTrue(PlanViewModel.statusText(running).contains("42"), PlanViewModel.statusText(running));
+        running.setRunning(2); // the next step starts without progress
+        assertEquals(unknown, PlanViewModel.statusText(running));
+    }
+
+    @Test
+    public void aFileSkippedByTheResumePointSaysSkippedOnlyItsReasonInTheTooltip() throws IOException {
+        WorkItemExecution byPoint = item("a.jpg", 1);
+        byPoint.setSkippedByResumePoint("Already imported (cursor: a.jpg)");
+        WorkItemExecution byOut = item("b.jpg", 1);
+        byOut.setSkipped("identical to the destination");
+
+        assertEquals(ResourcesEngine.getString("item.status.SKIPPED.no-reason"), PlanViewModel.statusText(byPoint),
+                "the resume point is told once, by the header");
+        assertEquals(Optional.of("Already imported (cursor: a.jpg)"), PlanViewModel.statusTooltip(byPoint));
+        assertTrue(PlanViewModel.statusText(byOut).contains("identical to the destination"), "its own reason");
+        assertEquals(Optional.empty(), PlanViewModel.statusTooltip(byOut));
+    }
+
+    @Test
+    public void onlyTheFilesNotSkippedShowTheirTarget() throws IOException {
+        WorkItemExecution pending = item("a.jpg", 1);
+        WorkItemExecution skipped = item("b.jpg", 1);
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution ignored = item("c.jpg", 1);
+        ignored.setIgnored("ignored by the user");
+        WorkItemExecution failed = item("d.jpg", 1);
+        failed.setError(new IllegalStateException("x"));
+
+        assertTrue(PlanViewModel.showsTarget(pending));
+        assertFalse(PlanViewModel.showsTarget(skipped));
+        assertFalse(PlanViewModel.showsTarget(ignored));
+        assertTrue(PlanViewModel.showsTarget(failed));
+    }
+
+    @Test
+    public void theResumeBannerCountsTheFilesTheResumePointSkips() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setSkippedByResumePoint("before");
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setSkippedByResumePoint("before");
+        WorkItemExecution c = item("c.jpg", 1);
+        c.setIgnored("ignored by the user");
+        WorkItemExecution d = item("d.jpg", 1);
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, a, b, c, d);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "b.jpg")), ResumeSource.DESTINATION));
+        model.update(state, List.of(a, b, c, d));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.imported", 2)), model.resumeCountText());
+
+        model.setOverride(ResumePoint.from(new ItemKey(SHOT, "b.jpg")));
+        b.setReady();
+        model.update(state, List.of(a, b, c, d)); // the statuses changed in the engine: notified
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.before", 1)), model.resumeCountText(),
+                "a manual point: the files before it, not imported ones");
+
+        model.setOverride(ResumePoint.all());
+        a.setReady();
+        model.update(state, List.of(a, b, c, d));
+        assertEquals(Optional.empty(), model.resumeCountText(), "nothing skipped by the point");
+    }
+
+    @Test
+    public void theDateColumnShowsTheResumeKeyOrTheFileDate() throws IOException {
+        WorkItemExecution item = item("a.jpg", 1);
+        String local = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
+
+        assertEquals(local, PlanViewModel.dateText(item), "before the preparation: the modification date");
+        item.setResumeKey(new ItemKey(SHOT.plusSeconds(3600), "a.jpg"));
+        assertNotEquals(local, PlanViewModel.dateText(item), "then the frozen resume key");
+    }
+
+    @Test
+    public void theWarningsAreTheConfigurationOnesThenTheResumeOnes() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, item("a.jpg", 1));
+        state.setWarnings(List.of("sources deleted"));
+        state.setResumeProposal(proposal(ResumePoint.all(), ResumeSource.NONE, "no target paths"));
+
+        model.update(state, List.of());
+
+        assertEquals(List.of("sources deleted", "no target paths"), model.warnings());
+    }
+
+    @Test
+    public void theResumeLineNamesThePointAndItsOrigin() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, item("DSC_4822.JPG", 1));
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "DSC_4821.JPG")), ResumeSource.STATE));
+        model.update(state, List.of());
+
+        String proposed = model.resumeText().orElseThrow();
+        assertTranslated(proposed);
+        assertTrue(proposed.contains("DSC_4821.JPG"), proposed);
+
+        model.setOverride(Plan.fromDate(LocalDate.of(2026, 9, 20)));
+        String manual = model.resumeText().orElseThrow();
+        assertTrue(manual.contains("20/09/2026"), manual);
+        assertNotEquals(proposed, manual);
+
+        model.setOverride(ResumePoint.all());
+        assertTranslated(model.resumeText().orElseThrow());
+    }
+
+    @Test
+    public void resumeFromHereNeedsAPreparedPlanAndAKey() throws IOException {
+        WorkItemExecution keyed = item("a.jpg", 1);
+        keyed.setResumeKey(new ItemKey(SHOT, "a.jpg"));
+        WorkItemExecution noKey = item("b.jpg", 1);
+        noKey.setResumeKey(null);
+        PlanViewModel model = prepared(false, keyed, noKey);
+
+        assertEquals(Optional.of(ResumePoint.from(new ItemKey(SHOT, "a.jpg"))), model.resumePointFrom(keyed));
+        assertEquals(Optional.empty(), model.resumePointFrom(noKey));
+        model.startExecuting();
+        assertEquals(Optional.empty(), model.resumePointFrom(keyed));
+    }
+
+    // ---- files ignored by the user ----
+
+    @Test
+    public void thePlannedProcessingShowsTheAnalysedRowsOfTheSelectionFromTheClickedOne() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setProjection(new Projection.Projected(List.of(a.getWorkItem())));
+        WorkItemExecution notAnalysed = item("b.jpg", 1);
+        WorkItemExecution c = item("c.jpg", 1);
+        c.setProjection(new Projection.Projected(List.of(c.getWorkItem())));
+        List<WorkItemExecution> selection = List.of(a, notAnalysed, c);
+
+        List<WorkItemExecution> shown = PlanViewModel.detailable(selection);
+
+        assertEquals(List.of(a, c), shown, "whatever the clicked row");
+        assertEquals(1, PlanViewModel.detailStart(shown, c), "from the clicked row");
+        assertEquals(0, PlanViewModel.detailStart(shown, notAnalysed), "the first one when the clicked row has none");
+        assertEquals("2 / 2", ResourcesEngine.getString("plan.detail.position", 2, 2));
+    }
+
+    @Test
+    public void onlyTheSkippedRowsNotAnalysedCanBeAnalysed() throws IOException {
+        WorkItemExecution deferred = item("a.jpg", 1);
+        deferred.deferAnalysis("before the cursor");
+        WorkItemExecution analysedSkipped = item("b.jpg", 1);
+        analysedSkipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution toCopy = item("c.jpg", 1);
+        PlanViewModel model = prepared(false, deferred, analysedSkipped, toCopy);
+        List<WorkItemExecution> all = List.of(deferred, analysedSkipped, toCopy);
+
+        assertEquals(List.of(deferred), model.analysable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.analysable(all), "only on a prepared, idle plan");
+    }
+
+    @Test
+    public void onlyRowsToCopyOrSkippedByTheResumePointCanBeIgnoredForThisRun() throws IOException {
+        WorkItemExecution toCopy = item("a.jpg", 1);
+        WorkItemExecution beforeCursor = item("b.jpg", 1);
+        beforeCursor.setSkipped("already imported");
+        WorkItemExecution failed = item("c.jpg", 1);
+        failed.setError(new IllegalStateException("no date"));
+        WorkItemExecution ignored = item("d.jpg", 1);
+        ignored.setIgnored("ignored by the user");
+        PlanViewModel model = prepared(false, toCopy, beforeCursor, failed, ignored);
+        List<WorkItemExecution> all = List.of(toCopy, beforeCursor, failed, ignored);
+
+        assertEquals(List.of(toCopy, beforeCursor), model.ignorable(all));
+        assertEquals(List.of(ignored), model.unignorable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.ignorable(all), "not once the copy started");
+        assertEquals(List.of(), model.unignorable(all));
+    }
+
+    private WorkItemExecution shot(String name, String captureDate) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        if (captureDate != null) {
+            item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_DATE, Instant.parse(captureDate));
+        }
+        return item;
+    }
+
+    @Test
+    public void correctableKeepsAnalysedFilesWithACaptureDate() throws IOException {
+        WorkItemExecution dated = shot("a.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution undated = shot("b.jpg", null);
+        WorkItemExecution deferred = shot("c.jpg", "2026-10-26T05:30:00Z");
+        deferred.deferAnalysis("before the cursor");
+        WorkItemExecution skipped = shot("d.jpg", "2026-10-26T05:30:00Z");
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution failed = shot("e.jpg", "2026-10-26T05:30:00Z");
+        failed.setError(new IllegalStateException("no date"));
+        PlanViewModel model = prepared(false, dated, undated, deferred, skipped, failed);
+        List<WorkItemExecution> all = List.of(dated, undated, deferred, skipped, failed);
+
+        assertEquals(List.of(dated, skipped), model.correctable(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.correctable(all), "not once the copy started");
+    }
+
+    @Test
+    public void uncorrectableKeepsTheCorrectedFiles() throws IOException {
+        WorkItemExecution corrected = shot("a.jpg", "2026-10-26T05:30:00Z");
+        corrected.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        WorkItemExecution plain = shot("b.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, corrected, plain);
+
+        assertEquals(List.of(corrected), model.uncorrectable(List.of(corrected, plain)));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.uncorrectable(List.of(corrected, plain)));
+    }
+
+    @Test
+    public void uncorrectableSkipsTheRowsTheUndoCannotTouch() throws IOException {
+        WorkItemExecution pending = shot("a.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution skipped = shot("b.jpg", "2026-10-26T05:30:00Z");
+        skipped.setSkipped("before the cursor");
+        WorkItemExecution failed = shot("c.jpg", "2026-10-26T05:30:00Z");
+        failed.setError(new IOException("unreadable"));
+        for (WorkItemExecution row : List.of(pending, skipped, failed)) {
+            row.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        }
+        PlanViewModel model = prepared(false, pending, skipped, failed);
+
+        assertEquals(List.of(pending, skipped), model.uncorrectable(List.of(pending, skipped, failed)));
+    }
+
+    @Test
+    public void sharedZoneIsTheOneAllTheRowsHave() throws IOException {
+        WorkItemExecution paris = shot("a.jpg", "2026-10-26T05:30:00Z");
+        paris.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Europe/Paris"));
+        WorkItemExecution paris2 = shot("b.jpg", "2026-10-26T05:30:00Z");
+        paris2.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Europe/Paris"));
+        WorkItemExecution tokyo = shot("c.jpg", "2026-10-26T05:30:00Z");
+        tokyo.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAMERA_CLOCK, ZoneId.of("Asia/Tokyo"));
+        WorkItemExecution none = shot("d.jpg", "2026-10-26T05:30:00Z");
+
+        assertEquals(Optional.of(ZoneId.of("Europe/Paris")), PlanViewModel.sharedZone(List.of(paris, paris2), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(paris, tokyo), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(paris, none), WorkItemMetadata.CAMERA_CLOCK));
+        assertEquals(Optional.empty(), PlanViewModel.sharedZone(List.of(), WorkItemMetadata.CAMERA_CLOCK));
+    }
+
+    @Test
+    public void clockPrefillReadsAFixedOffsetAsTheNoSummerTimeOfThePlace() {
+        ZoneId paris = ZoneId.of("Europe/Paris");
+        ZoneId tokyo = ZoneId.of("Asia/Tokyo");
+
+        assertEquals(new PlanViewModel.ClockPrefill(paris, true), PlanViewModel.clockPrefill(paris, Optional.of(ZoneOffset.ofHours(1))));
+        assertEquals(new PlanViewModel.ClockPrefill(tokyo, false), PlanViewModel.clockPrefill(paris, Optional.of(tokyo)));
+        assertEquals(new PlanViewModel.ClockPrefill(ZoneOffset.ofHours(9), false), PlanViewModel.clockPrefill(paris, Optional.of(ZoneOffset.ofHours(9))));
+        assertEquals(new PlanViewModel.ClockPrefill(paris, false), PlanViewModel.clockPrefill(paris, Optional.empty()));
+    }
+
+    @Test
+    public void clockUnknownCountCountsThePhotosWithoutOffset() throws IOException {
+        WorkItemExecution unknown = shot("a.jpg", "2026-10-26T05:30:00Z");
+        unknown.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.TRUE);
+        WorkItemExecution known = shot("b.jpg", "2026-10-26T05:30:00Z");
+        known.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.FALSE);
+        WorkItemExecution stale = shot("c.jpg", null); // a stale flag, the re-analysis found no date
+        stale.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_CLOCK_UNKNOWN, Boolean.TRUE);
+
+        assertEquals(1, PlanViewModel.clockUnknownCount(List.of(unknown, known, stale, shot("d.jpg", "2026-10-26T05:30:00Z"))));
+    }
+
+    @Test
+    public void correctionTextTellsTheZoneAndTheCorrectedDate() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(Optional.empty(), PlanViewModel.correctionText(item));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.corrected", "America/Mexico_City", "2026-10-25 23:30")),
+                PlanViewModel.correctionText(item));
+    }
+
+    @Test
+    public void targetMarksArePencilWithItsTooltipLineBeforeTheFoldersAndNeverTheCorrection() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(item, null));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), "folders"), PlanViewModel.targetMarks(item, "folders"));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(null, null), "an empty cell");
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        assertEquals(new PlanViewModel.TargetMarks(List.of(), null), PlanViewModel.targetMarks(item, null),
+                "a corrected row has no mark in the target: the clock is in the date cell");
+
+        item.getWorkItem().setOutPattern("x/{name}");
+        String own = ResourcesEngine.getString("plan.target.own-pattern", "x/{name}");
+        assertEquals(new PlanViewModel.TargetMarks(List.of(PlanViewModel.TargetMark.OWN_PATTERN), own + "\nfolders"),
+                PlanViewModel.targetMarks(item, "folders"));
+
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAPTURE_ZONE);
+        assertEquals(new PlanViewModel.TargetMarks(List.of(PlanViewModel.TargetMark.OWN_PATTERN), own),
+                PlanViewModel.targetMarks(item, null));
+    }
+
+    @Test
+    public void dateCellOfACorrectedRowShowsTheClockAndTheShotDateInTheCorrectedZone() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel.DateCell plain = PlanViewModel.dateCell(item);
+        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, false, null), plain, "not corrected: unchanged");
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(new PlanViewModel.DateCell("25/10/2026 23:30", true, false,
+                        ResourcesEngine.getString("plan.date.corrected", "America/Mexico_City", PlanViewModel.dateText(item))),
+                PlanViewModel.dateCell(item));
+    }
+
+    private WorkItemExecution suggested(String name, String zone) throws IOException {
+        WorkItemExecution item = shot(name, "2026-10-26T05:30:00Z");
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.RECORDED_OFFSET, ZoneOffset.ofHours(1));
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.SUGGESTED_ZONE, ZoneId.of(zone));
+        return item;
+    }
+
+    @Test
+    public void suggestibleKeepsTheFlaggedCorrectableRows() throws IOException {
+        WorkItemExecution flagged = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution plain = shot("b.jpg", "2026-10-26T05:30:00Z");
+        WorkItemExecution skipped = suggested("c.jpg", "America/Mexico_City");
+        skipped.setSkippedByResumePoint("before the cursor");
+        WorkItemExecution failed = suggested("d.jpg", "America/Mexico_City");
+        failed.setError(new IllegalStateException("no date"));
+        PlanViewModel model = prepared(false, flagged, plain, skipped, failed);
+        List<WorkItemExecution> all = List.of(flagged, plain, skipped, failed);
+
+        assertEquals(List.of(flagged, skipped), model.suggestible(all));
+
+        model.startExecuting();
+
+        assertEquals(List.of(), model.suggestible(all), "not once the copy started");
+    }
+
+    @Test
+    public void bySuggestedZoneGroupsTheRows() throws IOException {
+        WorkItemExecution mexico = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution tokyo = suggested("b.jpg", "Asia/Tokyo");
+        WorkItemExecution mexico2 = suggested("c.jpg", "America/Mexico_City");
+        WorkItemExecution plain = shot("d.jpg", "2026-10-26T05:30:00Z");
+
+        Map<ZoneId, List<WorkItemExecution>> groups = PlanViewModel.bySuggestedZone(List.of(mexico, tokyo, mexico2, plain));
+
+        assertEquals(List.of(ZoneId.of("America/Mexico_City"), ZoneId.of("Asia/Tokyo")), List.copyOf(groups.keySet()));
+        assertEquals(List.of(mexico, mexico2), groups.get(ZoneId.of("America/Mexico_City")));
+        assertEquals(List.of(tokyo), groups.get(ZoneId.of("Asia/Tokyo")));
+    }
+
+    @Test
+    public void applySuggestedZonesCorrectsEachGroupAndReturnsTheFailureOfOne() throws IOException {
+        WorkItemExecution mexico = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution tokyo = suggested("b.jpg", "Asia/Tokyo");
+        WorkItemExecution paris = suggested("c.jpg", "Europe/Paris");
+        List<ZoneId> corrected = new ArrayList<>();
+        RuntimeException stateWrite = new IllegalStateException("the state cannot be written");
+
+        Optional<RuntimeException> failure = PlanViewModel.applySuggestedZones(List.of(mexico, tokyo, paris), (zone, group) -> {
+            if (zone.equals(ZoneId.of("Asia/Tokyo"))) {
+                throw stateWrite;
+            }
+            corrected.add(zone);
+        });
+
+        // the caller analyses again what was corrected, then shows the failure
+        assertEquals(Optional.of(stateWrite), failure);
+        assertEquals(List.of(ZoneId.of("America/Mexico_City")), corrected, "stopped at the failure");
+        assertEquals(Optional.empty(), PlanViewModel.applySuggestedZones(List.of(mexico, paris), (zone, group) -> { }));
+    }
+
+    @Test
+    public void suggestionTextTellsTheNotedAndExpectedOffsets() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        assertEquals(Optional.empty(), PlanViewModel.suggestionText(item));
+
+        item = suggested("b.jpg", "America/Mexico_City");
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested", "+01:00", "America/Mexico_City", "-06:00")),
+                PlanViewModel.suggestionText(item));
+    }
+
+    @Test
+    public void suggestionSummaryCountsEveryFlaggedRow() throws IOException {
+        WorkItemExecution toCopy = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution ignored = suggested("b.jpg", "America/Mexico_City");
+        ignored.setIgnored("ignored for this run");
+        WorkItemExecution failed = suggested("c.jpg", "America/Mexico_City");
+        failed.setError(new IOException("unreadable"));
+        WorkItemExecution skipped = suggested("d.jpg", "America/Mexico_City");
+        skipped.setSkipped("before the cursor");
+        WorkItemExecution plain = shot("e.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, plain);
+        assertEquals(Optional.empty(), model.suggestionSummary(), "none flagged");
+
+        model = prepared(false, toCopy, ignored, failed, skipped, plain);
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.zone.suggested-count", 4)), model.suggestionSummary(),
+                "the whole card is checked, also the files not copied");
+    }
+
+    @Test
+    public void theGpsFilterShowsEveryFlaggedRowAndIsOfferedOnlyWithOne() throws IOException {
+        WorkItemExecution toCopy = suggested("a.jpg", "America/Mexico_City");
+        WorkItemExecution skipped = suggested("b.jpg", "America/Mexico_City");
+        skipped.setSkipped("already at the destination");
+        WorkItemExecution plain = shot("c.jpg", "2026-10-26T05:30:00Z");
+        PlanViewModel model = prepared(false, plain);
+        assertFalse(model.filters().contains(Filter.SUGGESTED_ZONE), "nothing flagged");
+
+        model = prepared(false, toCopy, plain, skipped);
+
+        assertTrue(model.filters().contains(Filter.SUGGESTED_ZONE));
+        model.setFilter(Filter.SUGGESTED_ZONE);
+        assertEquals(List.of(toCopy, skipped), model.visibleItems());
+    }
+
+    @Test
+    public void theChosenGpsFilterStaysOfferedWithoutFlaggedRow() throws IOException {
+        PlanViewModel model = prepared(false, shot("a.jpg", "2026-10-26T05:30:00Z"));
+
+        model.setFilter(Filter.SUGGESTED_ZONE);
+
+        assertTrue(model.filters().contains(Filter.SUGGESTED_ZONE), "the combo keeps showing the filter chosen");
+    }
+
+    @Test
+    public void aCancelledGpsCorrectionIsSuggestedAgain() throws IOException {
+        WorkItemExecution item = suggested("a.jpg", "America/Mexico_City");
+        PlanViewModel model = prepared(false, item);
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.SUGGESTED_ZONE); // the analysis in the zone
+
+        assertEquals(List.of(), model.suggestible(List.of(item)));
+
+        // the correction cancelled: the zone of the metadata again, the plugin flags the photo at the re-analysis
+        item.getWorkItem().getMetadatas().raw().remove(WorkItemMetadata.CAPTURE_ZONE);
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.SUGGESTED_ZONE, ZoneId.of("America/Mexico_City"));
+
+        assertEquals(List.of(item), model.suggestible(List.of(item)));
+    }
+
+    @Test
+    public void dateCellOfASuggestedRowHasTheWarningAndItsLine() throws IOException {
+        WorkItemExecution item = suggested("a.jpg", "America/Mexico_City");
+        String line = PlanViewModel.suggestionText(item).orElseThrow();
+
+        assertEquals(new PlanViewModel.DateCell(PlanViewModel.dateText(item), false, true, line), PlanViewModel.dateCell(item));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("Asia/Tokyo"));
+        PlanViewModel.DateCell both = PlanViewModel.dateCell(item);
+
+        assertTrue(both.corrected() && both.suggested());
+        assertEquals(ResourcesEngine.getString("plan.date.corrected", "Asia/Tokyo", PlanViewModel.dateText(item)) + "\n" + line,
+                both.tooltip());
+    }
+
+    @Test
+    public void detailTextShowsTheCorrection() throws IOException {
+        WorkItemExecution item = shot("a.jpg", "2026-10-26T05:30:00Z");
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.CAPTURE_ZONE, ZoneId.of("America/Mexico_City"));
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals(PlanViewModel.correctionText(item).orElseThrow(), lines.get(3));
+        assertEquals("", lines.get(4));
+    }
+
+    @Test
+    public void patternableRowsAreTheAnalysedOnesOfAPlanWithADefaultOutPattern() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.setProjection(new Projection.Projected(List.of(analysed.getWorkItem())));
+        WorkItemExecution deferred = item("b.jpg", 1);
+        PlanViewModel model = prepared(false, analysed, deferred);
+        List<WorkItemExecution> all = List.of(analysed, deferred);
+
+        assertEquals(List.of(), model.patternable(all), "the out step takes no own pattern");
+
+        model.setDefaultOutPattern(java.util.Optional.of("{name}"));
+        assertEquals(List.of(analysed), model.patternable(all), "not the deferred file");
+
+        model.startExecuting();
+        assertEquals(List.of(), model.patternable(all), "not once the copy started");
+    }
+
+    @Test
+    public void withOwnPatternRowsAreThoseGivenOneOnAPreparedPlan() throws IOException {
+        WorkItemExecution own = item("a.jpg", 1);
+        own.getWorkItem().setOutPattern("x/{name}");
+        WorkItemExecution plain = item("b.jpg", 1);
+        PlanViewModel model = prepared(false, own, plain);
+        List<WorkItemExecution> all = List.of(own, plain);
+
+        assertEquals(List.of(own), model.withOwnPattern(all));
+
+        model.startExecuting();
+        assertEquals(List.of(), model.withOwnPattern(all));
+    }
+
+    @Test
+    public void alwaysIgnoreExcludesTheListedFilesOnceEachWhenTheEngineIsIdle() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution fork = item("a-2.jpg", 1);
+        fork.setParent(a);
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setDone();
+        PlanViewModel model = prepared(false, a, fork, b);
+
+        assertEquals(List.of(tempDir.resolve("a.jpg"), tempDir.resolve("b.jpg")), model.excludable(List.of(a, fork, b)));
+
+        model.startExecuting();
+        assertEquals(List.of(), model.excludable(List.of(a, b)), "not while copying");
+
+        model.update(state(PipelineStatus.SUCCESS, a, b), List.of(a, b));
+        assertEquals(List.of(tempDir.resolve("b.jpg")), model.excludable(List.of(b)), "after the copy too");
+    }
+
+    // ---- automatic execution, progress, end of run ----
+
+    @Test
+    public void theAutomaticExecutionStartsOnceWhenThePlanIsReady() throws IOException {
+        PlanViewModel model = prepared(true, item("a.jpg", 1));
+
+        assertTrue(model.consumeAutoExecute());
+        assertFalse(model.consumeAutoExecute(), "once");
+    }
+
+    @Test
+    public void theAutomaticExecutionFollowsTheSessionBox() throws IOException {
+        assertFalse(prepared(false, item("a.jpg", 1)).consumeAutoExecute());
+
+        PlanViewModel unchecked = model(true);
+        unchecked.setAutoExecute(false);
+        unchecked.startPreparing();
+        unchecked.update(state(PipelineStatus.PREPARED, item("b.jpg", 1)), List.of());
+        assertFalse(unchecked.consumeAutoExecute());
+    }
+
+    // ---- execution modes (spec execution-mode §5) ----
+
+    @Test
+    public void theAutomaticExecutionBoxIsUncheckedByDefault() throws IOException {
+        assertFalse(new PlanViewModel().isAutoExecute());
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, item("a.jpg", 1)), List.of());
+        assertFalse(model.consumeAutoExecute());
+    }
+
+    @Test
+    public void eachModeHasItsOwnButtonLabel() {
+        PlanViewModel model = new PlanViewModel();
+        assertEquals(ExecutionMode.PLAN, model.executionMode());
+        assertEquals(ResourcesEngine.getString("plan.prepare"), model.prepareLabel());
+        model.setExecutionMode(ExecutionMode.AUTO);
+        assertEquals(ResourcesEngine.getString("plan.prepare-and-copy"), model.prepareLabel());
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        assertEquals(ResourcesEngine.getString("plan.stream"), model.prepareLabel());
+        for (ExecutionMode mode : ExecutionMode.values()) {
+            model.setExecutionMode(mode);
+            assertTranslated(model.prepareLabel());
+        }
+    }
+
+    @Test
+    public void onlyThePlanModeShowsTheAutomaticExecutionBox() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        assertTrue(model.showsAutoExecuteBox());
+        model.setExecutionMode(ExecutionMode.AUTO);
+        assertFalse(model.showsAutoExecuteBox());
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        assertFalse(model.showsAutoExecuteBox());
+
+        PlanViewModel executing = prepared(false, item("a.jpg", 1));
+        executing.startExecuting();
+        assertFalse(executing.showsAutoExecuteBox(), "not while copying");
+    }
+
+    @Test
+    public void theAutoModeCopiesAsSoonAsThePlanIsReadyWhateverTheBox() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.AUTO);
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, item("a.jpg", 1)), List.of());
+
+        assertTrue(model.consumeAutoExecute());
+        assertFalse(model.consumeAutoExecute(), "once");
+    }
+
+    @Test
+    public void theStreamingRunIsAnExecutionFromTheStart() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        WorkItemExecution old = item("old.jpg", 1000);
+        old.deferAnalysis("before the cursor");
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 300);
+
+        model.startStreaming();
+        assertEquals(Phase.RUNNING, model.phase());
+        assertTrue(model.isExecutionActive());
+        assertTrue(model.canPause());
+        assertTrue(model.canStop());
+        assertFalse(model.canPrepare());
+
+        PipelineState state = state(PipelineStatus.RUNNING, old, a, b);
+        state.setListingInProgress(true);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "old.jpg")), ResumeSource.STATE));
+        a.setDone();
+        model.update(state, List.of());
+
+        assertEquals(Phase.RUNNING, model.phase());
+        assertEquals(new Progress(1, 2, 100, 400), model.progress(), "the files the resume point skips are not counted");
+        assertEquals(PlanViewModel.INDETERMINATE, model.executionFraction(), "the total grows while listing");
+        assertTrue(model.resumeText().isPresent(), "the resume banner shows the point");
+
+        state.setListingInProgress(false);
+        model.update(state, List.of());
+        assertEquals(0.25, model.executionFraction());
+
+        b.setDone();
+        state.setStatus(PipelineStatus.SUCCESS);
+        model.update(state, List.of());
+        assertEquals(Phase.FINISHED, model.phase());
+        assertTrue(model.consumeFinishedRun(Instant.now()).isPresent());
+        assertTrue(model.canPrepare(), "it can be run again");
+    }
+
+    @Test
+    public void aStreamingRunFailingBeforeTheListingIsAPreparationFailure() {
+        PlanViewModel model = new PlanViewModel();
+        model.setExecutionMode(ExecutionMode.STREAMING);
+        model.startStreaming();
+        PipelineState state = state(PipelineStatus.RUNNING);
+        state.setFailure(new IllegalStateException("invalid state file"));
+        state.setPreparationFailed(true);
+        state.setStatus(PipelineStatus.ERROR);
+
+        model.update(state, List.of());
+
+        assertEquals(Phase.PREPARE_FAILED, model.phase());
+        assertEquals(ResourcesEngine.getString("plan.prepare-failed", "invalid state file"), model.statusLine());
+    }
+
+    @Test
+    public void theResumeBannerOfTheFilesNotAtTheDestination() throws IOException {
+        PlanViewModel model = prepared(false, item("a.jpg", 1));
+        PipelineState state = state(PipelineStatus.PREPARED, model.items().toArray(WorkItemExecution[]::new));
+        state.setResumeProposal(proposal(ResumePoint.notAtDestination(), ResumeSource.DESTINATION));
+        model.update(state, model.items());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.missing",
+                ResourcesEngine.getString("plan.resume.source.DESTINATION"))), model.resumeText());
+    }
+
+    @Test
+    public void noAutomaticExecutionOfAFailedOrEmptyPlan() throws IOException {
+        PlanViewModel failed = model(true);
+        failed.startPreparing();
+        failed.update(state(PipelineStatus.ERROR), List.of());
+        assertFalse(failed.consumeAutoExecute());
+
+        WorkItemExecution skipped = item("a.jpg", 1);
+        skipped.setSkipped("already imported");
+        assertFalse(prepared(true, skipped).consumeAutoExecute());
+    }
+
+    @Test
+    public void theProgressCountsTheItemsSelectedAtTheStart() throws IOException {
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 300);
+        WorkItemExecution c = item("c.jpg", 50);
+        c.setSkipped("already imported");
+        PlanViewModel model = prepared(false, a, b, c);
+        model.startExecuting();
+
+        a.setDone();
+        model.update(state(PipelineStatus.RUNNING, a, b, c), List.of(a, b, c));
+
+        assertEquals(new Progress(1, 2, 100, 400), model.progress());
+        assertEquals(0.25, model.progress().fraction(), 1e-9);
+        assertTranslated(model.progressText());
+
+        b.setSkipped("identical to the destination");
+        model.update(state(PipelineStatus.RUNNING, a, b, c), List.of(a, b, c));
+        assertEquals(new Progress(2, 2, 400, 400), model.progress(), "skipped by the write: processed");
+    }
+
+    @Test
+    public void theEndOfTheRunIsReportedOnce() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        WorkItemExecution c = item("c.jpg", 1);
+        PlanViewModel model = prepared(false, a, b, c);
+        model.startExecuting();
+        assertEquals(Optional.empty(), model.consumeFinishedRun(SHOT));
+
+        a.setDone();
+        b.setSkipped("identical to the destination");
+        c.setError(new IllegalStateException("disk full"));
+        model.update(state(PipelineStatus.ERROR, a, b, c), List.of(a, b, c));
+
+        assertEquals(Optional.of(new LastRun(SHOT, PipelineStatus.ERROR, 1, 1, 1)), model.consumeFinishedRun(SHOT));
+        assertEquals(Optional.empty(), model.consumeFinishedRun(SHOT), "once");
+    }
+
+    @Test
+    public void theHeaderTexts() {
+        assertTranslated(PlanViewModel.lastRunText(null));
+        String run = PlanViewModel.lastRunText(new LastRun(SHOT, PipelineStatus.SUCCESS, 120, 3, 1));
+        assertTranslated(run);
+        assertTrue(run.contains("120"), run);
+        for (String mode : List.of("none", "state", "destination", "stateThenDestination")) {
+            assertTranslated(PlanViewModel.resumeModeText(mode));
+        }
+        assertTranslated(PlanViewModel.resumeModeText(null));
+        for (PipelineStatus status : List.of(PipelineStatus.SUCCESS, PipelineStatus.ERROR, PipelineStatus.CANCELLED)) {
+            assertTranslated(PlanViewModel.pipelineStatusText(status));
+        }
+    }
+
+    @Test
+    public void theLastRunBadgesTellTheStatusAndTheCounts() {
+        assertEquals(List.of(), PlanViewModel.lastRunBadges(null), "never run: no badge");
+
+        List<PlanViewModel.Badge> ok = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.SUCCESS, 107, 803, 0));
+        assertEquals(4, ok.size());
+        assertEquals(PlanViewModel.BadgeKind.SUCCESS, ok.get(0).kind());
+        assertTrue(ok.get(0).text().startsWith("✓ "), ok.get(0).text());
+        assertTrue(ok.get(1).text().contains("107"), ok.get(1).text());
+        assertTrue(ok.get(2).text().contains("803"), ok.get(2).text());
+        assertTrue(ok.get(3).text().startsWith("0 "), ok.get(3).text());
+        assertEquals(PlanViewModel.BadgeKind.NEUTRAL, ok.get(3).kind(), "no error: grey");
+        ok.forEach(badge -> assertTranslated(badge.text()));
+
+        List<PlanViewModel.Badge> failed = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.ERROR, 1, 0, 2));
+        assertEquals(PlanViewModel.BadgeKind.ERROR, failed.get(0).kind());
+        assertTrue(failed.get(0).text().startsWith("✗ "), failed.get(0).text());
+        assertEquals(PlanViewModel.BadgeKind.ERROR, failed.get(3).kind(), "errors: red");
+        assertTrue(failed.get(3).text().startsWith("2 "), failed.get(3).text());
+
+        List<PlanViewModel.Badge> stopped = PlanViewModel.lastRunBadges(new LastRun(SHOT, PipelineStatus.CANCELLED, 5, 0, 0));
+        assertEquals(PlanViewModel.BadgeKind.NEUTRAL, stopped.get(0).kind());
+        assertEquals(PlanViewModel.pipelineStatusText(PipelineStatus.CANCELLED), stopped.get(0).text());
+        assertEquals(ITEM_DATE_SHOT, PlanViewModel.lastRunDate(new LastRun(SHOT, PipelineStatus.SUCCESS, 0, 0, 0)));
+    }
+
+    private static final String ITEM_DATE_SHOT =
+            DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
+
+    @Test
+    public void anUnknownHeaderValueIsShownRaw() {
+        assertEquals("hand-edited", PlanViewModel.resumeModeText("hand-edited"), "never a %key label");
+        assertEquals("NEW", PlanViewModel.pipelineStatusText(PipelineStatus.NEW), "never a %key label");
+    }
+
+    // ---- final fixes ----
+
+    @Test
+    public void anErrorWithoutMessageNamesItsClass() throws IOException {
+        WorkItemExecution noMessage = item("a.jpg", 1);
+        noMessage.setError(new IllegalStateException());
+        WorkItemExecution blank = item("b.jpg", 1);
+        blank.setError(new UnsupportedOperationException("  "));
+
+        assertTrue(PlanViewModel.statusText(noMessage).contains("IllegalStateException"), PlanViewModel.statusText(noMessage));
+        assertTrue(PlanViewModel.statusText(blank).contains("UnsupportedOperationException"), PlanViewModel.statusText(blank));
+
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState failed = state(PipelineStatus.ERROR);
+        failed.setFailure(new NullPointerException());
+        model.update(failed, List.of());
+        assertTrue(model.statusLine().contains("NullPointerException"), model.statusLine());
+    }
+
+    @Test
+    public void aSkipWithoutReasonIsAPlainSkipped() throws IOException {
+        WorkItemExecution noReason = item("a.jpg", 1);
+        noReason.setSkipped(null);
+        WorkItemExecution blank = item("b.jpg", 1);
+        blank.setSkipped(" ");
+        String plain = ResourcesEngine.getString("item.status.SKIPPED.no-reason");
+
+        assertTranslated(plain);
+        assertEquals(plain, PlanViewModel.statusText(noReason));
+        assertEquals(plain, PlanViewModel.statusText(blank));
+        WorkItemExecution withReason = item("c.jpg", 1);
+        withReason.setSkipped("already imported");
+        assertNotEquals(plain, PlanViewModel.statusText(withReason));
+    }
+
+    @Test
+    public void onceTheCopyStartedToCopyShowsOnlyWhatIsLeft() throws IOException {
+        WorkItemExecution pending = item("a.jpg", 1);
+        WorkItemExecution running = item("b.jpg", 1);
+        WorkItemExecution done = item("c.jpg", 1);
+        PlanViewModel model = prepared(false, pending, running, done);
+        model.setFilter(Filter.TO_COPY);
+        assertEquals(List.of(pending, running, done), model.visibleItems());
+
+        model.startExecuting();
+        running.setRunning(0);
+        done.setDone();
+        model.update(state(PipelineStatus.RUNNING, pending, running, done), List.of(pending, running, done));
+
+        assertEquals(List.of(pending, running), model.visibleItems(), "a copied file is no longer to copy");
+    }
+
+    // ---- deferred review notes ----
+
+    @Test
+    public void withoutSizesTheProgressGoesByFiles() throws IOException {
+        WorkItemExecution a = item("a.jpg", 0);
+        WorkItemExecution b = item("b.jpg", 0);
+        WorkItemExecution c = item("c.jpg", 0);
+        WorkItemExecution d = item("d.jpg", 0);
+        PlanViewModel model = prepared(false, a, b, c, d);
+        model.startExecuting();
+
+        a.setDone();
+        model.update(state(PipelineStatus.RUNNING, a, b, c, d), List.of(a, b, c, d));
+
+        assertEquals(new Progress(1, 4, 0, 0), model.progress());
+        assertEquals(0.25, model.progress().fraction(), 1e-9);
+        assertEquals(0, new Progress(0, 0, 0, 0).fraction(), "nothing selected: no division by zero");
+    }
+
+    @Test
+    public void aForkedItemIsARowButNotInTheProgressTotals() throws IOException {
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 100);
+        PlanViewModel model = prepared(false, a, b);
+        model.setFilter(Filter.TO_COPY);
+        model.startExecuting();
+
+        a.setDone();
+        WorkItemExecution forkedPending = item("a-small.jpg", 10);
+        WorkItemExecution forkedDone = item("a-thumb.jpg", 5);
+        forkedDone.setDone();
+        model.update(state(PipelineStatus.RUNNING, a, b, forkedPending, forkedDone), List.of(a, b));
+
+        assertEquals(List.of(a, b, forkedPending, forkedDone), model.items());
+        assertEquals(new Progress(1, 2, 100, 200), model.progress(), "the totals are those of the start");
+        assertEquals(List.of(b, forkedPending), model.visibleItems(), "a pending forked item is left to copy");
+        model.setFilter(Filter.ALL);
+        assertEquals(4, model.visibleItems().size());
+    }
+
+    @Test
+    public void theResumeLineFromANameAndFromTheDestination() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, item("DSC_4822.JPG", 1));
+        ItemKey key = new ItemKey(SHOT, "DSC_4821.JPG");
+        state.setResumeProposal(proposal(ResumePoint.from(key), ResumeSource.DESTINATION));
+        model.update(state, List.of());
+
+        String from = model.resumeText().orElseThrow();
+        String destination = ResourcesEngine.getString("plan.resume.source.DESTINATION");
+        String date = DateTimeFormatter.ofPattern("dd/MM HH:mm").format(SHOT.atZone(ZoneId.systemDefault()));
+        assertTranslated(destination);
+        assertEquals(ResourcesEngine.getString("plan.resume.from", "DSC_4821.JPG", date, destination), from);
+
+        model.setOverride(ResumePoint.after(key));
+        assertNotEquals(from, model.resumeText().orElseThrow(), "from and after are told apart");
+        for (ResumeSource source : ResumeSource.values()) {
+            assertTranslated(ResourcesEngine.getString("plan.resume.source." + source.name()));
+        }
+    }
+
+    @Test
+    public void sizesAreShownInTheLocale() throws IOException {
+        Locale previous = Locale.getDefault();
+        try {
+            ResourcesEngine.loadLanguage(Locale.FRENCH);
+            WorkItemExecution big = item("big.jpg", 300_000);
+            PlanViewModel model = prepared(false, big);
+
+            assertTrue(PlanViewModel.sizeText(big).startsWith("292,97 "), PlanViewModel.sizeText(big));
+            assertTrue(model.copyLabel().contains("293,0 "), model.copyLabel());
+            assertEquals("?", PlanViewModel.sizeText(new WorkItemExecution(new WorkItem(tempDir.resolve("nosize.jpg")), List.of())));
+        } finally {
+            ResourcesEngine.loadLanguage(previous);
+        }
+    }
+
+    @Test
+    public void theTargetTextShowsTheFirstDirectoryAndHowManyMore() {
+        TargetProjection two = new TargetProjection.Targets(List.of(Path.of("/nas/2026"), Path.of("/nas/thumbs")));
+
+        assertEquals(Path.of("/nas/2026") + " " + ResourcesEngine.getString("plan.target.more", 1), PlanViewModel.targetText(two));
+        assertEquals(Path.of("/nas/2026") + "\n" + Path.of("/nas/thumbs"), PlanViewModel.targetTooltip(two));
+    }
+
+    @Test
+    public void theTargetTextExplainsWhyThereIsNoTarget() {
+        assertEquals(ResourcesEngine.getString("dryrun.filtered", "drop"), PlanViewModel.targetText(new TargetProjection.Filtered("drop")));
+        assertEquals(ResourcesEngine.getString("dryrun.unsupported", "legacy"), PlanViewModel.targetText(new TargetProjection.Unknown("legacy")));
+        assertEquals("No value for {x}: a", PlanViewModel.targetText(new TargetProjection.Failed("No value for {x}: a")));
+        assertEquals("", PlanViewModel.targetText(TargetProjection.NONE));
+        assertNull(PlanViewModel.targetTooltip(TargetProjection.NONE));
+    }
+
+    @Test
+    public void theDetailShowsTheSourceTheStatusEachStepAndEveryTarget() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(
+                new Projection.Step("convert", List.of("DSC_1.NEF", "DSC_1.jpg")),
+                new Projection.Step("rename", List.of("a.nef", "a.jpg"))),
+                new TargetProjection.Targets(List.of(Path.of("/nas"))), List.of(Path.of("/nas/a.nef"), Path.of("/nas/a.jpg")));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals("📂 DSC_1.NEF", lines.get(0));
+        assertTrue(lines.get(1).contains(tempDir.toString()), lines.get(1));
+        assertTrue(lines.get(1).contains(PlanViewModel.sizeText(item)), lines.get(1));
+        assertTrue(lines.get(1).contains(PlanViewModel.dateText(item)), lines.get(1));
+        assertEquals(ResourcesEngine.getString("plan.detail.status", PlanViewModel.statusText(item)), lines.get(2));
+        assertEquals(List.of(
+                "⚙ convert → DSC_1.NEF, DSC_1.jpg",
+                "⚙ rename → a.nef, a.jpg",
+                "💾 " + Path.of("/nas/a.nef"),
+                "   " + Path.of("/nas/a.jpg")), lines.subList(4, lines.size()));
+    }
+
+    @Test
+    public void theDetailOfAFileSkippedByTheResumePointGivesItsReason() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        item.setSkippedByResumePoint("Already imported (cursor: DSC_1.NEF)");
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+
+        String status = PlanViewModel.detailText(item, detail).lines().toList().get(2);
+
+        assertEquals(ResourcesEngine.getString("plan.detail.status",
+                ResourcesEngine.getString("item.status.SKIPPED", "Already imported (cursor: DSC_1.NEF)")), status,
+                "the column only says Skipped, the detail tells why");
+    }
+
+    @Test
+    public void theDetailEndsOnTheStepThatStoppedTheDryRun() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        List<Projection.Step> converted = List.of(new Projection.Step("convert", List.of("DSC_1.jpg")));
+
+        assertEquals("⚙ drop → " + ResourcesEngine.getString("plan.detail.filtered"),
+                lastLine(item, new ItemDetail(converted, new TargetProjection.Filtered("drop"), List.of())));
+        assertEquals("⚙ legacy → " + ResourcesEngine.getString("plan.detail.unsupported"),
+                lastLine(item, new ItemDetail(converted, new TargetProjection.Unknown("legacy"), List.of())));
+        assertEquals("⚠ no codec", lastLine(item, new ItemDetail(converted, new TargetProjection.Failed("no codec"), List.of())));
+        assertEquals("💾 " + ResourcesEngine.getString("plan.detail.no-target"),
+                lastLine(item, new ItemDetail(converted, TargetProjection.NONE, List.of())));
+    }
+
+    @Test
+    public void detailTextShowsTheStepNote() throws IOException {
+        WorkItemExecution item = item("a.jpg", 1);
+        ItemDetail detail = new ItemDetail(List.of(
+                new Projection.Step("write-date", List.of("a.jpg"), "EXIF réécrit"),
+                new Projection.Step("rename", List.of("b.jpg"))),
+                TargetProjection.NONE, List.of());
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertTrue(lines.contains("⚙ write-date → a.jpg — EXIF réécrit"), lines.toString());
+        assertTrue(lines.contains("⚙ rename → b.jpg"), lines.toString());
+    }
+
+    @Test
+    public void detailTextShowsTheItemNote() throws IOException {
+        WorkItemExecution item = item("a.jpg", 1);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of());
+        assertFalse(PlanViewModel.detailText(item, detail).contains("⚠"));
+
+        item.getWorkItem().getMetadatas().raw().put(WorkItemMetadata.NOTE, "EXIF réécrit");
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        assertEquals("⚠ EXIF réécrit", lines.get(3));
+        assertEquals("", lines.get(4));
+    }
+
+    /** Each secondary output after the main target: its projected target before the copy (spec secondary-outputs §6). */
+    @Test
+    public void theDetailListsTheProjectedTargetOfEachSecondaryOutput() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), new TargetProjection.Targets(List.of(Path.of("/nas"))),
+                List.of(Path.of("/nas/DSC_1.NEF")), List.of(
+                new ItemDetail.BranchDetail("Thumbs", new TargetProjection.Targets(
+                        List.of(Path.of("/thumbs/s"), Path.of("/thumbs/l"))), null),
+                new ItemDetail.BranchDetail("Web", new TargetProjection.Filtered("drop"), null),
+                new ItemDetail.BranchDetail("Odd", TargetProjection.NONE, null)));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertTrue(start > 0, lines.toString());
+        assertEquals("", lines.get(start - 1));
+        assertEquals(List.of(
+                "   " + quoted("Thumbs") + " → " + Path.of("/thumbs/s"),
+                "      " + Path.of("/thumbs/l"),
+                "   " + quoted("Web") + " → " + ResourcesEngine.getString("dryrun.filtered", "drop"),
+                "   " + quoted("Odd") + " → " + ResourcesEngine.getString("plan.detail.branch.unknown")),
+                lines.subList(start + 1, lines.size()));
+    }
+
+    /** The files of a secondary output are listed like the main targets, not only their directories. */
+    @Test
+    public void theDetailListsTheProjectedFilesOfASecondaryOutput() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of(), List.of(
+                new ItemDetail.BranchDetail("Thumbs", new TargetProjection.Targets(List.of(Path.of("/thumbs"))),
+                        List.of(Path.of("/thumbs/s.jpg"), Path.of("/thumbs/l.jpg")), null)));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertEquals(List.of("   " + quoted("Thumbs") + " → " + Path.of("/thumbs/s.jpg"),
+                "      " + Path.of("/thumbs/l.jpg")), lines.subList(start + 1, lines.size()));
+    }
+
+    /** Once the item is copied, what each secondary output really did: its outcome, its error, its targets. */
+    @Test
+    public void theDetailListsWhatEachSecondaryOutputDidAfterTheCopy() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        ItemDetail detail = new ItemDetail(List.of(), TargetProjection.NONE, List.of(), List.of(
+                new ItemDetail.BranchDetail("Thumbs", TargetProjection.NONE, new WorkItemExecution.BranchResult(
+                        "Thumbs", WorkItemExecution.BranchOutcome.WRITTEN,
+                        List.of(Path.of("/thumbs/a.jpg"), Path.of("/thumbs/b.jpg")), null)),
+                new ItemDetail.BranchDetail("Web", TargetProjection.NONE, new WorkItemExecution.BranchResult(
+                        "Web", WorkItemExecution.BranchOutcome.WARNING, List.of(), "no codec"))));
+
+        List<String> lines = PlanViewModel.detailText(item, detail).lines().toList();
+
+        int start = lines.indexOf("🔀 " + ResourcesEngine.getString("plan.detail.branches"));
+        assertEquals(List.of(
+                "   " + quoted("Thumbs") + " → " + ResourcesEngine.getString("plan.detail.branch.WRITTEN"),
+                "      💾 " + Path.of("/thumbs/a.jpg"),
+                "      💾 " + Path.of("/thumbs/b.jpg"),
+                "   " + quoted("Web") + " → " + ResourcesEngine.getString("plan.detail.branch.WARNING")
+                        + " — no codec"),
+                lines.subList(start + 1, lines.size()));
+    }
+
+    @Test
+    public void theDetailWithoutSecondaryOutputHasNoSuchSection() throws IOException {
+        WorkItemExecution item = item("DSC_1.NEF", 2048);
+        String text = PlanViewModel.detailText(item, new ItemDetail(List.of(), TargetProjection.NONE, List.of()));
+
+        assertFalse(text.contains(ResourcesEngine.getString("plan.detail.branches")), text);
+    }
+
+    private static String quoted(String name) {
+        return ResourcesEngine.getString("editor.secondary.quoted", name);
+    }
+
+    private static String lastLine(WorkItemExecution item, ItemDetail detail) {
+        return PlanViewModel.detailText(item, detail).lines().toList().getLast();
+    }
+
+    @Test
+    public void aSingleTargetHasNoTooltip() {
+        assertEquals(Path.of("/nas/2026").toString(), PlanViewModel.targetText(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
+        assertNull(PlanViewModel.targetTooltip(new TargetProjection.Targets(List.of(Path.of("/nas/2026")))));
+    }
+
+    private WorkItemExecution dated(String name, String date) throws IOException {
+        WorkItem wi = new WorkItem(tempDir.resolve(name));
+        if (date != null) {
+            wi.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse(date));
+        }
+        return new WorkItemExecution(wi, List.of());
+    }
+
+    @Test
+    public void theDateColumnSortsByDateNotByItsText() throws IOException {
+        WorkItemExecution august2026 = dated("a.jpg", "2026-08-01T10:00:00Z"); // "01/08/2026"
+        WorkItemExecution january2024 = dated("b.jpg", "2024-01-02T10:00:00Z"); // "02/01/2024"
+        WorkItemExecution sameSecondB = dated("d.jpg", "2024-01-02T10:00:00Z");
+        WorkItemExecution undated = dated("c.jpg", null);
+        List<WorkItemExecution> rows = new ArrayList<>(List.of(undated, august2026, sameSecondB, january2024));
+
+        rows.sort(PlanViewModel.DATE_ORDER);
+
+        assertEquals(List.of(january2024, sameSecondB, august2026, undated), rows,
+                "by date, then name, the files without date last");
+    }
+
+    @Test
+    public void theSizeColumnSortsBySizeNotByItsText() throws IOException {
+        WorkItemExecution tenMb = item("a.jpg", 10_200_000); // "9,73 Mo"
+        WorkItemExecution nineMb = item("b.jpg", 9_500_000); // "9,06 Mo"
+        WorkItemExecution kb = item("c.jpg", 900_000); // "878,91 Ko"
+        WorkItemExecution unknown = new WorkItemExecution(new WorkItem(tempDir.resolve("d.jpg")), List.of());
+        List<WorkItemExecution> rows = new ArrayList<>(List.of(unknown, tenMb, kb, nineMb));
+
+        rows.sort(PlanViewModel.SIZE_ORDER);
+
+        assertEquals(List.of(kb, nineMb, tenMb, unknown), rows, "by bytes, the unknown sizes last");
+    }
+
+    // ---- conflicts announced by the plan (spec conflict-check §5) ----
+
+    private WorkItemExecution checked(String name, Kind kind) throws IOException {
+        WorkItemExecution item = item(name, 1);
+        item.markPrepared(); // the plan checks a target once the file is analysed
+        item.setTargetCheck(kind == Kind.FREE ? TargetCheck.free()
+                : new TargetCheck(kind, tempDir.resolve("nas").resolve(name), "copy of " + name));
+        return item;
+    }
+
+    @Test
+    public void aFileToCopyWhoseTargetExistsSaysSoAndWhatTheCopyWillDo() throws IOException {
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution free = checked("b.jpg", Kind.FREE);
+
+        assertEquals(ResourcesEngine.getString("item.status.PENDING") + " "
+                + ResourcesEngine.getString("item.status.PENDING.exists.SAME_SIZE"), PlanViewModel.statusText(same));
+        assertEquals(Optional.of("copy of a.jpg"), PlanViewModel.statusTooltip(same));
+        assertEquals(ResourcesEngine.getString("item.status.PENDING"), PlanViewModel.statusText(free));
+        assertEquals(Optional.empty(), PlanViewModel.statusTooltip(free));
+        for (Kind kind : List.of(Kind.DIFFERENT_SIZE, Kind.IDENTICAL, Kind.DIFFERENT)) {
+            assertTrue(PlanViewModel.statusText(checked("c.jpg", kind))
+                    .endsWith(ResourcesEngine.getString("item.status.PENDING.exists." + kind.name())), kind.name());
+        }
+    }
+
+    @Test
+    public void theCounterCountsTheSelectedFilesWhoseTargetExists() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution different = checked("b.jpg", Kind.DIFFERENT_SIZE);
+        WorkItemExecution free = checked("c.jpg", Kind.FREE);
+        WorkItemExecution skipped = checked("d.jpg", Kind.SAME_SIZE);
+        skipped.setSkippedByResumePoint("already imported");
+        WorkItemExecution unchecked = item("e.jpg", 1);
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, same, different, free, skipped, unchecked), List.of());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.quick", 2, 1, 1)), model.conflictText(),
+                "the skipped file does not count");
+
+        model.setFilter(Filter.CONFLICTS);
+        assertEquals(List.of(same, different), model.visibleItems());
+    }
+
+    @Test
+    public void theFullCheckCountsIdenticalAndDifferentFiles() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.PREPARED, checked("a.jpg", Kind.IDENTICAL), checked("b.jpg", Kind.IDENTICAL),
+                checked("c.jpg", Kind.DIFFERENT)), List.of());
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.full", 3, 2, 1)), model.conflictText());
+    }
+
+    @Test
+    public void theCounterIsHiddenWithoutConflictAndOnceTheCopyStarts() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, checked("a.jpg", Kind.FREE)), List.of());
+        assertEquals(Optional.empty(), model.conflictText());
+
+        WorkItemExecution same = checked("b.jpg", Kind.SAME_SIZE);
+        model.update(state(PipelineStatus.PREPARED, same), List.of());
+        assertTrue(model.conflictText().isPresent(), "told while preparing and once prepared");
+
+        model.startExecuting();
+        model.update(state(PipelineStatus.RUNNING, same), List.of());
+        assertEquals(Optional.empty(), model.conflictText(), "the statuses of the copy tell it then");
+    }
+
+    @Test
+    public void theCopyButtonLeavesOutTheFilesAFullCheckAnnouncesSkipped() throws IOException {
+        WorkItemExecution identical = item("a.jpg", 1000);
+        identical.markPrepared();
+        identical.setTargetCheck(new TargetCheck(Kind.IDENTICAL, tempDir.resolve("nas/a.jpg"), "skipped", true));
+        WorkItemExecution renamed = item("b.jpg", 3000);
+        renamed.markPrepared();
+        renamed.setTargetCheck(new TargetCheck(Kind.DIFFERENT, tempDir.resolve("nas/b.jpg"), "renamed", false));
+        WorkItemExecution free = item("c.jpg", 2000);
+        free.markPrepared();
+        free.setTargetCheck(TargetCheck.free());
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+
+        model.update(state(PipelineStatus.PREPARED, identical, renamed, free), List.of(identical, renamed, free));
+
+        PlanViewModel bytes = new PlanViewModel();
+        bytes.update(state(PipelineStatus.PREPARED, renamed, free), List.of(renamed, free));
+        String writtenSize = bytes.copyLabel().replaceAll(".*\\((.*)\\).*", "$1");
+        assertEquals(ResourcesEngine.getString("plan.copy.left-out", 2, writtenSize, 1), model.copyLabel(),
+                "2 files written, the identical one left out");
+        assertTrue(model.canCopy(), "the copy still runs: it skips it and moves the cursor");
+    }
+
+    @Test
+    public void aFileNotAnalysedYetIsNotToCopy() throws IOException {
+        WorkItemExecution listed = item("a.jpg", 1);
+
+        assertEquals(ResourcesEngine.getString("item.status.NOT_ANALYSED"), PlanViewModel.statusText(listed),
+                "listed, its analysis not run (preparing, or the preparation stopped)");
+        listed.markPrepared();
+        assertEquals(ResourcesEngine.getString("item.status.PENDING"), PlanViewModel.statusText(listed));
+    }
+
+    // ---- a chosen resume point acts like a cursor there (spec manual-point §3) ----
+
+    @Test
+    public void aPointChosenBeforePreparingIsShownAndKeptByThePreparation() {
+        PlanViewModel model = new PlanViewModel();
+        ResumePoint chosen = ResumePoint.from(new ItemKey(SHOT, "DSC01694.JPG"));
+
+        model.setChosenPoint(chosen);
+
+        assertEquals(chosen, model.chosenPoint());
+        String text = model.resumeText().orElseThrow();
+        assertTrue(text.contains("DSC01694.JPG"), text);
+        assertTrue(text.contains(ResourcesEngine.getString("plan.resume.source.MANUAL")), text);
+        model.startPreparing();
+        assertEquals(chosen, model.chosenPoint(), "the next preparations use it too");
+        assertEquals(Optional.of(text), model.resumeText(), "shown while preparing");
+        model.reset();
+        assertEquals(chosen, model.chosenPoint());
+
+        model.setChosenPoint(null);
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.auto")), model.resumeText());
+    }
+
+    @Test
+    public void thePreparedPlanOfAChosenPointCountsTheFilesBeforeIt() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        a.setSkippedByResumePoint("before the chosen point");
+        WorkItemExecution b = item("b.jpg", 1);
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.PREPARED, a, b);
+        state.setResumeProposal(proposal(ResumePoint.from(new ItemKey(SHOT, "b.jpg")), ResumeSource.MANUAL));
+
+        model.update(state, List.of(a, b));
+
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.before", 1)), model.resumeCountText());
+    }
+
+    private PlanViewModel stopped(boolean listingComplete, WorkItemExecution... items) {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.CANCELLED, items);
+        state.setListingComplete(listingComplete);
+        model.update(state, List.of());
+        return model;
+    }
+
+    @Test
+    public void aPreparationStoppedAfterItsListingCanBeResumedFromARowOrAnalysed() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        WorkItemExecution notAnalysed = item("b.jpg", 1);
+        PlanViewModel model = stopped(true, analysed, notAnalysed);
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase());
+        assertTrue(model.isStoppedAfterTheListing());
+        assertEquals(Optional.of(ResumePoint.from(new ItemKey(SHOT, "b.jpg"))), model.resumePointFrom(notAnalysed),
+                "from the date known at the listing");
+        assertEquals(List.of(notAnalysed), model.analysable(List.of(analysed, notAnalysed)), "only what is not analysed");
+        assertTrue(model.canChooseResumePoint());
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped", 2, 1), model.statusLine());
+    }
+
+    @Test
+    public void aPreparationStoppedWhileListingCannotBeResumedAndSaysWhy() throws IOException {
+        WorkItemExecution listed = item("a.jpg", 1);
+        PlanViewModel model = stopped(false, listed);
+
+        assertFalse(model.isStoppedAfterTheListing());
+        assertEquals(Optional.empty(), model.resumePointFrom(listed));
+        assertEquals(List.of(), model.analysable(List.of(listed)));
+        assertEquals(ResourcesEngine.getString("plan.prepare-stopped.listing", 1), model.statusLine());
+        assertTrue(model.canChooseResumePoint(), "a point can still be chosen for the next preparation");
+    }
+
+    @Test
+    public void aPointChosenOnAStoppedPreparationWaitsForTheNextPreparation() throws IOException {
+        WorkItemExecution analysed = item("a.jpg", 1);
+        analysed.markPrepared();
+        PlanViewModel model = stopped(true, analysed, item("b.jpg", 1));
+        ResumePoint point = model.resumePointFrom(analysed).orElseThrow();
+
+        model.setChosenPoint(point); // "Resume from here"
+
+        assertEquals(Phase.PREPARE_STOPPED, model.phase(), "the stopped analysis does not start again by itself");
+        assertEquals(2, model.items().size());
+        assertEquals(point, model.chosenPoint());
+        assertTrue(model.resumeText().isPresent(), "the resume line shows the chosen point");
+        assertTrue(model.canPrepare(), "Prepare starts again from it");
+        assertFalse(model.canCopy());
+    }
+
+    // ---- computed once per update ----
+
+    @Test
+    public void theCountersAreThoseOfTheLastUpdateUntilTheNextOne() throws IOException {
+        WorkItemExecution a = item("a.jpg", 100);
+        WorkItemExecution b = item("b.jpg", 300);
+        PlanViewModel model = prepared(false, a, b);
+        model.startExecuting();
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of(a, b));
+        assertEquals(new Progress(0, 2, 0, 400), model.progress());
+
+        a.setDone(); // in the engine, not notified yet
+        assertEquals(new Progress(0, 2, 0, 400), model.progress(), "read again: the value of the last update");
+
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of(a, b));
+        assertEquals(new Progress(1, 2, 100, 400), model.progress(), "the next notification brings the change");
+        model.setFilter(Filter.TO_COPY);
+        assertEquals(List.of(b), model.visibleItems(), "a new filter filters the rows again");
+    }
+
+    @Test
+    public void theFilteredRowsAreFilteredOnceUntilTheRowsOrTheFilterChange() throws IOException {
+        WorkItemExecution a = item("a.jpg", 1);
+        WorkItemExecution b = item("b.jpg", 1);
+        b.setSkipped("already imported");
+        PlanViewModel model = prepared(false, a, b);
+        model.setFilter(Filter.SKIPPED);
+
+        List<WorkItemExecution> visible = model.visibleItems();
+        assertEquals(List.of(b), visible);
+        assertSame(visible, model.visibleItems(), "filtered once, however often it is read");
+
+        model.update(state(PipelineStatus.PREPARED, a, b), List.of(a, b));
+        assertNotSame(visible, model.visibleItems(), "an update filters the rows again");
+        assertEquals(List.of(b), model.visibleItems());
+    }
+
+    @Test
+    public void theCountersMatchThoseOfAFreshModel() throws IOException {
+        WorkItemExecution same = checked("a.jpg", Kind.SAME_SIZE);
+        WorkItemExecution different = checked("b.jpg", Kind.DIFFERENT_SIZE);
+        WorkItemExecution before = item("c.jpg", 10);
+        before.setSkippedByResumePoint("before");
+        WorkItemExecution failed = item("d.jpg", 20);
+        failed.setError(new IllegalStateException("unreadable"));
+        WorkItemExecution[] all = {same, different, before, failed};
+        PipelineState state = state(PipelineStatus.PREPARED, all);
+        state.setResumeProposal(proposal(ResumePoint.after(new ItemKey(SHOT, "c.jpg")), ResumeSource.DESTINATION));
+        PlanViewModel cached = new PlanViewModel();
+        cached.startPreparing();
+        cached.update(state(PipelineStatus.RUNNING, same), List.of());
+        assertEquals(new Plan.Counts(1, 0, 0, 1), cached.counts()); // computed for the first update...
+        cached.update(state, List.of(all)); // ...then again for this one
+
+        PlanViewModel fresh = new PlanViewModel();
+        fresh.startPreparing();
+        fresh.update(state, List.of(all));
+
+        assertEquals(new Plan.Counts(2, 1, 1, 2), cached.counts());
+        assertEquals(fresh.counts(), cached.counts());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.conflicts.quick", 2, 1, 1)), cached.conflictText());
+        assertEquals(fresh.conflictText(), cached.conflictText());
+        assertEquals(fresh.copyLabel(), cached.copyLabel());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.resume.count.imported", 1)), cached.resumeCountText());
+        assertEquals(fresh.resumeCountText(), cached.resumeCountText());
+    }
+
+    @Test
+    public void theSameListingStillInOrderIsNotSortedAgain() throws IOException {
+        WorkItemExecution late = dated("b.jpg", "2026-08-07T10:00:00Z");
+        WorkItemExecution early = dated("a.jpg", "2023-12-24T10:00:00Z");
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, late, early), List.of());
+        List<WorkItemExecution> rows = model.items();
+        assertEquals(List.of(early, late), rows);
+
+        model.update(state(PipelineStatus.RUNNING, late, early), List.of());
+        assertSame(rows, model.items(), "nothing changed: the rows are kept as they are");
+
+        WorkItemExecution middle = dated("c.jpg", "2025-01-01T10:00:00Z");
+        model.update(state(PipelineStatus.RUNNING, late, early, middle), List.of());
+        assertEquals(List.of(early, middle, late), model.items(), "a file listed since: sorted again");
+    }
+
+    @Test
+    public void aDateChangedSinceTheLastSortSortsTheRowsAgain() throws IOException {
+        WorkItemExecution a = dated("a.jpg", "2023-01-01T10:00:00Z");
+        WorkItemExecution b = dated("b.jpg", "2024-01-01T10:00:00Z");
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of());
+        assertEquals(List.of(a, b), model.items());
+
+        a.getWorkItem().getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, Instant.parse("2025-01-01T10:00:00Z"));
+        model.update(state(PipelineStatus.RUNNING, a, b), List.of());
+        assertEquals(List.of(b, a), model.items(), "the same listing, its order no longer holds");
+    }
+
+    private WorkItemExecution grouped(String main, Companion... companions) throws IOException {
+        WorkItem wi = new WorkItem(tempDir.resolve(main));
+        wi.getMetadatas().setSize(10L);
+        wi.getMetadatas().setTime(WorkItemMetadata.LAST_MODIFIED, SHOT);
+        return new WorkItemExecution(wi.withCompanions(List.of(companions)), List.of());
+    }
+
+    private Companion companion(String name, CompanionRole role, CompanionLink link, String suffix) throws IOException {
+        return new Companion(new WorkItem(tempDir.resolve(name)), role, link, suffix);
+    }
+
+    @Test
+    public void theCompanionsColumnCountsThemAndItsTooltipNamesThem() throws IOException {
+        WorkItemExecution group = grouped("IMG_1.JPG",
+                companion("IMG_1.xmp", CompanionRole.COPY, CompanionLink.BASE, ".xmp"),
+                companion("IMG_1.wav", CompanionRole.READ, CompanionLink.BASE, ".wav"));
+
+        assertEquals("2", PlanViewModel.companionsText(group));
+        assertEquals("IMG_1.xmp (" + ResourcesEngine.getString("plan.companion.role.COPY") + ")\nIMG_1.wav ("
+                + ResourcesEngine.getString("plan.companion.role.READ") + ")", PlanViewModel.companionsTooltip(group));
+        WorkItemExecution alone = item("b.jpg", 1);
+        assertEquals("", PlanViewModel.companionsText(alone));
+        assertNull(PlanViewModel.companionsTooltip(alone));
+    }
+
+    @Test
+    public void theDetailListsTheCompanionsWithRoleAndTarget() throws IOException {
+        WorkItemExecution group = grouped("IMG_1.JPG",
+                companion("IMG_1.xmp", CompanionRole.COPY, CompanionLink.BASE, ".xmp"),
+                companion("IMG_1.wav", CompanionRole.READ, CompanionLink.BASE, ".wav"));
+        ItemDetail detail = new ItemDetail(List.of(), new TargetProjection.Targets(List.of(Path.of("/nas"))),
+                List.of(Path.of("/nas/2026/IMG_9.JPG")));
+
+        List<String> lines = PlanViewModel.detailText(group, detail).lines().toList();
+
+        assertTrue(lines.contains("   " + ResourcesEngine.getString("plan.detail.companion", "IMG_1.xmp",
+                ResourcesEngine.getString("plan.companion.role.COPY"),
+                Path.of("/nas/2026").resolve("IMG_9.xmp"))), lines.toString());
+        assertTrue(lines.contains("   " + ResourcesEngine.getString("plan.detail.companion.read", "IMG_1.wav",
+                ResourcesEngine.getString("plan.companion.role.READ"))), lines.toString());
+    }
+
+    @Test
+    public void theArchiveCounterTellsUnfoldedAndToDownloadOnlyWhenArchivesWereUnfolded() throws IOException {
+        PlanViewModel model = new PlanViewModel();
+        model.startPreparing();
+        PipelineState state = state(PipelineStatus.RUNNING, item("a.jpg", 1));
+        model.update(state, List.of());
+        assertEquals(Optional.empty(), model.archivesText());
+
+        state.addArchiveUnfolded();
+        state.addArchiveUnfolded();
+        state.addArchiveToDownload(2048);
+        model.update(state, List.of());
+        assertEquals(Optional.of(ResourcesEngine.getString("plan.archives", 2, 1,
+                FileUtil.toAutoUnitSize(2048, 1, Locale.getDefault()))), model.archivesText());
+    }
+}

@@ -1,0 +1,114 @@
+Copybot
+Copyright the Copybot authors, distributed under the GNU General Public License v3 (see LICENSE).
+
+This product includes third-party software and data.
+
+-------------------------------------------------------------------------------
+Optional plugin gps-zone (copybot-plugin/copybot-plugin-gps-zone)
+-------------------------------------------------------------------------------
+
+Time zone boundary data
+  Contains the time zone boundaries of Timezone Boundary Builder
+  (https://github.com/evansiroky/timezone-boundary-builder), built from
+  OpenStreetMap data, (c) OpenStreetMap contributors.
+  The data is made available under the Open Data Commons Open Database License
+  (ODbL) v1.0: https://opendatacommons.org/licenses/odbl/1-0/
+  It is embedded, unmodified, in the timeshape library below (data.tar.zstd).
+
+timeshape 2026b.29 (net.iakovlev:timeshape), https://github.com/RomanIakovlev/timeshape
+  Code under the MIT License; its time zone data under the ODbL (above).
+
+Libraries used by timeshape, shipped in the lib/ folder of the plugin:
+  geojson-proto (net.iakovlev)            MIT License
+  Esri Geometry API for Java              Apache License 2.0
+  Protocol Buffers (com.google.protobuf)  BSD 3-Clause License
+  Apache Commons Compress, IO, Lang, Codec  Apache License 2.0
+  Jackson Core                            Apache License 2.0
+  zstd-jni (com.github.luben)             BSD 2-Clause License
+  SLF4J API                               MIT License
+
+-------------------------------------------------------------------------------
+Plugin metadata-extractor (copybot-plugin/copybot-plugin-metadata-extractor)
+-------------------------------------------------------------------------------
+
+  metadata-extractor (com.drewnoakes)     Apache License 2.0
+  Apache Commons Imaging                  Apache License 2.0
+
+-------------------------------------------------------------------------------
+Plugin notify-email (copybot-plugin/copybot-plugin-notify-email)
+-------------------------------------------------------------------------------
+
+Libraries shipped in the lib/ folder of the plugin:
+  Jakarta Mail API 2.1.5 (jakarta.mail)          EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Angus Mail 2.0.5 (org.eclipse.angus)           EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Jakarta Activation API 2.1.4 (jakarta.activation)  EDL 1.0 (BSD 3-Clause)
+  Angus Activation 2.0.3 (org.eclipse.angus)     EDL 1.0 (BSD 3-Clause)
+
+-------------------------------------------------------------------------------
+Plugin remote (copybot-plugin/copybot-plugin-remote)
+-------------------------------------------------------------------------------
+
+Libraries shipped in the lib/ folder of the plugin (each jar also holds its
+licence texts in META-INF/):
+
+JSch 2.28.8 (com.github.mwiede:jsch), https://github.com/mwiede/jsch
+  BSD-style licence:
+
+  Copyright (c) 2002-2015 Atsuhiko Yamanaka, JCraft,Inc.
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+    1. Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in
+       the documentation and/or other materials provided with the distribution.
+
+    3. The names of the authors may not be used to endorse or promote products
+       derived from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
+  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+  FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL JCRAFT,
+  INC. OR ANY CONTRIBUTORS TO THIS SOFTWARE BE LIABLE FOR ANY DIRECT, INDIRECT,
+  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+  OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+  EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+  JSch includes JZlib (Copyright (c) 2000-2011 ymnk, JCraft,Inc., the same
+  BSD-style licence) and jBCrypt (Copyright (c) 2006 Damien Miller, ISC-style
+  licence); their texts are in the jar, META-INF/LICENSE.JZlib.txt and
+  META-INF/LICENSE.jBCrypt.txt.
+
+Apache Commons Net 3.13.0 (commons-net:commons-net)   Apache License 2.0
+  Apache Commons Net
+  Copyright 2001-2026 The Apache Software Foundation
+
+  This product includes software developed at
+  The Apache Software Foundation (https://www.apache.org/).
+
+Apache Commons IO 2.21.0 (commons-io:commons-io)      Apache License 2.0
+  Apache Commons IO
+  Copyright 2002-2025 The Apache Software Foundation
+
+  This product includes software developed at
+  The Apache Software Foundation (https://www.apache.org/).
+
+The Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+
+-------------------------------------------------------------------------------
+Plugin ffmpeg (copybot-plugin/copybot-plugin-ffmpeg)
+-------------------------------------------------------------------------------
+
+FFmpeg is not distributed with Copybot or with the plugin. When the user asks
+for it, the plugin downloads a build of FFmpeg (https://ffmpeg.org) made by
+BtbN (https://github.com/BtbN/FFmpeg-Builds), licensed under the GNU General
+Public License (GPL) v3; the user downloads it and uses it under that licence,
+whose text comes with the build. The sources of FFmpeg are on
+https://ffmpeg.org.

@@ -1,0 +1,41 @@
+import com.copybot.plugin.api.definition.ILanguagePack;
+import com.copybot.plugin.api.definition.IPlugin;
+import com.copybot.plugin.embedded.CBEmbeddedPlugin;
+
+module com.copybot.engine {
+    requires java.logging;
+    requires info.picocli;
+    requires transitive com.google.gson; // the plugin API exposes JsonElement
+
+    exports com.copybot.config to com.google.gson, com.copybot.ui;
+    exports com.copybot.exception;
+    exports com.copybot.resources;
+    exports com.copybot.utils;
+
+    exports com.copybot.engine to com.copybot.ui;
+    opens com.copybot.engine to info.picocli;
+
+    exports com.copybot.engine.pipeline to com.google.gson, com.copybot.ui;
+    exports com.copybot.engine.resume to com.google.gson, com.copybot.ui;
+    exports com.copybot.engine.resources to com.copybot.ui;
+    exports com.copybot.engine.plugin to com.copybot.ui;
+    exports com.copybot.engine.plugin.report to com.copybot.ui;
+    exports com.copybot.engine.sample to com.copybot.ui;
+    exports com.copybot.engine.listing to com.copybot.ui;
+
+    exports com.copybot.plugin.api;
+    exports com.copybot.plugin.api.action;
+    exports com.copybot.plugin.api.definition;
+    exports com.copybot.plugin.api.config;
+    exports com.copybot.plugin.api.pattern;
+    exports com.copybot.plugin.api.grouping;
+
+    exports com.copybot.plugin.embedded.actions to com.google.gson, com.copybot.ui; // gson reads the config records
+    exports com.copybot to com.copybot.ui;
+    opens com.copybot to info.picocli;
+
+    uses IPlugin;
+    uses ILanguagePack;
+
+    provides IPlugin with CBEmbeddedPlugin;
+}

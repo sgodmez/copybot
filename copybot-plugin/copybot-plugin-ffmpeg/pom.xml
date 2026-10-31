@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-plugin</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>copybot-plugin-ffmpeg</artifactId>
+    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
+    <version>1.0.0</version>
+
+    <properties>
+        <!-- IPlugin.getPluginCode(): the folder of the release archive -->
+        <plugin.code>ffmpeg</plugin.code>
+    </properties>
+
+    <dependencies>
+        <!--
+            The plugin exec (its process package): provided, so its jar is not copied into lib/ nor into the
+            archive; the engine loads this plugin over the layer of exec, and the catalogue installs exec with it.
+            Its version, the current one of exec (copybot-plugin/pom.xml), is the minimum this plugin requires
+            (recorded in the module descriptor and in the catalogue).
+        -->
+        <dependency>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-plugin-exec</artifactId>
+            <version>2.0.0</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <!--
+                                java.logging: the tests read the log of the runs; jdk.httpserver: the fake release
+                                server; the plugin package of the engine: FfmpegPluginIT loads the packaged plugins
+                            -->
+                            <compilerArgs>
+                                <arg>--add-reads</arg>
+                                <arg>com.copybot.plugin.ffmpeg=java.logging,jdk.httpserver</arg>
+                                <arg>--add-modules</arg>
+                                <arg>jdk.httpserver</arg>
+                                <arg>--add-exports</arg>
+                                <arg>com.copybot.engine/com.copybot.engine.plugin=com.copybot.plugin.ffmpeg</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>--add-reads com.copybot.plugin.ffmpeg=java.logging,jdk.httpserver --add-modules jdk.httpserver</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <!-- the paths of the engine module and its own modules, for the module path of FfmpegPluginIT -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>module-paths</id>
+                        <goals>
+                            <goal>properties</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                    FfmpegPluginIT: as in the application, only the engine is a module of the boot layer; the plugins
+                    and the test are on the class path, so that the engine loads exec and ffmpeg from their target/
+                    in layers of their own (see GpsZonePluginIT).
+                -->
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                    <argLine>--module-path ${com.copybot:copybot-engine:jar}${path.separator}${com.google.code.gson:gson:jar}${path.separator}${info.picocli:picocli:jar} --add-modules com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=ALL-UNNAMED</argLine>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <!--
+                    target/copybot-plugin-ffmpeg-<version>.zip, configured in copybot-plugin/pom.xml. Last: at the
+                    package phase it must run after the copy of the libraries (plugins run in the order declared).
+                -->
+                <artifactId>maven-assembly-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

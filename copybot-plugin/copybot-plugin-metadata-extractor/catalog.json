@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.metadataextractor",
+  "code": "metadata-extractor",
+  "description": {
+    "en": "Reads the metadata of photos and videos (EXIF, IPTC, XMP, QuickTime) and rewrites the EXIF date of a JPEG.",
+    "fr": "Lit les métadonnées des photos et vidéos (EXIF, IPTC, XMP, QuickTime) et réécrit la date EXIF d'un JPEG.",
+    "it": "Legge i metadati di foto e video (EXIF, IPTC, XMP, QuickTime) e riscrive la data EXIF di un JPEG."
+  },
+  "changes": {
+    "en": "Texts in Italian and missing French texts completed.",
+    "fr": "Textes en italien et textes français complétés.",
+    "it": "Testi in italiano e testi francesi completati."
+  }
+}
