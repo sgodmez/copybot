@@ -2,7 +2,7 @@ package com.copybot.engine;
 
 import com.copybot.engine.listing.ArchiveUnfolder;
 import com.copybot.engine.listing.Grouper;
-import com.copybot.engine.listing.GroupingPresets;
+import com.copybot.engine.listing.GroupingPresetRegistry;
 import com.copybot.engine.listing.ListingFailures;
 import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.GroupingConfig;
@@ -18,6 +18,7 @@ import com.copybot.plugin.api.action.ListingSink;
 import com.copybot.plugin.api.action.WorkItem;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,6 +42,8 @@ final class ListingPipe {
 
     /** Where the grouping rules and archives block are read; null: no pipe. */
     private volatile PipelineConfig config;
+    /** The presets the grouping rules cite; null: those of the loaded plugins. */
+    private volatile GroupingPresetRegistry presets;
 
     /** Counted down by each listing of the phase as it ends. */
     private volatile CountDownLatch gate;
@@ -159,7 +162,7 @@ final class ListingPipe {
                 // emit holds nothing back
             }
         };
-        Grouper grouper = rules.isEmpty() ? null : new Grouper(rules, toEmit);
+        Grouper grouper = rules.isEmpty() ? null : new Grouper(rules, groupingPresets(), toEmit);
         ListingSink grouped = grouper == null ? toEmit : grouper;
         ArchiveUnfolder unfolder = unfold == null ? null
                 : new ArchiveUnfolder(unfold, archives::workspace, archives.sources(), grouped, failed, 1,
@@ -181,9 +184,27 @@ final class ListingPipe {
         return groupingRules(config);
     }
 
+    /**
+     * The grouping rules of the pipeline as written, empty without any rule. A cited preset counts, available or not
+     * (each available one has rules; the validation refuses the others before any listing): the presets are not
+     * expanded here.
+     */
     static List<GroupingRuleConfig> groupingRules(PipelineConfig config) {
         GroupingConfig grouping = config == null ? null : config.grouping();
-        return GroupingPresets.expand(grouping).isEmpty() ? List.of() : grouping.rules();
+        if (grouping == null || grouping.rules() == null || grouping.rules().stream().allMatch(Objects::isNull)) {
+            return List.of();
+        }
+        return grouping.rules();
+    }
+
+    /** The grouping presets the rules cite: those of the loaded plugins, unless set otherwise. */
+    GroupingPresetRegistry groupingPresets() {
+        GroupingPresetRegistry presets = this.presets;
+        return presets != null ? presets : GroupingPresetRegistry.current();
+    }
+
+    void setGroupingPresets(GroupingPresetRegistry presets) {
+        this.presets = presets;
     }
 
     /**

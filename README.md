@@ -253,7 +253,23 @@ absent; `sameBase` and `doubleExtension` companions take their roles from the
 | `sony-xml` | MP4 | `<base>M01.XML` read |
 | `web-page` | HTML, HTM | `<base>_files/` copied |
 
-A Google Takeout plugin is planned (photos and their JSON metadata); it is no longer a preset of the core.
+A plugin can bring presets of its own (see [Plugins](#plugins)). The pipeline
+cites one by its code and the module name of the plugin, without version (the
+loaded version of the plugin is used):
+
+```json
+{ "preset": "takeout", "plugin": "com.copybot.plugin.takeout" }
+```
+
+The editor's *Add a preset* menu lists the core presets, then those of the
+loaded plugins (*name — plugin*), and its warnings take their rules into
+account. When the plugin is not loaded, the rule shows *code (plugin missing)*
+and the editor offers to install it, as for a step. A run refuses such a
+pipeline before listing anything: the preset of a missing plugin, an unknown
+code, and a preset the plugin declared with invalid rules (left out when the
+plugin is loaded, with a warning in the log) are each reported by name. A
+Google Takeout plugin is planned (photos and their JSON metadata); it is no
+longer a preset of the core.
 
 A group is **solidary** for conflicts. Each `copy` member is compared with its
 target and the group takes the most severe result. The pipeline's rules apply
@@ -830,6 +846,39 @@ reports the progress of the file it works on with `updateStatus` /
 `WriteContext`), shown in the plan view, and gets `beforeAll` / `afterAll`
 once per phase (preparation, execution) and `beforeEach` / `afterEach`
 around each file (see the `IAction` javadoc).
+
+A plugin can also bring **grouping presets** (see
+[Companion files and archives](#companion-files-and-archives)): it returns
+them from `IPlugin.getGroupingPresets()`, built with the factories of
+`com.copybot.plugin.api.grouping.GroupingRule` (one per rule type, with the
+same meaning and the same checks as the rules written in a pipeline):
+
+```java
+@Override
+public List<GroupingPreset> getGroupingPresets() {
+    return List.of(new GroupingPreset("takeout",
+            GroupingRule.regex("(.+\\.(?:jpe?g|heic|mp4))", "\\1(?:\\.supplemental-metadata)?\\.json",
+                    GroupingRole.READ, GroupingLink.NAME),
+            GroupingRule.sameBase(List.of("heic", "jpg"), Map.of("mov", GroupingRole.COPY))));
+}
+```
+
+A preset code is made of `a-z`, `0-9` and `-`, and has at least one rule. Its
+name and description in the editor come from the plugin's bundle, under
+`plugin.<plugin code>.preset.<preset code>.name` and `.description` (the code
+is shown when there is no name):
+
+```properties
+plugin.takeout.preset.takeout.name=Google Takeout (photos and their JSON)
+plugin.takeout.preset.takeout.description=Attaches each JSON metadata file to its photo or video, for the analysis.
+```
+
+A preset with invalid rules (a regular expression that does not compile, a
+`folder` without `{base}`…) is left out when the plugin is loaded, with a
+warning in the log; a plugin whose `getGroupingPresets()` fails (a blank
+companion extension refused by `GroupingRule`, for example) has none and is
+shown as failed in the editor; a run citing one of its presets is refused with
+a message that points to the log.
 
 The plugin API is what the engine module, `com.copybot.engine`, exports to
 every module (`com.copybot.plugin.api.*`, `com.copybot.utils`,

@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.config.SecretReferences;
+import com.copybot.engine.listing.GroupingPresetRegistry;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.ItemStatus;
@@ -344,6 +345,11 @@ public class MainExecutor implements Runnable {
     // visible for tests: the grouping rules and archives block of an executor built from pre-resolved steps
     void setListingConfig(PipelineConfig config) {
         listingPipe.setConfig(config);
+    }
+
+    // visible for tests: the grouping presets the rules cite, instead of those of the loaded plugins
+    void setGroupingPresets(GroupingPresetRegistry presets) {
+        listingPipe.setGroupingPresets(presets);
     }
 
     // visible for tests: where the work folders of the archives are made
@@ -1648,9 +1654,10 @@ public class MainExecutor implements Runnable {
         collectConfigWarnings();
         PipelineConfig listingConfig = listingPipe.config();
         if (listingConfig != null) { // before any listing, like the other refusals
-            PipelineChecks.groupingRefusal(listingConfig, findOutAction()).ifPresent(message -> {
-                throw CopybotException.of(message);
-            });
+            PipelineChecks.groupingRefusal(listingConfig, findOutAction(), listingPipe.groupingPresets())
+                    .ifPresent(message -> {
+                        throw CopybotException.of(message);
+                    });
         }
     }
 

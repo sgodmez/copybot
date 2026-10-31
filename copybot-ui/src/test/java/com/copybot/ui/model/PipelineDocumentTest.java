@@ -342,23 +342,23 @@ public class PipelineDocumentTest {
     public void companionExtensionsLeftOutByFileReadAreFoundAndAllowed() {
         PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\"]}",
                 "{\"type\":\"sameBase\",\"main\":[\"jpg\"],\"companions\":{\"xmp\":\"copy\"}}");
-        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(CATALOG));
 
-        document.allowCompanionExtensions();
+        document.allowCompanionExtensions(CATALOG);
         assertEquals("[\"*.jpg\",\"**/*.xmp\"]", tree(document.toJson()).getAsJsonArray("inSteps").get(0)
                 .getAsJsonObject().getAsJsonObject("actionConfig").get("include").toString());
-        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead());
+        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead(CATALOG));
 
         PipelineDocument excluded = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"**/*.XMP\",\"*.tmp\"]}",
                 "{\"preset\":\"raw-jpeg-xmp\"}");
-        assertEquals(List.of("xmp"), excluded.companionExtensionsExcludedByFileRead());
-        excluded.allowCompanionExtensions();
-        assertEquals(List.of(), excluded.companionExtensionsExcludedByFileRead());
+        assertEquals(List.of("xmp"), excluded.companionExtensionsExcludedByFileRead(CATALOG));
+        excluded.allowCompanionExtensions(CATALOG);
+        assertEquals(List.of(), excluded.companionExtensionsExcludedByFileRead(CATALOG));
         assertEquals("[\"*.tmp\"]", tree(excluded.toJson()).getAsJsonArray("inSteps").get(0).getAsJsonObject()
                 .getAsJsonObject("actionConfig").get("exclude").toString());
 
         assertEquals(List.of(), withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"iphone\"}")
-                .companionExtensionsExcludedByFileRead(), "no filter: nothing left out");
+                .companionExtensionsExcludedByFileRead(CATALOG), "no filter: nothing left out");
     }
 
     private static String actionConfigMember(PipelineDocument document, String name) {
@@ -371,17 +371,17 @@ public class PipelineDocumentTest {
     @Test
     public void theAllowedExtensionGoesIntoFoldersToo() {
         PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"**/*.jpg\"]}", XMP_RULE);
-        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
-        document.allowCompanionExtensions();
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(CATALOG));
+        document.allowCompanionExtensions(CATALOG);
         assertEquals("[\"**/*.jpg\",\"**/*.xmp\"]", actionConfigMember(document, "include"));
-        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead());
+        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead(CATALOG));
 
         PipelineDocument shallow = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\",\"*.xmp\"]}", XMP_RULE);
-        assertEquals(List.of("xmp"), shallow.companionExtensionsExcludedByFileRead(),
+        assertEquals(List.of("xmp"), shallow.companionExtensionsExcludedByFileRead(CATALOG),
                 "\"*.xmp\" does not match in sub-folders: the engine would drop them");
 
         PipelineDocument noInclude = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"*.xmp\"]}", XMP_RULE);
-        noInclude.allowCompanionExtensions();
+        noInclude.allowCompanionExtensions(CATALOG);
         assertEquals("null", actionConfigMember(noInclude, "include"), "an empty include stays empty");
         assertEquals("null", actionConfigMember(noInclude, "exclude"));
     }
@@ -390,9 +390,9 @@ public class PipelineDocumentTest {
     public void onlyTheExcludesOfExactlyTheExtensionAreRemoved() {
         PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"exclude\":[\"*.XMP\",\"**/*.xmp\",\"*.tmp\","
                 + "\"folder/**\",\"*.{xmp,thm}\"]}", XMP_RULE);
-        document.allowCompanionExtensions();
+        document.allowCompanionExtensions(CATALOG);
         assertEquals("[\"*.tmp\",\"folder/**\",\"*.{xmp,thm}\"]", actionConfigMember(document, "exclude"));
-        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(), "the warning stays");
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(CATALOG), "the warning stays");
     }
 
     @Test
@@ -400,18 +400,32 @@ public class PipelineDocumentTest {
         PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"include\":[\"*.jpg\"]}", XMP_RULE,
                 "{\"type\":\"sameBase\",\"companions\":[]}");
         assertEquals(2, document.groupingRules().size());
-        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead());
-        assertFalse(document.folderRuleWithNonRecursiveFileRead());
+        assertEquals(List.of("xmp"), document.companionExtensionsExcludedByFileRead(CATALOG));
+        assertFalse(document.folderRuleWithNonRecursiveFileRead(CATALOG));
         assertEquals(Optional.empty(), document.streamingGroupingWarning());
+    }
+
+    @Test
+    public void theWarningsTakeTheRulesOfThePluginPresetsIntoAccount() {
+        String takeout = "{\"preset\":\"takeout\",\"plugin\":\"com.acme.takeout\"}";
+        PipelineDocument document = withFileRead("{\"path\":\"D:/p\",\"recursive\":false,\"include\":[\"*.jpg\"]}",
+                takeout);
+        assertEquals(List.of("json"), document.companionExtensionsExcludedByFileRead(TestCatalog.WITH_PRESETS));
+        assertTrue(document.folderRuleWithNonRecursiveFileRead(TestCatalog.WITH_PRESETS));
+        assertEquals(List.of(), document.companionExtensionsExcludedByFileRead(CATALOG), "plugin absent: no rule");
+        assertFalse(document.folderRuleWithNonRecursiveFileRead(CATALOG));
+
+        document.allowCompanionExtensions(TestCatalog.WITH_PRESETS);
+        assertEquals("[\"*.jpg\",\"**/*.json\"]", actionConfigMember(document, "include"));
     }
 
     @Test
     public void theGroupingWarningsFollowTheInputsAndTheExecution() {
         PipelineDocument folder = withFileRead("{\"path\":\"D:/p\",\"recursive\":false}", "{\"preset\":\"web-page\"}");
-        assertTrue(folder.folderRuleWithNonRecursiveFileRead());
-        assertFalse(withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"web-page\"}").folderRuleWithNonRecursiveFileRead());
+        assertTrue(folder.folderRuleWithNonRecursiveFileRead(CATALOG));
+        assertFalse(withFileRead("{\"path\":\"D:/p\"}", "{\"preset\":\"web-page\"}").folderRuleWithNonRecursiveFileRead(CATALOG));
         assertFalse(withFileRead("{\"path\":\"D:/p\",\"recursive\":false}", "{\"preset\":\"iphone\"}")
-                .folderRuleWithNonRecursiveFileRead());
+                .folderRuleWithNonRecursiveFileRead(CATALOG));
 
         PipelineDocument plugin = PipelineDocument.parse("{\"execution\":\"streaming\",\"inSteps\":["
                 + "{\"action\":\"file.read\",\"actionConfig\":{\"path\":\"D:/p\"}},"

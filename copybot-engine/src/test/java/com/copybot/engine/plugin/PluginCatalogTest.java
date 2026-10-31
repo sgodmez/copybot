@@ -1,6 +1,12 @@
 package com.copybot.engine.plugin;
 
+import com.copybot.engine.listing.GroupingPresetRegistry;
+import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.StepType;
+import com.copybot.plugin.api.grouping.GroupingLink;
+import com.copybot.plugin.api.grouping.GroupingPreset;
+import com.copybot.plugin.api.grouping.GroupingRole;
+import com.copybot.plugin.api.grouping.GroupingRule;
 import com.copybot.plugin.api.action.AbstractAction;
 import com.copybot.plugin.api.action.AbstractActionWithConfig;
 import com.copybot.plugin.api.action.ActionDefinition;
@@ -28,6 +34,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Handler;
 import java.util.logging.Level;
 import java.util.logging.LogRecord;
@@ -328,5 +335,159 @@ public class PluginCatalogTest {
         assertEquals(List.of(new PluginCatalog.FailedPlugin("com.acme.failed", "2.0.0")), catalog.failedPlugins());
         assertEquals(List.of("1.0.0 demo.list"),
                 catalog.actions().stream().map(a -> a.pluginVersion() + " " + a.actionCode()).toList());
+    }
+
+    /** A plugin without action, with these texts and the presets of the supplier (which may throw). */
+    private static IPlugin withPresets(String code, Map<String, String> texts, Supplier<List<GroupingPreset>> presets) {
+        CombinedResourceBundle bundle = new CombinedResourceBundle() {
+            @Override
+            protected Object handleGetObject(String key) {
+                return texts.getOrDefault(key, "%" + key);
+            }
+        };
+        return new IPlugin() {
+            @Override
+            public String getPluginCode() {
+                return code;
+            }
+
+            @Override
+            public Iterable<String> getI18nBundleNames() {
+                return List.of();
+            }
+
+            @Override
+            public void setResourceBundle(CombinedResourceBundle resourceBundle) {
+            }
+
+            @Override
+            public CombinedResourceBundle getResourceBundle() {
+                return bundle;
+            }
+
+            @Override
+            public List<GroupingPreset> getGroupingPresets() {
+                return presets.get();
+            }
+        };
+    }
+
+    private static final GroupingRule JSON_RULE = GroupingRule.regex("(.+)", "\\1\\.json", GroupingRole.READ,
+            GroupingLink.NAME);
+    private static final GroupingRule XMP_RULE = GroupingRule.sameBase(List.of("jpg"),
+            Map.of("xmp", GroupingRole.COPY));
+
+    @Test
+    public void thePresetsOfAPluginAreListedWithTheirLocalizedTexts() {
+        IPlugin v2 = withPresets("takeout", Map.of("plugin.takeout.preset.takeout.name", "Google Takeout",
+                        "plugin.takeout.preset.takeout.description", "Photos and their JSON"),
+                () -> List.of(new GroupingPreset("takeout", JSON_RULE), new GroupingPreset("bare", XMP_RULE),
+                        new GroupingPreset("broken", GroupingRule.folder(List.of("html"), "files", GroupingRole.COPY))));
+        IPlugin v1 = withPresets("takeout", Map.of(), () -> List.of(new GroupingPreset("old", JSON_RULE)));
+
+        PluginCatalog catalog = PluginEngine.catalogOf(List.of(
+                PluginDefinition.ofLoaded("com.acme.takeout", "2.0.0", v2),
+                PluginDefinition.ofLoaded("com.acme.takeout", "1.0.0", v1)));
+
+        assertEquals(List.of(
+                        new CatalogPreset("com.acme.takeout", "takeout", "2.0.0", "takeout", "Google Takeout",
+                                "Photos and their JSON", List.of(GroupingRuleConfig.of(JSON_RULE))),
+                        new CatalogPreset("com.acme.takeout", "takeout", "2.0.0", "bare", "bare", "",
+                                List.of(GroupingRuleConfig.of(XMP_RULE)))),
+                catalog.groupingPresets(),
+                "the most recent version brings them; the name defaults to the code; an invalid one (a folder without "
+                        + "{base}) is left out as the run leaves it out");
+        assertEquals(List.of(), catalog.failedPlugins());
+    }
+
+    @Test
+    public void aPluginWhosePresetsCannotBeReadIsAFailedPlugin() {
+        IPlugin broken = withPresets("broken", Map.of(), () -> {
+            throw new IllegalStateException("no presets");
+        });
+
+        PluginCatalog catalog = PluginEngine.catalogOf(List.of(
+                PluginDefinition.ofLoaded("com.acme.broken.presets", "1.0.0", broken)));
+
+        assertEquals(List.of(new PluginCatalog.FailedPlugin("com.acme.broken.presets", "1.0.0")),
+                catalog.failedPlugins());
+        assertEquals(List.of(), catalog.groupingPresets());
+    }
+
+    @Test
+    public void aCatalogOfActionsAloneHasNoPreset() {
+        assertEquals(List.of(), new PluginCatalog(List.of(), List.of()).groupingPresets());
+        assertEquals(Set.of(), new PluginCatalog(List.of(), List.of()).presetPlugins());
+    }
+
+    @Test
+    public void aVersionWhoseActionsFailStillBringsItsPresets() {
+        IPlugin failing = new IPlugin() {
+            @Override
+            public String getPluginCode() {
+                return "takeout";
+            }
+
+            @Override
+            public Iterable<String> getI18nBundleNames() {
+                return List.of();
+            }
+
+            @Override
+            public void setResourceBundle(CombinedResourceBundle resourceBundle) {
+            }
+
+            @Override
+            public CombinedResourceBundle getResourceBundle() {
+                return null;
+            }
+
+            @Override
+            public List<ActionDefinition<? extends IInAction>> getInActions() {
+                throw new NoClassDefFoundError("com/example/Missing");
+            }
+
+            @Override
+            public List<GroupingPreset> getGroupingPresets() {
+                return List.of(new GroupingPreset("takeout", JSON_RULE));
+            }
+        };
+
+        PluginCatalog catalog = PluginEngine.catalogOf(List.of(
+                PluginDefinition.ofLoaded("com.acme.takeout.failing", "1.0.0", failing)));
+
+        assertEquals(List.of(new PluginCatalog.FailedPlugin("com.acme.takeout.failing", "1.0.0")),
+                catalog.failedPlugins());
+        assertEquals(List.of(new CatalogPreset("com.acme.takeout.failing", "takeout", "1.0.0", "takeout", "takeout",
+                        "", List.of(GroupingRuleConfig.of(JSON_RULE)))), catalog.groupingPresets(),
+                "a run accepts them: the editor offers them too");
+    }
+
+    @Test
+    public void thePluginsWhosePresetsWereReadAreKnownEvenWithoutValidPreset() {
+        IPlugin invalid = withPresets("invalid", Map.of(), () -> List.of(
+                new GroupingPreset("broken", GroupingRule.folder(List.of("html"), "files", GroupingRole.COPY))));
+        IPlugin broken = withPresets("broken", Map.of(), () -> {
+            throw new IllegalStateException("no presets");
+        });
+
+        PluginCatalog catalog = PluginEngine.catalogOf(List.of(
+                PluginDefinition.ofLoaded("com.acme.invalid", "1.0.0", invalid),
+                PluginDefinition.ofLoaded("com.acme.broken.presets", "1.0.0", broken)));
+
+        assertEquals(List.of(), catalog.groupingPresets());
+        assertEquals(Set.of("com.acme.invalid"), catalog.presetPlugins());
+    }
+
+    @Test
+    public void theCatalogRegistryIsBuiltFromTheListItIsGiven() {
+        IPlugin plugin = withPresets("other", Map.of(), () -> List.of(new GroupingPreset("other", JSON_RULE)));
+        List<PluginDefinition> notLoaded = List.of(PluginDefinition.ofLoaded("com.acme.not.loaded", "1.0.0", plugin));
+
+        assertTrue(GroupingPresetRegistry.current(notLoaded).hasPlugin("com.acme.not.loaded"));
+        assertFalse(GroupingPresetRegistry.current().hasPlugin("com.acme.not.loaded"),
+                "a list that is not the loaded one does not replace the current registry");
+        assertSame(GroupingPresetRegistry.current(),
+                GroupingPresetRegistry.current(PluginEngine.getLoadedPlugins()));
     }
 }

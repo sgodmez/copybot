@@ -2,9 +2,11 @@ package com.copybot.ui;
 
 import com.copybot.engine.listing.GroupingPresets;
 import com.copybot.engine.pipeline.ArchivesConfig;
+import com.copybot.engine.plugin.CatalogPreset;
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.model.PipelineDocument;
 import com.copybot.ui.model.PipelineDocument.StreamingNote;
+import com.copybot.ui.model.StepCatalog;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -28,10 +30,12 @@ import javafx.util.StringConverter;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * The editor forms of the "Regroupements" and "Archives" nodes (spec grouping-archives, IHM): the list of the
@@ -50,8 +54,13 @@ final class GroupingForms {
 
     // ---- Regroupements ----
 
-    /** @param refresh rebuilds the form (the warnings follow the document) */
-    static Node groupingForm(PipelineDocument document, Window owner, Runnable refresh) {
+    /**
+     * @param catalog the presets of the loaded plugins (offered, labelled and expanded for the warnings)
+     * @param install what can be done about a plugin that is not loaded ("Install"), empty when nothing
+     * @param refresh rebuilds the form (the warnings follow the document)
+     */
+    static Node groupingForm(PipelineDocument document, StepCatalog catalog, Function<String, Optional<Node>> install,
+                             Window owner, Runnable refresh) {
         ListView<JsonObject> list = new ListView<>();
         list.getItems().setAll(document.groupingRules());
         list.setPlaceholder(new Label(ResourcesEngine.getString("editor.grouping.empty")));
@@ -60,20 +69,19 @@ final class GroupingForms {
             @Override
             protected void updateItem(JsonObject rule, boolean empty) {
                 super.updateItem(rule, empty);
-                setText(empty || rule == null ? null : ruleLabel(rule));
+                setText(empty || rule == null ? null : ruleLabel(catalog, rule));
             }
         });
 
         MenuButton addPreset = new MenuButton(ResourcesEngine.getString("editor.grouping.add-preset"));
         for (String preset : GroupingPresets.names()) {
-            MenuItem item = new MenuItem(ResourcesEngine.getString("editor.grouping.preset." + preset));
-            item.setOnAction(e -> {
-                JsonObject rule = new JsonObject();
-                rule.addProperty("preset", preset);
-                document.addGroupingRule(rule);
-                refresh.run();
-            });
-            addPreset.getItems().add(item);
+            JsonObject rule = new JsonObject();
+            rule.addProperty("preset", preset);
+            addPreset.getItems().add(presetItem(ResourcesEngine.getString("editor.grouping.preset." + preset), rule,
+                    document, refresh));
+        }
+        for (CatalogPreset preset : catalog.groupingPresets()) {
+            addPreset.getItems().add(presetItem(menuLabel(preset), citation(preset), document, refresh));
         }
         Button addRule = new Button(ResourcesEngine.getString("editor.grouping.add-rule"));
         addRule.setOnAction(e -> ruleDialog(owner).ifPresent(rule -> {
@@ -101,8 +109,47 @@ final class GroupingForms {
         Label help = wrapped(ResourcesEngine.getString("editor.grouping.help"));
         VBox form = new VBox(6, title(ResourcesEngine.getString("editor.grouping")), help, list,
                 new HBox(6, addPreset, addRule, remove, up, down));
-        warnings(document, refresh).forEach(form.getChildren()::add);
+        missingPlugins(document, catalog, install).forEach(form.getChildren()::add);
+        warnings(document, catalog, refresh).forEach(form.getChildren()::add);
         return form;
+    }
+
+    private static MenuItem presetItem(String label, JsonObject rule, PipelineDocument document, Runnable refresh) {
+        MenuItem item = new MenuItem(label);
+        item.setOnAction(e -> {
+            document.addGroupingRule(rule.deepCopy());
+            refresh.run();
+        });
+        return item;
+    }
+
+    /** The entry of a plugin preset in "Add a preset": its name and its plugin. */
+    static String menuLabel(CatalogPreset preset) {
+        return ResourcesEngine.getString("editor.grouping.preset.of-plugin", preset.name(), preset.pluginName());
+    }
+
+    /** How the pipeline cites a plugin preset: its code and the module name of its plugin. */
+    static JsonObject citation(CatalogPreset preset) {
+        JsonObject rule = new JsonObject();
+        rule.addProperty("preset", preset.code());
+        rule.addProperty("plugin", preset.pluginName());
+        return rule;
+    }
+
+    /** One line per plugin of a cited preset that is not loaded, with what can be done ("Install"). */
+    private static List<Node> missingPlugins(PipelineDocument document, StepCatalog catalog,
+                                             Function<String, Optional<Node>> install) {
+        Set<String> plugins = new LinkedHashSet<>();
+        for (JsonObject rule : document.groupingRules()) {
+            StepCatalog.presetPlugin(rule).filter(plugin -> !catalog.isLoaded(plugin)).ifPresent(plugins::add);
+        }
+        List<Node> nodes = new ArrayList<>();
+        for (String plugin : plugins) {
+            VBox box = new VBox(4, warning(ResourcesEngine.getString("editor.grouping.plugin-missing", plugin)));
+            install.apply(plugin).ifPresent(box.getChildren()::add);
+            nodes.add(box);
+        }
+        return nodes;
     }
 
     private static void move(PipelineDocument document, ListView<JsonObject> list, int delta, Runnable refresh) {
@@ -112,19 +159,19 @@ final class GroupingForms {
     }
 
     /** The warnings of the grouping rules (spec grouping-archives, Filtres de l'entrée and Mode continu). */
-    private static List<Node> warnings(PipelineDocument document, Runnable refresh) {
+    private static List<Node> warnings(PipelineDocument document, StepCatalog catalog, Runnable refresh) {
         List<Node> nodes = new ArrayList<>();
-        List<String> excluded = document.companionExtensionsExcludedByFileRead();
+        List<String> excluded = document.companionExtensionsExcludedByFileRead(catalog);
         if (!excluded.isEmpty()) {
             Button allow = new Button(ResourcesEngine.getString("editor.grouping.warning.allow"));
             allow.setOnAction(e -> {
-                document.allowCompanionExtensions();
+                document.allowCompanionExtensions(catalog);
                 refresh.run();
             });
             nodes.add(new VBox(4, warning(ResourcesEngine.getString("editor.grouping.warning.excluded",
                     String.join(", ", excluded))), allow));
         }
-        if (document.folderRuleWithNonRecursiveFileRead()) {
+        if (document.folderRuleWithNonRecursiveFileRead(catalog)) {
             nodes.add(warning(ResourcesEngine.getString("editor.grouping.warning.folder")));
         }
         document.streamingGroupingWarning().ifPresent(note -> {
@@ -171,12 +218,22 @@ final class GroupingForms {
         return label;
     }
 
-    /** A preset by its localized name; an own rule by its type, its main extensions and what it attaches. */
-    static String ruleLabel(JsonObject rule) {
+    /**
+     * A preset by its localized name (one of a plugin that is not loaded by its code and "plugin missing", an unknown
+     * one by its code and "?"); an own rule by its type, its main extensions and what it attaches.
+     */
+    static String ruleLabel(StepCatalog catalog, JsonObject rule) {
         String preset = text(rule, "preset");
         if (!preset.isEmpty()) {
-            return GroupingPresets.isKnown(preset) ? ResourcesEngine.getString("editor.grouping.preset." + preset)
-                    : preset + " (?)";
+            Optional<String> plugin = StepCatalog.presetPlugin(rule);
+            if (plugin.isEmpty()) {
+                return GroupingPresets.isKnown(preset) ? ResourcesEngine.getString("editor.grouping.preset." + preset)
+                        : preset + " (?)";
+            }
+            if (!catalog.isLoaded(plugin.get())) {
+                return ResourcesEngine.getString("editor.grouping.preset.plugin-missing", preset);
+            }
+            return catalog.groupingPreset(plugin.get(), preset).map(CatalogPreset::name).orElse(preset + " (?)");
         }
         StringBuilder label = new StringBuilder(text(rule, "type"));
         String main = String.join(", ", list(rule.get("main")));

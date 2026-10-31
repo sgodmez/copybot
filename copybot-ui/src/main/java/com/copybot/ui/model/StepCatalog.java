@@ -1,6 +1,10 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.listing.GroupingPresetRegistry;
+import com.copybot.engine.listing.GroupingPresets;
+import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.plugin.CatalogAction;
+import com.copybot.engine.plugin.CatalogPreset;
 import com.copybot.engine.plugin.PluginCatalog;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.utils.VersionUtil;
@@ -17,17 +21,55 @@ import java.util.Set;
 
 /**
  * The loaded actions as the pipeline editor uses them (spec desktop-ui §3): what a section can add, and
- * which action a step of the pipeline resolves to, with the engine's rules.
+ * which action a step of the pipeline resolves to, with the engine's rules. Also the grouping presets of the
+ * loaded plugins (spec plugin grouping presets §5).
  */
 public final class StepCatalog {
 
     private final List<CatalogAction> actions;
     private final List<FailedPlugin> failedPlugins;
+    private final List<CatalogPreset> groupingPresets;
+    private final Set<String> presetPlugins;
 
     /** @param catalog of {@code PluginEngine.catalog()}: most recent plugin version first */
     public StepCatalog(PluginCatalog catalog) {
         this.actions = catalog.actions();
         this.failedPlugins = catalog.failedPlugins();
+        this.groupingPresets = catalog.groupingPresets();
+        this.presetPlugins = catalog.presetPlugins();
+    }
+
+    /** The grouping presets of the loaded plugins, what "Add a preset" offers after those of the core. */
+    public List<CatalogPreset> groupingPresets() {
+        return groupingPresets;
+    }
+
+    /** The grouping preset of this plugin (module name) and code, empty when it is not loaded. */
+    public Optional<CatalogPreset> groupingPreset(String plugin, String code) {
+        return groupingPresets.stream().filter(p -> p.pluginName().equals(plugin) && p.code().equals(code))
+                .findFirst();
+    }
+
+    /**
+     * The rules with each preset replaced by its rules: a core one, or one of a loaded plugin. Lenient, for the
+     * editor's warnings: a preset that is not available (unknown, its plugin missing) and a null rule are left out;
+     * a run refuses such a preset before any listing.
+     */
+    public List<GroupingRuleConfig> expandGroupingRules(List<GroupingRuleConfig> rules) {
+        List<GroupingRuleConfig> expanded = new ArrayList<>();
+        for (GroupingRuleConfig rule : rules) {
+            if (rule == null) {
+                continue;
+            }
+            if (rule.preset() == null) {
+                expanded.add(rule);
+            } else if (GroupingPresetRegistry.isCore(rule)) {
+                GroupingPresets.rules(rule.preset()).ifPresent(expanded::addAll);
+            } else {
+                groupingPreset(rule.plugin(), rule.preset()).ifPresent(p -> expanded.addAll(p.rules()));
+            }
+        }
+        return expanded;
     }
 
     /** A loaded plugin version: listed (its actions are in the catalog) or failed. */
@@ -76,17 +118,22 @@ public final class StepCatalog {
         return resolve(pluginName(step), text(step, "version")).map(Version::failed);
     }
 
-    /** True when a version of this plugin was loaded, failed or not. */
+    /**
+     * True when a version of this plugin was loaded, failed or not: it has actions, failed, or its grouping presets
+     * were read (even if all of them were discarded as invalid).
+     */
     public boolean isLoaded(String pluginName) {
         return actions.stream().anyMatch(a -> a.pluginName().equals(pluginName))
-                || failedPlugins.stream().anyMatch(f -> f.pluginName().equals(pluginName));
+                || failedPlugins.stream().anyMatch(f -> f.pluginName().equals(pluginName))
+                || groupingPresets.stream().anyMatch(p -> p.pluginName().equals(pluginName))
+                || pluginName != null && presetPlugins.contains(pluginName); // an immutable set refuses null
     }
 
     /**
-     * The plugins the steps of the pipeline (secondary outputs included) name that are not loaded at all, in pipeline
-     * order without duplicates (a plugin loaded in another version is not counted). Not loaded is not always not
-     * installed: a plugin that failed to load (refused for its API, a missing dependency) is here too; "Install" is
-     * offered only for what the catalogue rows say leads somewhere ({@code PluginRow.offersInstall}).
+     * The plugins the steps of the pipeline (secondary outputs included), then its grouping presets, name that are not
+     * loaded at all, in that order without duplicates (a plugin loaded in another version is not counted). Not loaded
+     * is not always not installed: a plugin that failed to load (refused for its API, a missing dependency) is here
+     * too; "Install" is offered only for what the catalogue rows say leads somewhere ({@code PluginRow.offersInstall}).
      */
     public List<String> missingPlugins(PipelineDocument document) {
         Set<String> missing = new LinkedHashSet<>();
@@ -96,7 +143,17 @@ public final class StepCatalog {
                 missing.add(plugin);
             }
         }
+        for (JsonObject rule : document.groupingRules()) {
+            presetPlugin(rule).filter(plugin -> !isLoaded(plugin)).ifPresent(missing::add);
+        }
         return List.copyOf(missing);
+    }
+
+    /** The plugin (module name) of the grouping preset the rule cites, empty for a core preset or an own rule. */
+    public static Optional<String> presetPlugin(JsonObject rule) {
+        String preset = text(rule, "preset");
+        String plugin = text(rule, "plugin");
+        return preset == null || plugin == null || plugin.isBlank() ? Optional.empty() : Optional.of(plugin);
     }
 
     /** The most recent loaded version of the plugin compatible with the required one, failed or not. */

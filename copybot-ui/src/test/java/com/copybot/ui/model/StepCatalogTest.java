@@ -1,16 +1,20 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.listing.GroupingPresets;
+import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.StepType;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
 import com.copybot.ui.model.PipelineDocument.Section;
+import com.copybot.utils.GsonUtil;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static com.copybot.ui.model.TestCatalog.CATALOG;
 import static com.copybot.ui.model.TestCatalog.EXIF_1;
@@ -18,6 +22,8 @@ import static com.copybot.ui.model.TestCatalog.EXIF_2;
 import static com.copybot.ui.model.TestCatalog.LAUNCH;
 import static com.copybot.ui.model.TestCatalog.MAIL;
 import static com.copybot.ui.model.TestCatalog.READ;
+import static com.copybot.ui.model.TestCatalog.TAKEOUT;
+import static com.copybot.ui.model.TestCatalog.WITH_PRESETS;
 import static com.copybot.ui.model.TestCatalog.WRITE;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -143,5 +149,57 @@ public class StepCatalogTest {
                                        "outStep": {"plugin": "com.acme.ftp", "action": "ftp.write"}}]}""");
 
         assertEquals(List.of("com.acme.thumbs", "com.acme.ftp"), catalog.missingPlugins(document));
+    }
+
+    private static GroupingRuleConfig rule(String json) {
+        return GsonUtil.getGson().fromJson(json, GroupingRuleConfig.class);
+    }
+
+    @Test
+    public void aPluginPresetIsFoundByItsPluginAndCode() {
+        assertEquals(List.of(TAKEOUT), WITH_PRESETS.groupingPresets());
+        assertEquals(Optional.of(TAKEOUT), WITH_PRESETS.groupingPreset("com.acme.takeout", "takeout"));
+        assertEquals(Optional.empty(), WITH_PRESETS.groupingPreset("com.acme.takeout", "other"));
+        assertEquals(Optional.empty(), WITH_PRESETS.groupingPreset("com.acme.other", "takeout"));
+        assertEquals(Optional.empty(), WITH_PRESETS.groupingPreset(null, "takeout"), "a core citation");
+        assertTrue(WITH_PRESETS.isLoaded("com.acme.takeout"), "a plugin with presets only is loaded");
+    }
+
+    @Test
+    public void theExpansionReplacesTheCorePresetsAndThoseOfTheLoadedPlugins() {
+        GroupingRuleConfig own = rule("{\"type\":\"sameBase\",\"main\":[\"cr3\"],\"companions\":{\"xmp\":\"copy\"}}");
+        List<GroupingRuleConfig> expanded = WITH_PRESETS.expandGroupingRules(List.of(own,
+                rule("{\"preset\":\"iphone\"}"), rule("{\"preset\":\"takeout\",\"plugin\":\"com.acme.takeout\"}"),
+                rule("{\"preset\":\"takeout\",\"plugin\":\"com.acme.absent\"}"), rule("{\"preset\":\"unknown\"}")));
+
+        List<GroupingRuleConfig> expected = new java.util.ArrayList<>(List.of(own));
+        expected.addAll(GroupingPresets.rules("iphone").orElseThrow());
+        expected.addAll(TAKEOUT.rules());
+        assertEquals(expected, expanded, "lenient: what is not available is left out");
+    }
+
+    @Test
+    public void thePluginOfAPresetThatIsNotLoadedIsMissing() {
+        PipelineDocument document = PipelineDocument.parse("""
+                {"inSteps": [{"plugin": "com.acme.gps", "action": "gps.read"}],
+                 "grouping": {"rules": [{"preset": "iphone"},
+                                        {"preset": "takeout", "plugin": "com.acme.takeout"},
+                                        {"preset": "maps", "plugin": "com.acme.maps"},
+                                        {"preset": "more", "plugin": "com.acme.gps"},
+                                        {"plugin": "com.acme.alone", "type": "sameBase"}]}}""");
+
+        assertEquals(List.of("com.acme.gps", "com.acme.maps"), WITH_PRESETS.missingPlugins(document),
+                "steps first; a core preset or a rule without preset names no plugin");
+    }
+
+    @Test
+    public void aPluginWhosePresetsWereReadButAllDiscardedIsLoaded() {
+        StepCatalog catalog = new StepCatalog(new PluginCatalog(List.of(), List.of(), List.of(),
+                Set.of("com.acme.invalid")));
+        PipelineDocument document = PipelineDocument.parse("""
+                {"grouping": {"rules": [{"preset": "broken", "plugin": "com.acme.invalid"}]}}""");
+
+        assertTrue(catalog.isLoaded("com.acme.invalid"));
+        assertEquals(List.of(), catalog.missingPlugins(document), "no install prompt: the plugin is there");
     }
 }

@@ -355,8 +355,51 @@ com.copybot.plugin.api.definition.IPlugin method public default java.util.List<c
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IOutAction>> getOutActions()
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IProcessAction>> getProcessActions()
 com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.action.ActionDefinition<? extends com.copybot.plugin.api.action.IRunEndAction>> getRunEndActions()
+com.copybot.plugin.api.definition.IPlugin method public default java.util.List<com.copybot.plugin.api.grouping.GroupingPreset> getGroupingPresets()
 com.copybot.plugin.api.definition.IPlugin method public default void loadConfig(com.google.gson.JsonElement)
 com.copybot.plugin.api.definition.IPlugin type public abstract interface com.copybot.plugin.api.definition.IPlugin
+com.copybot.plugin.api.grouping.GroupingLink field public static final com.copybot.plugin.api.grouping.GroupingLink BASE
+com.copybot.plugin.api.grouping.GroupingLink field public static final com.copybot.plugin.api.grouping.GroupingLink NAME
+com.copybot.plugin.api.grouping.GroupingLink method public static com.copybot.plugin.api.grouping.GroupingLink valueOf(java.lang.String)
+com.copybot.plugin.api.grouping.GroupingLink method public static com.copybot.plugin.api.grouping.GroupingLink[] values()
+com.copybot.plugin.api.grouping.GroupingLink type public final enum com.copybot.plugin.api.grouping.GroupingLink extends java.lang.Enum<com.copybot.plugin.api.grouping.GroupingLink>
+com.copybot.plugin.api.grouping.GroupingPreset constructor public <init>(java.lang.String,com.copybot.plugin.api.grouping.GroupingRule...)
+com.copybot.plugin.api.grouping.GroupingPreset constructor public <init>(java.lang.String,java.util.List<com.copybot.plugin.api.grouping.GroupingRule>)
+com.copybot.plugin.api.grouping.GroupingPreset method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.grouping.GroupingPreset method public final int hashCode()
+com.copybot.plugin.api.grouping.GroupingPreset method public final java.lang.String toString()
+com.copybot.plugin.api.grouping.GroupingPreset method public java.lang.String code()
+com.copybot.plugin.api.grouping.GroupingPreset method public java.util.List<com.copybot.plugin.api.grouping.GroupingRule> rules()
+com.copybot.plugin.api.grouping.GroupingPreset type public final record com.copybot.plugin.api.grouping.GroupingPreset extends java.lang.Record
+com.copybot.plugin.api.grouping.GroupingRole field public static final com.copybot.plugin.api.grouping.GroupingRole COPY
+com.copybot.plugin.api.grouping.GroupingRole field public static final com.copybot.plugin.api.grouping.GroupingRole IGNORE
+com.copybot.plugin.api.grouping.GroupingRole field public static final com.copybot.plugin.api.grouping.GroupingRole READ
+com.copybot.plugin.api.grouping.GroupingRole method public static com.copybot.plugin.api.grouping.GroupingRole valueOf(java.lang.String)
+com.copybot.plugin.api.grouping.GroupingRole method public static com.copybot.plugin.api.grouping.GroupingRole[] values()
+com.copybot.plugin.api.grouping.GroupingRole type public final enum com.copybot.plugin.api.grouping.GroupingRole extends java.lang.Enum<com.copybot.plugin.api.grouping.GroupingRole>
+com.copybot.plugin.api.grouping.GroupingRule constructor public <init>(com.copybot.plugin.api.grouping.GroupingRuleType,java.util.List<java.lang.String>,java.util.Map<java.lang.String, com.copybot.plugin.api.grouping.GroupingRole>,java.lang.String,com.copybot.plugin.api.grouping.GroupingRole,java.lang.String,com.copybot.plugin.api.grouping.GroupingLink)
+com.copybot.plugin.api.grouping.GroupingRule method public com.copybot.plugin.api.grouping.GroupingLink link()
+com.copybot.plugin.api.grouping.GroupingRule method public com.copybot.plugin.api.grouping.GroupingRole role()
+com.copybot.plugin.api.grouping.GroupingRule method public com.copybot.plugin.api.grouping.GroupingRuleType type()
+com.copybot.plugin.api.grouping.GroupingRule method public final boolean equals(java.lang.Object)
+com.copybot.plugin.api.grouping.GroupingRule method public final int hashCode()
+com.copybot.plugin.api.grouping.GroupingRule method public final java.lang.String toString()
+com.copybot.plugin.api.grouping.GroupingRule method public java.lang.String companion()
+com.copybot.plugin.api.grouping.GroupingRule method public java.lang.String folder()
+com.copybot.plugin.api.grouping.GroupingRule method public java.util.List<java.lang.String> main()
+com.copybot.plugin.api.grouping.GroupingRule method public java.util.Map<java.lang.String, com.copybot.plugin.api.grouping.GroupingRole> companions()
+com.copybot.plugin.api.grouping.GroupingRule method public static com.copybot.plugin.api.grouping.GroupingRule doubleExtension(java.util.Map<java.lang.String, com.copybot.plugin.api.grouping.GroupingRole>)
+com.copybot.plugin.api.grouping.GroupingRule method public static com.copybot.plugin.api.grouping.GroupingRule folder(java.util.List<java.lang.String>,java.lang.String,com.copybot.plugin.api.grouping.GroupingRole)
+com.copybot.plugin.api.grouping.GroupingRule method public static com.copybot.plugin.api.grouping.GroupingRule regex(java.lang.String,java.lang.String,com.copybot.plugin.api.grouping.GroupingRole,com.copybot.plugin.api.grouping.GroupingLink)
+com.copybot.plugin.api.grouping.GroupingRule method public static com.copybot.plugin.api.grouping.GroupingRule sameBase(java.util.List<java.lang.String>,java.util.Map<java.lang.String, com.copybot.plugin.api.grouping.GroupingRole>)
+com.copybot.plugin.api.grouping.GroupingRule type public final record com.copybot.plugin.api.grouping.GroupingRule extends java.lang.Record
+com.copybot.plugin.api.grouping.GroupingRuleType field public static final com.copybot.plugin.api.grouping.GroupingRuleType DOUBLE_EXTENSION
+com.copybot.plugin.api.grouping.GroupingRuleType field public static final com.copybot.plugin.api.grouping.GroupingRuleType FOLDER
+com.copybot.plugin.api.grouping.GroupingRuleType field public static final com.copybot.plugin.api.grouping.GroupingRuleType REGEX
+com.copybot.plugin.api.grouping.GroupingRuleType field public static final com.copybot.plugin.api.grouping.GroupingRuleType SAME_BASE
+com.copybot.plugin.api.grouping.GroupingRuleType method public static com.copybot.plugin.api.grouping.GroupingRuleType valueOf(java.lang.String)
+com.copybot.plugin.api.grouping.GroupingRuleType method public static com.copybot.plugin.api.grouping.GroupingRuleType[] values()
+com.copybot.plugin.api.grouping.GroupingRuleType type public final enum com.copybot.plugin.api.grouping.GroupingRuleType extends java.lang.Enum<com.copybot.plugin.api.grouping.GroupingRuleType>
 com.copybot.plugin.api.pattern.OutPattern method public boolean directoryVaries()
 com.copybot.plugin.api.pattern.OutPattern method public com.copybot.plugin.api.pattern.OutPattern$Resolution resolve(java.util.Map<java.lang.String, java.lang.String>)
 com.copybot.plugin.api.pattern.OutPattern method public java.lang.String pattern()

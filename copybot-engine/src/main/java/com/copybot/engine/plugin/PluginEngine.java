@@ -2,6 +2,7 @@ package com.copybot.engine.plugin;
 
 import com.copybot.config.SecretReferences;
 import com.copybot.config.SecretStore;
+import com.copybot.engine.listing.GroupingPresetRegistry;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.StepType;
@@ -23,6 +24,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -117,17 +119,34 @@ public final class PluginEngine {
      * version first) then step type (IN, ANALYZE, PROCESS, OUT, RUN_END), texts in the current language. Empty
      * before {@link #load}. A plugin whose actions cannot be listed (e.g. a missing class) has none, with a
      * warning in the log (once per JVM), and is one of the {@link PluginCatalog#failedPlugins()}: it never
-     * hides the others.
+     * hides the others. The grouping presets are those a run can cite ({@link GroupingPresetRegistry#current()}),
+     * texts in the current language, even those of a plugin whose actions cannot be listed; a plugin whose presets
+     * cannot be read is a failed plugin too.
      */
     public static PluginCatalog catalog() {
-        return catalogOf(loadedPlugins);
+        List<PluginDefinition> plugins = loadedPlugins;
+        // the registry of this very list, even if a load replaces it meanwhile
+        return catalogOf(plugins, GroupingPresetRegistry.current(plugins));
     }
 
     // visible for tests: the catalog of these plugins
     static PluginCatalog catalogOf(List<PluginDefinition> plugins) {
+        return catalogOf(plugins, GroupingPresetRegistry.of(plugins));
+    }
+
+    private static PluginCatalog catalogOf(List<PluginDefinition> plugins, GroupingPresetRegistry registry) {
         List<CatalogAction> actions = new ArrayList<>();
         List<PluginCatalog.FailedPlugin> failed = new ArrayList<>();
+        List<CatalogPreset> presets = new ArrayList<>();
+        Set<String> named = new HashSet<>();
         for (PluginDefinition plugin : plugins) {
+            // of the versions of a plugin, the first one (the most recent) brings the presets, as in the registry
+            boolean bringsPresets = named.add(plugin.getName());
+            if (bringsPresets && !registry.hasPlugin(plugin.getName())) {
+                // its presets cannot be read: the registry warned and leaves the plugin out
+                failed.add(new PluginCatalog.FailedPlugin(plugin.getName(), plugin.getVersion()));
+                continue;
+            }
             List<CatalogAction> pluginActions = new ArrayList<>();
             try {
                 IPlugin instance = plugin.getPluginInstance();
@@ -136,16 +155,37 @@ public final class PluginEngine {
                 addActions(pluginActions, plugin, StepType.PROCESS, instance.getProcessActions());
                 addActions(pluginActions, plugin, StepType.OUT, instance.getOutActions());
                 addActions(pluginActions, plugin, StepType.RUN_END, instance.getRunEndActions());
+                actions.addAll(pluginActions);
             } catch (LinkageError | RuntimeException e) {
                 if (CATALOG_WARNED.add(plugin.getName() + ":" + plugin.getVersion())) {
                     LOG.warn(e, "plugin.catalog.failed", plugin.getName(), plugin.getVersion(), String.valueOf(e));
                 }
                 failed.add(new PluginCatalog.FailedPlugin(plugin.getName(), plugin.getVersion()));
-                continue;
             }
-            actions.addAll(pluginActions);
+            if (bringsPresets) {
+                // even when its actions failed: the registry has them, a run accepts them
+                addPresets(presets, plugin, registry);
+            }
         }
-        return new PluginCatalog(actions, failed);
+        return new PluginCatalog(actions, failed, presets, registry.plugins());
+    }
+
+    private static void addPresets(List<CatalogPreset> presets, PluginDefinition plugin,
+                                   GroupingPresetRegistry registry) {
+        CombinedResourceBundle bundle;
+        try {
+            bundle = plugin.getPluginInstance().getResourceBundle();
+        } catch (LinkageError | RuntimeException e) {
+            bundle = null; // the codes stand for the texts
+        }
+        for (GroupingPresetRegistry.PluginPreset preset : registry.pluginPresets()) {
+            if (preset.plugin().equals(plugin.getName())) {
+                String keyPrefix = "plugin." + preset.pluginCode() + ".preset." + preset.code();
+                presets.add(new CatalogPreset(preset.plugin(), preset.pluginCode(), preset.version(), preset.code(),
+                        text(bundle, keyPrefix + ".name").orElse(preset.code()),
+                        text(bundle, keyPrefix + ".description").orElse(""), preset.rules()));
+            }
+        }
     }
 
     private static void addActions(List<CatalogAction> actions, PluginDefinition plugin, StepType type,

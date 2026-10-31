@@ -1,6 +1,7 @@
 package com.copybot.engine;
 
 import com.copybot.engine.ControlFakes.FakeAction;
+import com.copybot.engine.listing.GroupingPresetRegistry;
 import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.GroupingConfig;
@@ -11,8 +12,10 @@ import com.copybot.engine.pipeline.PipelineStatus;
 import com.copybot.engine.pipeline.PipelineStep;
 import com.copybot.engine.pipeline.PipelineStepConfig;
 import com.copybot.engine.pipeline.WorkItemExecution;
+import com.copybot.engine.plugin.TestPlugins;
 import com.copybot.engine.resume.ItemKey;
 import com.copybot.engine.resume.ResumeStateStore;
+import com.copybot.plugin.api.action.CompanionRole;
 import com.copybot.plugin.api.action.IInAction;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.plugin.api.action.ListingSink;
@@ -21,6 +24,10 @@ import com.copybot.plugin.api.action.WorkItem;
 import com.copybot.plugin.api.action.WorkItemMetadata;
 import com.copybot.plugin.api.action.WriteContext;
 import com.copybot.plugin.api.action.WriteResult;
+import com.copybot.plugin.api.grouping.GroupingLink;
+import com.copybot.plugin.api.grouping.GroupingPreset;
+import com.copybot.plugin.api.grouping.GroupingRole;
+import com.copybot.plugin.api.grouping.GroupingRule;
 import com.copybot.resources.ResourcesEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -157,7 +164,7 @@ class MainExecutorGroupingTest {
 
     private static GroupingConfig rawXmp() {
         return new GroupingConfig(List.of(new GroupingRuleConfig("raw-jpeg-xmp", null, null, null, null, null, null,
-                null)));
+                null, null)));
     }
 
     private static ArchivesConfig unfold() {
@@ -280,6 +287,42 @@ class MainExecutorGroupingTest {
     }
 
     @Test
+    void aPresetOfAPluginGroupsThroughTheRun() {
+        GroupingPresetRegistry presets = GroupingPresetRegistry.of(List.of(TestPlugins.loaded("com.acme.takeout",
+                "1.0.0", TestPlugins.withPresets("takeout", () -> List.of(new GroupingPreset("takeout",
+                        GroupingRule.regex("(.+\\.jpg)", "\\1(?:\\.supplemental-metadata)?\\.json",
+                                GroupingRole.READ, GroupingLink.NAME)))))));
+        FolderIn in = new FolderIn(dir.toString(),
+                List.of(file("IMG_1.jpg", DAY_1), file("IMG_1.jpg.supplemental-metadata.json", DAY_1)), true);
+        MainExecutor exec = withResume(in, new CompanionOut(), registry(Map.of("disk:*", 1000)), store());
+        exec.setGroupingPresets(presets);
+        exec.setListingConfig(listing(new GroupingConfig(List.of(new GroupingRuleConfig("takeout", "com.acme.takeout",
+                null, null, null, null, null, null, null))), null));
+        exec.setArchiveBase(workspaces());
+        exec.prepare();
+
+        assertEquals(PipelineStatus.PREPARED, exec.getState().getStatus());
+        assertEquals(1, exec.getState().getWorkItems().size(), "one execution for the group");
+        WorkItem main = named(exec, "IMG_1.jpg").getWorkItem();
+        assertEquals(1, main.getCompanions().size());
+        assertEquals("IMG_1.jpg.supplemental-metadata.json", main.getCompanions().get(0).item().getNameDisplay());
+        assertEquals(CompanionRole.READ, main.getCompanions().get(0).role());
+    }
+
+    @Test
+    void aPresetOfAnAbsentPluginRefusesThePreparationBeforeAnyListing() {
+        FolderIn in = new FolderIn(dir.toString(), List.of(file("IMG_1.jpg", DAY_1)), true);
+        GroupingConfig takeout = new GroupingConfig(List.of(new GroupingRuleConfig("takeout", "com.acme.absent", null,
+                null, null, null, null, null, null)));
+        MainExecutor exec = prepared(in, takeout, null); // the presets of the plugins loaded in this JVM
+
+        assertEquals(PipelineStatus.ERROR, exec.getState().getStatus());
+        assertEquals(ResourcesEngine.getString("grouping.preset.plugin-missing", 1, "takeout", "com.acme.absent"),
+                exec.getState().getFailure().getMessage());
+        assertEquals(null, in.calledWith, "nothing listed");
+    }
+
+    @Test
     void theEntriesOfAZipAreItemsKeyedByTheirDateAndName() throws IOException {
         FolderIn in = new FolderIn(dir.toString(), List.of(new WorkItem(zip("photos.zip", 2))), true);
         MainExecutor exec = prepared(in, null, unfold());
@@ -392,7 +435,7 @@ class MainExecutorGroupingTest {
     @Test
     void anInvalidGroupingRefusesThePreparationBeforeAnyListing() {
         FolderIn in = new FolderIn(dir.toString(), List.of(file("IMG_1.CR3", DAY_1)), true);
-        GroupingConfig unknown = new GroupingConfig(List.of(new GroupingRuleConfig("nope", null, null, null, null,
+        GroupingConfig unknown = new GroupingConfig(List.of(new GroupingRuleConfig("nope", null, null, null, null, null,
                 null, null, null)));
         MainExecutor exec = prepared(in, unknown, null);
 

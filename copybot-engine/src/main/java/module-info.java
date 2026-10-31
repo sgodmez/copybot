@@ -28,6 +28,7 @@ module com.copybot.engine {
     exports com.copybot.plugin.api.definition;
     exports com.copybot.plugin.api.config;
     exports com.copybot.plugin.api.pattern;
+    exports com.copybot.plugin.api.grouping;
 
     exports com.copybot.plugin.embedded.actions to com.google.gson, com.copybot.ui; // gson reads the config records
     exports com.copybot to com.copybot.ui;

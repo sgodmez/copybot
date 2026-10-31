@@ -1,7 +1,9 @@
 package com.copybot.ui.model;
 
 import com.copybot.engine.pipeline.StepType;
+import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.plugin.CatalogAction;
+import com.copybot.engine.plugin.CatalogPreset;
 import com.copybot.engine.plugin.PluginCatalog;
 import com.copybot.plugin.api.config.ConfigSchema;
 import com.copybot.plugin.api.config.DirectoryPath;
@@ -58,6 +60,17 @@ final class TestCatalog {
     static StepCatalog catalog(CatalogAction... actions) {
         return new StepCatalog(new PluginCatalog(List.of(actions), List.of()));
     }
+
+    /** A grouping preset of a plugin without action: a web page folder and the JSON read next to the photos. */
+    static final CatalogPreset TAKEOUT = new CatalogPreset("com.acme.takeout", "takeout", "1.0.0", "takeout",
+            "Google Takeout", "Photos and their JSON", List.of(
+            new GroupingRuleConfig(null, null, "sameBase", List.of("jpg"), Map.of("json", "read"), null, null, null,
+                    null),
+            new GroupingRuleConfig(null, null, "folder", List.of("html"), null, "{base}_files", "copy", null, null)));
+
+    /** {@link #CATALOG}'s actions and the {@link #TAKEOUT} preset. */
+    static final StepCatalog WITH_PRESETS = new StepCatalog(new PluginCatalog(
+            List.of(EXIF_2, EXIF_1, READ, WRITE, LAUNCH, MAIL), List.of(), List.of(TAKEOUT)));
 
     static CatalogAction action(String plugin, String version, String code, StepType type, Class<? extends Record> config) {
         String prefix = "plugin." + plugin + "." + code;

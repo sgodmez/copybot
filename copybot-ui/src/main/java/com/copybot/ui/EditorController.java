@@ -301,7 +301,8 @@ public class EditorController {
      * When the pipeline names plugins that are not loaded, their rows of the catalogue of the official plugins are
      * built in the background (the catalogue in memory, else read; the plugins folder checked): the form of such a
      * step then says whether the plugin is not installed or installed but not loaded, with "Install" only when the
-     * Plugins window offers it (spec plugin-install §6). A failure (offline) leaves the "not found" message.
+     * Plugins window offers it (spec plugin-install §6). A failure (offline) leaves the "not found" message. The
+     * plugins of the grouping presets count too: the grouping form then offers "Install" the same way.
      */
     private void readCatalogueForMissingPlugins() {
         Optional<PluginService> service = UpdateUi.plugins();
@@ -314,8 +315,8 @@ public class EditorController {
                     officialRows = rows.stream().collect(Collectors.toMap(row -> row.entry().module(), row -> row,
                             (a, b) -> a));
                     EditorNode node = selectedNode();
-                    if (stage.isShowing() && node != null && node.kind() == Kind.STEP
-                            && catalog.find(node.section(), step(node)).isEmpty()) {
+                    if (stage.isShowing() && node != null && (node.kind() == Kind.GROUPING
+                            || node.kind() == Kind.STEP && catalog.find(node.section(), step(node)).isEmpty())) {
                         showForm(node); // the read-only form of a missing plugin: now with what can be done
                     }
                 },
@@ -326,6 +327,21 @@ public class EditorController {
     /** The row of the official plugin of this name, not loaded; empty before the catalogue is read. */
     private Optional<PluginRow> officialRow(String plugin) {
         return catalog.isLoaded(plugin) ? Optional.empty() : Optional.ofNullable(officialRows.get(plugin));
+    }
+
+    /**
+     * "Install" (or "Update") of a plugin that is not loaded, when the Plugins window offers it: that window with this
+     * plugin chosen (its install, or the update that fixes it), over the editor (modal).
+     */
+    private Optional<Node> installButton(PluginRow row) {
+        if (!row.offersInstall()) {
+            return Optional.empty();
+        }
+        Button install = new Button(ResourcesEngine.getString(row.state() == PluginState.UPDATE_AVAILABLE
+                ? "plugins.action.UPDATE" : "editor.plugin-install"));
+        install.setOnAction(e -> CopybotMainUi.mainController()
+                .ifPresent(main -> main.openPlugins(Set.of(row.entry().module()), false, stage)));
+        return Optional.of(install);
     }
 
     /**
@@ -580,7 +596,8 @@ public class EditorController {
         if (node.kind() == Kind.PIPELINE) {
             pipelineForm();
         } else if (node.kind() == Kind.GROUPING) {
-            formBox.getChildren().add(GroupingForms.groupingForm(document, stage, () -> showForm(node)));
+            formBox.getChildren().add(GroupingForms.groupingForm(document, catalog,
+                    plugin -> officialRow(plugin).flatMap(this::installButton), stage, () -> showForm(node)));
         } else if (node.kind() == Kind.ARCHIVES) {
             formBox.getChildren().add(GroupingForms.archivesForm(document));
         } else if (node.kind() == Kind.SECONDARY) {
@@ -809,15 +826,7 @@ public class EditorController {
             Label messageLabel = new Label(message);
             messageLabel.setWrapText(true);
             formBox.getChildren().addAll(title(member(step, "action")), messageLabel);
-            official.filter(PluginRow::offersInstall).ifPresent(row -> {
-                // the Plugins window with this plugin chosen (its install, or the update that fixes it), over the
-                // editor (modal)
-                Button install = new Button(ResourcesEngine.getString(row.state() == PluginState.UPDATE_AVAILABLE
-                        ? "plugins.action.UPDATE" : "editor.plugin-install"));
-                install.setOnAction(e -> CopybotMainUi.mainController()
-                        .ifPresent(main -> main.openPlugins(Set.of(row.entry().module()), false, stage)));
-                formBox.getChildren().add(install);
-            });
+            official.flatMap(this::installButton).ifPresent(formBox.getChildren()::add);
             if (node.branch() != StepAddress.MAIN) {
                 formBox.getChildren().add(branchProblems(node.branch()));
             }

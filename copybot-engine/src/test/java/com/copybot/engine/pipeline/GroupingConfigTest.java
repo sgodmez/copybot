@@ -49,12 +49,12 @@ public class GroupingConfigTest {
     }
 
     private static GroupingRuleConfig preset(String name) {
-        return new GroupingRuleConfig(name, null, null, null, null, null, null, null);
+        return new GroupingRuleConfig(name, null, null, null, null, null, null, null, null);
     }
 
     private static GroupingRuleConfig rule(String type, List<String> main, Map<String, String> companions,
                                            String folder, String role, String companion, String link) {
-        return new GroupingRuleConfig(null, type, main, companions, folder, role, companion, link);
+        return new GroupingRuleConfig(null, null, type, main, companions, folder, role, companion, link);
     }
 
     @Test

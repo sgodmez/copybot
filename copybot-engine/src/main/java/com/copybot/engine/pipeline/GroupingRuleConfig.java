@@ -1,5 +1,7 @@
 package com.copybot.engine.pipeline;
 
+import com.copybot.plugin.api.grouping.GroupingRole;
+import com.copybot.plugin.api.grouping.GroupingRule;
 import com.google.gson.JsonParseException;
 import com.google.gson.TypeAdapter;
 import com.google.gson.annotations.JsonAdapter;
@@ -9,18 +11,22 @@ import com.google.gson.stream.JsonWriter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntFunction;
 import java.util.regex.Pattern;
 
 /**
- * One grouping rule: either a preset ({@code preset}, expanded by the core) or an own rule. {@code type} is
- * sameBase, doubleExtension, folder or regex. Roles are copy, read or ignore. {@code link} (regex only) is base or
- * name (default name). For a regex rule {@code main} is one expression, written as a string or a one-element array.
+ * One grouping rule: either a preset ({@code preset}: one of the core, or of the plugin whose module name is
+ * {@code plugin}; expanded by the engine) or an own rule. {@code type} is sameBase, doubleExtension, folder or
+ * regex. Roles are copy, read or ignore. {@code link} (regex only) is base or name (default name). For a regex rule
+ * {@code main} is one expression, written as a string or a one-element array.
  */
 public record GroupingRuleConfig(
         String preset,
+        String plugin,
         String type,
         @JsonAdapter(StringOrList.class) List<String> main,
         Map<String, String> companions,
@@ -28,6 +34,29 @@ public record GroupingRuleConfig(
         String role,
         String companion,
         String link) {
+
+    /** The pipeline form of a rule of a plugin preset: an own rule, with the same checks. */
+    public static GroupingRuleConfig of(GroupingRule rule) {
+        String type = switch (rule.type()) {
+            case SAME_BASE -> "sameBase";
+            case DOUBLE_EXTENSION -> "doubleExtension";
+            case FOLDER -> "folder";
+            case REGEX -> "regex";
+        };
+        Map<String, String> companions = null;
+        if (rule.companions() != null) {
+            companions = new LinkedHashMap<>();
+            for (Map.Entry<String, GroupingRole> entry : rule.companions().entrySet()) {
+                companions.put(entry.getKey(), lowerName(entry.getValue()));
+            }
+        }
+        return new GroupingRuleConfig(null, null, type, rule.main(), companions, rule.folder(), lowerName(rule.role()),
+                rule.companion(), lowerName(rule.link()));
+    }
+
+    private static String lowerName(Enum<?> value) {
+        return value == null ? null : value.name().toLowerCase(Locale.ROOT);
+    }
 
     /**
      * The expression of a regex rule's companion: each {@code \1}..{@code \9} of the template replaced by the quoted

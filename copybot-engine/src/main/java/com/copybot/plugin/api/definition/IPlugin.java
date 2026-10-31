@@ -1,6 +1,7 @@
 package com.copybot.plugin.api.definition;
 
 import com.copybot.plugin.api.action.*;
+import com.copybot.plugin.api.grouping.GroupingPreset;
 import com.copybot.resources.CombinedResourceBundle;
 import com.google.gson.JsonElement;
 
@@ -54,6 +55,15 @@ public interface IPlugin {
     }
 
     default List<ActionDefinition<? extends IRunEndAction>> getRunEndActions() {
+        return List.of();
+    }
+
+    /**
+     * The grouping presets of the plugin, cited by a pipeline as {@code {"preset": code, "plugin": module name}}.
+     * Texts: plugin.pluginCode.preset.presetCode.name and .description. A preset whose rules are invalid is left
+     * out by the engine, with a warning in the log.
+     */
+    default List<GroupingPreset> getGroupingPresets() {
         return List.of();
     }
 

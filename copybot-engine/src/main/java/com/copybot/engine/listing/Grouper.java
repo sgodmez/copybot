@@ -85,9 +85,18 @@ public final class Grouper implements ListingSink {
     /** The {@code *_files} folders that received their folderDone: proven to be inside the listing. */
     private final Set<String> confirmed = new HashSet<>();
 
-    /** The rules as written in the pipeline (presets included, expanded here). */
+    /** The rules as written in the pipeline (presets included, expanded here with the current presets). */
     public Grouper(List<GroupingRuleConfig> ruleConfigs, ListingSink downstream) {
-        for (GroupingRuleConfig config : GroupingPresets.expand(new GroupingConfig(ruleConfigs))) {
+        this(ruleConfigs, GroupingPresetRegistry.current(), downstream);
+    }
+
+    /**
+     * The rules as written in the pipeline, their presets expanded with these ones.
+     *
+     * @throws IllegalStateException a cited preset is not available (the validation refuses it first)
+     */
+    public Grouper(List<GroupingRuleConfig> ruleConfigs, GroupingPresetRegistry presets, ListingSink downstream) {
+        for (GroupingRuleConfig config : presets.expand(new GroupingConfig(ruleConfigs))) {
             rules.add(new GroupingRule(config));
         }
         this.downstream = downstream;

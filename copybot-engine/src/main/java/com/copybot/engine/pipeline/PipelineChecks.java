@@ -1,6 +1,6 @@
 package com.copybot.engine.pipeline;
 
-import com.copybot.engine.listing.GroupingPresets;
+import com.copybot.engine.listing.GroupingPresetRegistry;
 import com.copybot.exception.CopybotException;
 import com.copybot.plugin.api.action.IOutAction;
 import com.copybot.resources.ResourcesEngine;
@@ -120,13 +120,19 @@ public final class PipelineChecks {
     private static final Set<String> ROLES = Set.of("copy", "read", "ignore");
     private static final Set<String> LINKS = Set.of("base", "name");
 
+    /** {@link #groupingRefusal(PipelineConfig, IOutAction, GroupingPresetRegistry)} with the current presets. */
+    public static Optional<String> groupingRefusal(PipelineConfig config, IOutAction out) {
+        return groupingRefusal(config, out, GroupingPresetRegistry.current());
+    }
+
     /**
      * The reason why the grouping rules cannot be used, empty when they can (or when there are none): an invalid rule
-     * (unknown preset, type, role or link, a regex that does not compile, a folder that does not start with
-     * {base}), or COPY companions with an output that does not write them. No output action: no refusal.
-     * The COPY companions are looked for after the presets are expanded.
+     * (a preset not available in these presets, an unknown type, role or link, a regex that does not compile, a folder
+     * that does not start with {base}), or COPY companions with an output that does not write them. No output
+     * action: no refusal. The COPY companions are looked for after the presets are expanded.
      */
-    public static Optional<String> groupingRefusal(PipelineConfig config, IOutAction out) {
+    public static Optional<String> groupingRefusal(PipelineConfig config, IOutAction out,
+                                                   GroupingPresetRegistry presets) {
         GroupingConfig grouping = config.grouping();
         if (grouping == null || grouping.rules() == null) {
             return Optional.empty();
@@ -134,7 +140,8 @@ public final class PipelineChecks {
         int index = 0;
         for (GroupingRuleConfig rule : grouping.rules()) {
             index++;
-            Optional<String> invalid = invalidRule(rule, index);
+            Optional<String> invalid = rule != null && rule.preset() != null
+                    ? presetRefusal(rule, index, presets) : ruleRefusal(rule, index);
             if (invalid.isPresent()) {
                 return invalid;
             }
@@ -142,18 +149,40 @@ public final class PipelineChecks {
         if (out == null || out.writesCompanions()) {
             return Optional.empty();
         }
-        return GroupingPresets.expand(grouping).stream().anyMatch(PipelineChecks::copiesCompanions)
+        return presets.expand(grouping).stream().anyMatch(PipelineChecks::copiesCompanions)
                 ? Optional.of(ResourcesEngine.getString("grouping.companions-unsupported", outName(config, out)))
                 : Optional.empty();
     }
 
-    private static Optional<String> invalidRule(GroupingRuleConfig rule, int index) {
+    /**
+     * Why the cited preset cannot be used: unknown to the core, its plugin loaded but its presets could not be read,
+     * its plugin absent, discarded for invalid rules, or unknown to its plugin.
+     */
+    private static Optional<String> presetRefusal(GroupingRuleConfig rule, int index, GroupingPresetRegistry presets) {
+        if (presets.rules(rule).isPresent()) {
+            return Optional.empty();
+        }
+        if (GroupingPresetRegistry.isCore(rule)) {
+            return Optional.of(ResourcesEngine.getString("grouping.preset.unknown", index, rule.preset()));
+        }
+        String key = presets.hasFailed(rule.plugin()) ? "grouping.preset.plugin-failed"
+                : !presets.hasPlugin(rule.plugin()) ? "grouping.preset.plugin-missing"
+                : presets.isDiscarded(rule.plugin(), rule.preset()) ? "grouping.preset.plugin-invalid"
+                : "grouping.preset.unknown-in-plugin";
+        return Optional.of(ResourcesEngine.getString(key, index, rule.preset(), rule.plugin()));
+    }
+
+    /**
+     * Why the own rule (no preset) at this position cannot be used, empty when it can: a plugin given (a plugin
+     * brings presets only), an unknown type, role or link, an empty companion extension, a regex that does not
+     * compile, a folder that does not start with {base}. The rules of a plugin preset pass the same checks.
+     */
+    public static Optional<String> ruleRefusal(GroupingRuleConfig rule, int index) {
         if (rule == null) {
             return Optional.of(ResourcesEngine.getString("grouping.rule.type-unknown", index, null));
         }
-        if (rule.preset() != null) {
-            return GroupingPresets.isKnown(rule.preset()) ? Optional.empty()
-                    : Optional.of(ResourcesEngine.getString("grouping.preset.unknown", index, rule.preset()));
+        if (rule.plugin() != null && !rule.plugin().isBlank()) { // a plugin brings presets, not own rules
+            return Optional.of(ResourcesEngine.getString("grouping.rule.plugin-without-preset", index, rule.plugin()));
         }
         if (rule.type() == null || !RULE_TYPES.contains(rule.type())) {
             return Optional.of(ResourcesEngine.getString("grouping.rule.type-unknown", index, rule.type()));
@@ -165,6 +194,11 @@ public final class PipelineChecks {
             return Optional.of(ResourcesEngine.getString("grouping.rule.value-unknown", index, "link", rule.link()));
         }
         if (rule.companions() != null) {
+            for (String extension : rule.companions().keySet()) {
+                if (extension == null || extension.isBlank()) {
+                    return Optional.of(ResourcesEngine.getString("grouping.rule.companion-blank", index));
+                }
+            }
             for (String role : rule.companions().values()) {
                 if (role == null || isUnknown(ROLES, role)) {
                     return Optional.of(ResourcesEngine.getString("grouping.rule.value-unknown", index, "companions",

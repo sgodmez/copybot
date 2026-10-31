@@ -7,8 +7,12 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-/** The grouping presets shipped by the core, and their expansion into plain rules. */
+/**
+ * The grouping presets shipped by the core, and their lenient expansion into plain rules. The presets of the loaded
+ * plugins join them in the {@link GroupingPresetRegistry}.
+ */
 public final class GroupingPresets {
 
     private static final Map<String, List<GroupingRuleConfig>> PRESETS = new LinkedHashMap<>();
@@ -23,10 +27,10 @@ public final class GroupingPresets {
         PRESETS.put("action-cam", List.of(
                 rule("sameBase", List.of("mp4"), Map.of("lrv", "copy", "thm", "copy"))));
         PRESETS.put("sony-xml", List.of(
-                new GroupingRuleConfig(null, "regex", List.of("(.+)\\.mp4"), null, null, "read", "\\1M01\\.xml",
+                new GroupingRuleConfig(null, null, "regex", List.of("(.+)\\.mp4"), null, null, "read", "\\1M01\\.xml",
                         "base")));
         PRESETS.put("web-page", List.of(
-                new GroupingRuleConfig(null, "folder", List.of("html", "htm"), null, "{base}_files", "copy", null,
+                new GroupingRuleConfig(null, null, "folder", List.of("html", "htm"), null, "{base}_files", "copy", null,
                         null)));
     }
 
@@ -34,7 +38,7 @@ public final class GroupingPresets {
     }
 
     private static GroupingRuleConfig rule(String type, List<String> main, Map<String, String> companions) {
-        return new GroupingRuleConfig(null, type, main, companions, null, null, null, null);
+        return new GroupingRuleConfig(null, null, type, main, companions, null, null, null, null);
     }
 
     /** The preset names, in the order they are offered. */
@@ -47,10 +51,16 @@ public final class GroupingPresets {
         return name != null && PRESETS.containsKey(name);
     }
 
+    /** The rules of the core preset, empty when the name is not shipped. */
+    public static Optional<List<GroupingRuleConfig>> rules(String name) {
+        return Optional.ofNullable(name == null ? null : PRESETS.get(name));
+    }
+
     /**
-     * The rules of the configuration with each preset replaced by its rules; the own rules pass through unchanged.
-     * Idempotent: an already expanded configuration comes back as is. Unknown presets are left out (the validation
-     * refuses them). Absent configuration: no rule.
+     * The rules of the configuration with each core preset replaced by its rules; the own rules pass through
+     * unchanged. Idempotent: an already expanded configuration comes back as is. Lenient: the presets of a plugin and
+     * the unknown ones are left out (the editor expands those of the loaded plugins from its catalog). A run expands
+     * with {@link GroupingPresetRegistry#expand}, which never leaves a cited preset out. Absent configuration: no rule.
      */
     public static List<GroupingRuleConfig> expand(GroupingConfig config) {
         List<GroupingRuleConfig> expanded = new ArrayList<>();
@@ -63,8 +73,8 @@ public final class GroupingPresets {
             }
             if (rule.preset() == null) {
                 expanded.add(rule);
-            } else if (isKnown(rule.preset())) {
-                expanded.addAll(PRESETS.get(rule.preset()));
+            } else if (GroupingPresetRegistry.isCore(rule)) {
+                rules(rule.preset()).ifPresent(expanded::addAll);
             }
         }
         return expanded;

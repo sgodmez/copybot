@@ -1,10 +1,8 @@
 package com.copybot.ui.model;
 
-import com.copybot.engine.listing.GroupingPresets;
 import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
-import com.copybot.engine.pipeline.GroupingConfig;
 import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
@@ -748,10 +746,10 @@ public final class PipelineDocument {
         }
     }
 
-    /** The extensions the rules (the presets expanded) attach as companions, lower case, in order. */
-    private List<String> companionExtensions() {
+    /** The extensions the rules (the core presets and those of the catalog expanded) attach as companions. */
+    private List<String> companionExtensions(StepCatalog catalog) {
         Set<String> extensions = new LinkedHashSet<>();
-        for (GroupingRuleConfig rule : expandedRules()) {
+        for (GroupingRuleConfig rule : expandedRules(catalog)) {
             if (rule.companions() != null) {
                 rule.companions().keySet().forEach(ext -> extensions.add(ext.toLowerCase(Locale.ROOT)));
             }
@@ -759,7 +757,7 @@ public final class PipelineDocument {
         return List.copyOf(extensions);
     }
 
-    private List<GroupingRuleConfig> expandedRules() {
+    private List<GroupingRuleConfig> expandedRules(StepCatalog catalog) {
         List<GroupingRuleConfig> rules = new ArrayList<>();
         for (JsonObject rule : groupingRules()) {
             try {
@@ -768,18 +766,19 @@ public final class PipelineDocument {
                 // a hand-edited rule the editor cannot read: skipped, so the user can still open the form and fix it
             }
         }
-        return GroupingPresets.expand(new GroupingConfig(rules));
+        return catalog.expandGroupingRules(rules);
     }
 
     /**
      * The companion extensions of the rules that the include / exclude globs of a built-in file.read input step leave
-     * out: the listing would never see those files, so they could not be attached.
+     * out: the listing would never see those files, so they could not be attached. The presets of the plugins count
+     * with their rules in the catalog (one of a missing plugin adds nothing).
      */
-    public List<String> companionExtensionsExcludedByFileRead() {
+    public List<String> companionExtensionsExcludedByFileRead(StepCatalog catalog) {
         Set<String> excluded = new LinkedHashSet<>();
         for (JsonObject step : steps(Section.IN)) {
             if (isFileRead(step)) {
-                for (String extension : companionExtensions()) {
+                for (String extension : companionExtensions(catalog)) {
                     if (!letsThrough(step, extension)) {
                         excluded.add(extension);
                     }
@@ -793,13 +792,13 @@ public final class PipelineDocument {
      * Lets the companion extensions through: adds them to the non-empty "include" of the file.read steps that leave
      * them out, and removes the "exclude" globs that target them.
      */
-    public void allowCompanionExtensions() {
+    public void allowCompanionExtensions(StepCatalog catalog) {
         for (JsonObject step : steps(Section.IN)) {
             JsonElement config = step.get("actionConfig");
             if (!isFileRead(step) || config == null || !config.isJsonObject()) {
                 continue;
             }
-            for (String extension : companionExtensions()) {
+            for (String extension : companionExtensions(catalog)) {
                 if (!letsThrough(step, extension)) {
                     allow(config.getAsJsonObject(), extension);
                     modified = true;
@@ -883,8 +882,8 @@ public final class PipelineDocument {
     }
 
     /** Whether a rule (a preset's included) is of the folder type while a file.read input does not go into folders. */
-    public boolean folderRuleWithNonRecursiveFileRead() {
-        return expandedRules().stream().anyMatch(rule -> "folder".equals(rule.type()))
+    public boolean folderRuleWithNonRecursiveFileRead(StepCatalog catalog) {
+        return expandedRules(catalog).stream().anyMatch(rule -> "folder".equals(rule.type()))
                 && steps(Section.IN).stream().anyMatch(step -> isFileRead(step) && isNonRecursive(step));
     }
 

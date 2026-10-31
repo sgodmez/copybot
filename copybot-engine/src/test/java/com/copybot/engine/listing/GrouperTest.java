@@ -34,17 +34,17 @@ class GrouperTest {
     };
 
     private static GroupingRuleConfig preset(String name) {
-        return new GroupingRuleConfig(name, null, null, null, null, null, null, null);
+        return new GroupingRuleConfig(name, null, null, null, null, null, null, null, null);
     }
 
     /** A regex rule reading the JSON of a Google Takeout photo (no longer a preset of the core). */
     private static GroupingRuleConfig takeoutRule() {
-        return new GroupingRuleConfig(null, "regex", List.of("(.+\\.(?:jpe?g|heic|png|gif|mp4|mov))"), null, null,
+        return new GroupingRuleConfig(null, null, "regex", List.of("(.+\\.(?:jpe?g|heic|png|gif|mp4|mov))"), null, null,
                 "read", "\\1(?:\\.supplemental-metadata)?\\.json", "name");
     }
 
     private static GroupingRuleConfig sameBase(List<String> main, Map<String, String> companions) {
-        return new GroupingRuleConfig(null, "sameBase", main, companions, null, null, null, null);
+        return new GroupingRuleConfig(null, null, "sameBase", main, companions, null, null, null, null);
     }
 
     private static WorkItem file(String folder, String name) {
@@ -193,7 +193,7 @@ class GrouperTest {
     void oneLevelOnly() {
         Grouper grouper = new Grouper(List.of(
                 sameBase(List.of("cr3"), Map.of("jpg", "copy")),
-                new GroupingRuleConfig(null, "doubleExtension", null, Map.of("cr3", "copy", "xmp", "copy"), null,
+                new GroupingRuleConfig(null, null, "doubleExtension", null, Map.of("cr3", "copy", "xmp", "copy"), null,
                         null, null, null)), out);
         grouper.item(file("/a", "IMG_1.CR3"));
         grouper.item(file("/a", "IMG_1.JPG"));
@@ -347,7 +347,7 @@ class GrouperTest {
     }
 
     private static GroupingRuleConfig regex(String main, String companion, String link) {
-        return new GroupingRuleConfig(null, "regex", List.of(main), null, null, "copy", companion, link);
+        return new GroupingRuleConfig(null, null, "regex", List.of(main), null, null, "copy", companion, link);
     }
 
     @Test
