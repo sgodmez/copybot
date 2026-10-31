@@ -26,6 +26,37 @@ build in, such as reading EXIF dates, comes from **plugins**: Java modules
 dropped into a folder, each one isolated with its own versions of its
 libraries.
 
+## Download
+
+<p align="center">
+  <a href="https://github.com/sgodmez/copybot/releases/latest"><img src="https://img.shields.io/github/v/release/sgodmez/copybot?label=download&logo=github" alt="Download the latest release"></a>
+  <a href="https://github.com/sgodmez/copybot/releases"><img src="https://img.shields.io/github/v/release/sgodmez/copybot?include_prereleases&label=beta&color=orange" alt="Latest beta"></a>
+</p>
+
+**[Download the latest release](https://github.com/sgodmez/copybot/releases/latest)**:
+`copybot-<version>-setup.exe` (Windows installer), `copybot-<version>-windows-x64.zip`
+(Windows, portable) or `copybot-<version>-linux-x64.tar.gz` (Linux). The
+application updates itself on Windows and installs its plugins from
+*Edit > Plugins…*. Betas are on the [releases page](https://github.com/sgodmez/copybot/releases),
+marked *Pre-release*; tick *Receive beta versions* in the preferences to be
+offered them. More in [Quick start](#quick-start).
+
+### Plugins
+
+| Plugin | What it brings | Details |
+|---|---|---|
+| `metadata-extractor` | Capture date of photos and videos (EXIF, QuickTime, MP4), so files are sorted by when they were taken; rewrites the EXIF date of JPEGs whose time zone was corrected | [How it works](#how-it-works) |
+| `gps-zone` | Checks the camera's time zone against the photo's GPS position and offers a correction in the plan (optional, 36 MB of time zone data) | [How it works](#how-it-works) |
+| `exec` | Runs any program on a file (`{in}` → `{out}`), and ffmpeg presets: video transcoding to H.265 / H.264 with GPU encoders, HEIC → JPEG, thumbnails; ffmpeg downloaded on demand | [Programs and ffmpeg](#programs-and-ffmpeg-the-exec-plugin) |
+| `remote` | SFTP, FTP / FTPS and S3 (AWS, MinIO…) as sources and targets, with trust on first use of servers' keys and certificates | [Remote servers](#remote-servers-sftp-ftp-and-s3-the-remote-plugin) |
+| `notify-email` | Sends a report e-mail after the run (SMTP, STARTTLS / SSL), password kept in the local secrets vault | [notify-email](#notify-email-emailsend) |
+| `notify-webhook` | Posts the run report to a webhook: JSON, ntfy, Discord, Slack or Telegram | [notify-webhook](#notify-webhook-webhooksend) |
+| `archive` | Zips the files the run copied, with a `SHA256SUMS` manifest | [archive](#archive-archivezip) |
+
+Built into the application, no plugin needed: reading and writing local
+folders, [companion files and archive unfolding](#companion-files-and-archives),
+[secondary outputs](#secondary-outputs) and [running a program after the copy](#postprocess).
+
 ## Highlights
 
 - **Plan first, then copy.** By default a run lists and analyses the files
