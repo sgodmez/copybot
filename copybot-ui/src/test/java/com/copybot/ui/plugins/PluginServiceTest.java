@@ -103,6 +103,16 @@ public class PluginServiceTest {
                 out.write(body);
             }
         });
+        server.createContext("/releases", exchange -> {
+            byte[] body = ("[{\"tag_name\": \"v1.3.0-beta.1\", \"html_url\": \"https://example.com/beta\","
+                    + " \"prerelease\": true, \"assets\": []},"
+                    + " {\"tag_name\": \"v1.2.0\", \"html_url\": \"https://example.com/notes\", \"assets\": []}]")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            try (OutputStream out = exchange.getResponseBody()) {
+                out.write(body);
+            }
+        });
         server.createContext("/files/", exchange -> {
             exchange.sendResponseHeaders(200, portableZip.length);
             try (OutputStream out = exchange.getResponseBody()) {
@@ -146,9 +156,10 @@ public class PluginServiceTest {
     private PluginService service() {
         UpdateService.Host host = new UpdateService.Host(appDir.resolve("Copybot.exe").toString(), 4242L, 4241L, null,
                 true, () -> List.copyOf(processes), folder -> writable);
-        UpdateService updates = new UpdateService(UpdateCheck.httpClient(),
-                URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/latest"), "1.0.0", host,
-                dir.resolve("logs"), tmp(), Clock.fixed(NOW, ZoneOffset.UTC), settings, () -> busy, launched::add);
+        String base = "http://127.0.0.1:" + server.getAddress().getPort();
+        UpdateService updates = new UpdateService(UpdateCheck.httpClient(), URI.create(base + "/latest"),
+                URI.create(base + "/releases"), "1.0.0", host, dir.resolve("logs"), tmp(),
+                Clock.fixed(NOW, ZoneOffset.UTC), settings, () -> busy, launched::add);
         return new PluginService(updates, catalogs, () -> report, "1.0");
     }
 
@@ -162,11 +173,17 @@ public class PluginServiceTest {
 
     private static final class Settings implements UpdateService.Settings {
         boolean auto = true;
+        boolean beta;
         Optional<Instant> last = Optional.empty();
 
         @Override
         public boolean autoCheck() {
             return auto;
+        }
+
+        @Override
+        public boolean beta() {
+            return beta;
         }
 
         @Override
@@ -350,7 +367,7 @@ public class PluginServiceTest {
         UpdateService.Host host = new UpdateService.Host(appDir.resolve("Copybot.exe").toString(), 1L, -1L, null,
                 true, List::of, folder -> asked.add(folder));
         UpdateService updates = new UpdateService(UpdateCheck.httpClient(), URI.create("http://127.0.0.1:1/"),
-                "1.0.0", host, dir, tmp(), Clock.systemUTC(), settings, () -> false, launched::add);
+                URI.create("http://127.0.0.1:1/"), "1.0.0", host, dir, tmp(), Clock.systemUTC(), settings, () -> false, launched::add);
         new PluginService(updates, catalogs, () -> report, "1.0").adminApprovalNeeded();
         Files.delete(pluginsDir);
         new PluginService(updates, catalogs, () -> report, "1.0").adminApprovalNeeded();
@@ -503,6 +520,31 @@ public class PluginServiceTest {
             }
         }
         return bytes.toByteArray();
+    }
+
+    /** Stable users: the catalogue of the latest published release, as before. */
+    @Test
+    public void withoutBetaTheCatalogueIsTheOneOfTheLatestRelease() throws Exception {
+        service().fetchCatalog();
+
+        assertEquals(1, catalogs.fetches.get());
+        assertEquals(List.of(), catalogs.releaseFetches);
+    }
+
+    /** Beta users: the catalogue of the release the application check offers, so that the plugins fit the beta. */
+    @Test
+    public void withBetaTheCatalogueIsTheOneOfTheNewestReleasePreReleasesIncluded() throws Exception {
+        settings.beta = true;
+        PluginService service = service();
+
+        PluginService.Check check = service.checkNow();
+
+        assertEquals("1.3.0-beta.1", check.release().orElseThrow().version());
+        assertTrue(check.release().get().prerelease());
+        assertEquals(List.of("1.3.0-beta.1"), catalogs.releaseFetches);
+        catalogs.releaseFetches.clear();
+        service.fetchCatalog();
+        assertEquals(List.of("1.3.0-beta.1"), catalogs.releaseFetches);
     }
 
     @Test

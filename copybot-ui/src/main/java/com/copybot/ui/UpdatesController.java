@@ -191,7 +191,7 @@ public class UpdatesController {
             refreshTicks();
         });
         tickRefreshers.add(() -> tick.setSelected(model.appChecked()));
-        Label versions = new Label(AppInfo.version() + "  \u2192  " + release.get().version());
+        Label versions = new Label(AppInfo.version() + "  \u2192  " + UpdatesTexts.version(release.get()));
         VBox notes = new VBox(4);
         if (!release.get().notes().isBlank()) {
             notes.getChildren().add(wrapped(release.get().notes()));

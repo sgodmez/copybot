@@ -47,6 +47,9 @@ public class UpdateServiceTest {
     private final AtomicInteger checks = new AtomicInteger();
     private volatile int status = 200;
     private volatile String latestVersion = "1.2.0";
+    private final AtomicInteger listChecks = new AtomicInteger();
+    /** The releases of the list ({@code releases}), as GitHub gives them: newest first by date; a '-' is a beta. */
+    private volatile List<String> listed = List.of("1.3.0-beta.2", "1.3.0-beta.10", "1.2.0");
     /** The files of the release served, by name. */
     private final Map<String, byte[]> files = new LinkedHashMap<>();
 
@@ -67,6 +70,15 @@ public class UpdateServiceTest {
         server.createContext("/latest", exchange -> {
             checks.incrementAndGet();
             byte[] body = latestJson().getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(status, status == 200 ? body.length : -1);
+            if (status == 200) {
+                exchange.getResponseBody().write(body);
+            }
+            exchange.close();
+        });
+        server.createContext("/releases", exchange -> {
+            listChecks.incrementAndGet();
+            byte[] body = listJson().getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(status, status == 200 ? body.length : -1);
             if (status == 200) {
                 exchange.getResponseBody().write(body);
@@ -105,6 +117,13 @@ public class UpdateServiceTest {
                 + assets + "]}";
     }
 
+    private String listJson() {
+        return listed.stream()
+                .map(v -> "{\"tag_name\": \"v" + v + "\", \"html_url\": \"https://example.com/" + v
+                        + "\", \"prerelease\": " + v.contains("-") + ", \"draft\": false, \"assets\": []}")
+                .collect(Collectors.joining(", ", "[", "]"));
+    }
+
     private static String sha256(byte[] bytes) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
@@ -121,8 +140,9 @@ public class UpdateServiceTest {
     private UpdateService service(boolean windows, UpdateService.Launcher launcher) {
         UpdateService.Host host = new UpdateService.Host(appPath, 4242L, 4241L, configFile, windows,
                 () -> List.copyOf(processes), folder -> writable);
-        return new UpdateService(UpdateCheck.httpClient(), URI.create(base() + "/latest"), version, host,
-                dir.resolve("logs"), tmp(), Clock.fixed(NOW, ZoneOffset.UTC), settings, () -> busy, launcher);
+        return new UpdateService(UpdateCheck.httpClient(), URI.create(base() + "/latest"),
+                URI.create(base() + "/releases?per_page=30"), version, host, dir.resolve("logs"), tmp(),
+                Clock.fixed(NOW, ZoneOffset.UTC), settings, () -> busy, launcher);
     }
 
     private Path tmp() {
@@ -135,11 +155,17 @@ public class UpdateServiceTest {
 
     private static final class TestSettings implements UpdateService.Settings {
         boolean auto = true;
+        boolean beta;
         Optional<Instant> last = Optional.empty();
 
         @Override
         public boolean autoCheck() {
             return auto;
+        }
+
+        @Override
+        public boolean beta() {
+            return beta;
         }
 
         @Override
@@ -224,6 +250,65 @@ public class UpdateServiceTest {
         latestVersion = "0.9.0";
         assertTrue(service().checkNow().isEmpty());
         assertEquals(2, checks.get());
+    }
+
+    /** Beta off: releases/latest exactly as before, which GitHub never answers with a pre-release. */
+    @Test
+    public void withoutBetaOnlyTheLatestPublishedReleaseIsAsked() throws Exception {
+        Release release = service().checkNow().orElseThrow();
+
+        assertEquals("1.2.0", release.version());
+        assertFalse(release.prerelease());
+        assertEquals(1, checks.get());
+        assertEquals(0, listChecks.get());
+    }
+
+    @Test
+    public void withBetaTheHighestVersionOfTheListIsOffered() throws Exception {
+        settings.beta = true;
+
+        Release release = service().checkNow().orElseThrow();
+
+        assertEquals("1.3.0-beta.10", release.version());
+        assertTrue(release.prerelease());
+        assertEquals(0, checks.get());
+        assertEquals(1, listChecks.get());
+        assertEquals(Optional.of(NOW), settings.last);
+    }
+
+    @Test
+    public void aBetaUserGetsTheFinalReleaseWhenItComesOut() throws Exception {
+        settings.beta = true;
+        version = "1.3.0-beta.10";
+        assertTrue(service().checkNow().isEmpty(), "the newest beta is installed");
+
+        listed = List.of("1.3.0", "1.3.0-beta.10", "1.2.0");
+        Release release = service().checkNow().orElseThrow();
+
+        assertEquals("1.3.0", release.version());
+        assertFalse(release.prerelease());
+    }
+
+    /** A beta installed, the option turned off afterwards: the final release still comes through releases/latest. */
+    @Test
+    public void aBetaCopyWithoutTheOptionWaitsForTheNextStableRelease() throws Exception {
+        version = "1.3.0-beta.2";
+        latestVersion = "1.2.0";
+        assertTrue(service().checkNow().isEmpty());
+
+        latestVersion = "1.3.0";
+        assertEquals("1.3.0", service().checkNow().orElseThrow().version());
+        assertEquals(0, listChecks.get());
+    }
+
+    /** The release whose catalogue the plugins read: the one of the channel, whatever this version. */
+    @Test
+    public void theReleaseOfTheChannelFollowsTheOption() throws Exception {
+        assertEquals("1.2.0", service().channelRelease().version());
+
+        settings.beta = true;
+        assertEquals("1.3.0-beta.10", service().channelRelease().version());
+        assertTrue(settings.last.isEmpty(), "not a check of the application");
     }
 
     @Test

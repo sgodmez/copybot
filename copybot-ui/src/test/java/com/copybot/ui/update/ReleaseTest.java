@@ -41,6 +41,66 @@ public class ReleaseTest {
     }
 
     @Test
+    public void aPreReleaseIsMarked() throws UpdateException {
+        assertFalse(Release.parse(JSON).prerelease());
+        String beta = "{\"tag_name\": \"v1.3.0-beta.1\", \"html_url\": \"https://example.com/n\", \"prerelease\": true}";
+        Release release = Release.parse(beta);
+        assertTrue(release.prerelease());
+        assertEquals("1.3.0-beta.1", release.version());
+    }
+
+    private static String entry(String tag, boolean prerelease, boolean draft) {
+        return "{\"tag_name\": \"" + tag + "\", \"html_url\": \"https://example.com/" + tag + "\", \"prerelease\": "
+                + prerelease + ", \"draft\": " + draft + ", \"assets\": []}";
+    }
+
+    /** The answer of {@code releases}: GitHub lists them newest first by date, not by version. */
+    @Test
+    public void theNewestOfAListIsTheHighestVersionPreReleasesIncluded() throws UpdateException {
+        String json = "[" + entry("v1.3.0-beta.2", true, false) + "," + entry("v1.3.0-beta.10", true, false) + ","
+                + entry("v1.2.0", false, false) + "]";
+
+        Release newest = Release.parseNewest(json);
+
+        assertEquals("1.3.0-beta.10", newest.version());
+        assertTrue(newest.prerelease());
+    }
+
+    @Test
+    public void theFinalReleaseOutranksItsBetas() throws UpdateException {
+        String json = "[" + entry("v1.3.0-beta.10", true, false) + "," + entry("v1.3.0", false, false) + "]";
+
+        Release newest = Release.parseNewest(json);
+
+        assertEquals("1.3.0", newest.version());
+        assertFalse(newest.prerelease());
+    }
+
+    @Test
+    public void draftsAndTagsThatAreNotVersionsAreSkipped() throws UpdateException {
+        String json = "[" + entry("v2.0.0", false, true) + "," + entry("nightly", true, false) + ","
+                + entry("v1.2.0", false, false) + "]";
+
+        assertEquals("1.2.0", Release.parseNewest(json).version());
+    }
+
+    @Test
+    public void aListWithoutAReleaseMeansNoReleaseYet() {
+        for (String json : new String[]{"[]", "[" + entry("v2.0.0", false, true) + "]"}) {
+            UpdateException e = assertThrows(UpdateException.class, () -> Release.parseNewest(json), json);
+            assertEquals("update.no-release", e.key());
+        }
+    }
+
+    @Test
+    public void anInvalidListIsUnreadable() {
+        for (String json : new String[]{"not json", "{}", "[1]", "[{\"tag_name\": \"v1.0.0\"}]"}) {
+            UpdateException e = assertThrows(UpdateException.class, () -> Release.parseNewest(json), json);
+            assertEquals("update.error.unreadable", e.key());
+        }
+    }
+
+    @Test
     public void anInvalidDocumentIsUnreadable() {
         for (String json : new String[]{"not json", "[]", "{}", "{\"tag_name\": \"v1\"}"}) {
             UpdateException e = assertThrows(UpdateException.class, () -> Release.parse(json), json);

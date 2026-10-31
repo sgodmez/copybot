@@ -102,6 +102,20 @@ public class UiPreferencesTest {
     }
 
     @Test
+    public void theBetaVersionsAreOffOnlyUntilTurnedOn() throws IOException {
+        Path file = tempDir.resolve("prefs.json");
+        assertFalse(UiPreferences.updateBeta(file));
+
+        UiPreferences.saveUpdateBeta(file, true);
+
+        assertTrue(UiPreferences.updateBeta(file));
+        UiPreferences.saveUpdateBeta(file, false);
+        assertFalse(UiPreferences.updateBeta(file));
+        Files.writeString(file, "{\"updateBeta\": \"yes\"}");
+        assertFalse(UiPreferences.updateBeta(file), "not a boolean");
+    }
+
+    @Test
     public void theLastUpdateCheckIsKeptToTheSecond() {
         Path file = tempDir.resolve("prefs.json");
         assertEquals(Optional.empty(), UiPreferences.updateLastCheck(file, "0.6.0"));

@@ -10,10 +10,12 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
-/** Asks GitHub for the latest published release. */
+/** Asks GitHub for the latest published release, or for the newest one pre-releases included (beta channel). */
 public final class UpdateCheck {
 
     public static final URI LATEST = URI.create("https://api.github.com/repos/sgodmez/copybot/releases/latest");
+    /** The last 30 releases (one page of the API), drafts only for the maintainers; enough to find the newest. */
+    public static final URI RELEASES = URI.create("https://api.github.com/repos/sgodmez/copybot/releases?per_page=30");
 
     static final Duration TIMEOUT = Duration.ofSeconds(10);
     private static final Duration INTERVAL = Duration.ofHours(24);
@@ -34,7 +36,20 @@ public final class UpdateCheck {
                 .followRedirects(HttpClient.Redirect.NORMAL).connectTimeout(TIMEOUT).build();
     }
 
+    /** The release of the address: {@code releases/latest} (the latest published one, never a pre-release) or a tag. */
     public Release fetchLatest() throws UpdateException, InterruptedException {
+        return Release.parse(get());
+    }
+
+    /**
+     * The highest version of the list at the address ({@link #RELEASES}), pre-releases included: the release of the
+     * beta channel ({@link Release#parseNewest}).
+     */
+    public Release fetchNewest() throws UpdateException, InterruptedException {
+        return Release.parseNewest(get());
+    }
+
+    private String get() throws UpdateException, InterruptedException {
         HttpRequest request = HttpRequest.newBuilder(latest).timeout(TIMEOUT)
                 .header("Accept", "application/vnd.github+json")
                 .header("User-Agent", "Copybot/" + currentVersion).GET().build();
@@ -50,7 +65,7 @@ public final class UpdateCheck {
         if (response.statusCode() != 200) {
             throw new UpdateException("update.error.http", response.statusCode());
         }
-        return Release.parse(response.body());
+        return response.body();
     }
 
     /** True when there is no previous check, when it is in the future (a clock set back) or 24 h old or more. */

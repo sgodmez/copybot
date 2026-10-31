@@ -37,6 +37,11 @@ public final class UpdateService {
     public interface Settings {
         boolean autoCheck();
 
+        /** True when the beta versions (GitHub pre-releases) are offered too; off unless the user turns it on. */
+        default boolean beta() {
+            return false;
+        }
+
         Optional<Instant> lastCheck();
 
         void checked(Instant when);
@@ -89,6 +94,8 @@ public final class UpdateService {
 
     private final HttpClient client;
     private final URI latest;
+    /** The list of the releases, pre-releases included: asked instead of {@link #latest} for the beta channel. */
+    private final URI releases;
     private final String currentVersion;
     private final Host host;
     /** The executable of the packaged application, null outside it (IDE, command line). */
@@ -101,10 +108,11 @@ public final class UpdateService {
     private final BooleanSupplier busy;
     private final Launcher launcher;
 
-    public UpdateService(HttpClient client, URI latest, String currentVersion, Host host, Path logDir, Path tempRoot,
-            Clock clock, Settings settings, BooleanSupplier busy, Launcher launcher) {
+    public UpdateService(HttpClient client, URI latest, URI releases, String currentVersion, Host host, Path logDir,
+            Path tempRoot, Clock clock, Settings settings, BooleanSupplier busy, Launcher launcher) {
         this.client = client;
         this.latest = latest;
+        this.releases = releases;
         this.currentVersion = currentVersion;
         this.host = host;
         String appPath = host.appPath();
@@ -132,8 +140,9 @@ public final class UpdateService {
                 configFile == null ? null : configFile.toAbsolutePath().normalize(),
                 System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows"),
                 UpdateService::systemProcesses, AppFolders::isWritable);
-        return new UpdateService(UpdateCheck.httpClient(), UpdateCheck.LATEST, currentVersion, host, logDir, null,
-                Clock.systemUTC(), new PreferencesSettings(currentVersion), busy, UpdateService::startDetached);
+        return new UpdateService(UpdateCheck.httpClient(), UpdateCheck.LATEST, UpdateCheck.RELEASES, currentVersion,
+                host, logDir, null, Clock.systemUTC(), new PreferencesSettings(currentVersion), busy,
+                UpdateService::startDetached);
     }
 
     public String currentVersion() {
@@ -190,12 +199,27 @@ public final class UpdateService {
             throw new UpdateException(unavailable.get());
         }
         try {
-            Release release = new UpdateCheck(client, latest, currentVersion).fetchLatest();
+            Release release = channelRelease();
             return AppVersion.compare(release.version(), currentVersion) > 0 ? Optional.of(release)
                     : Optional.empty();
         } finally {
             settings.checked(clock.instant());
         }
+    }
+
+    /** True when the user asked for the beta versions too. */
+    public boolean beta() {
+        return settings.beta();
+    }
+
+    /**
+     * The newest release of the user's channel, whatever this version, without recording a check: with the beta
+     * versions, the highest version of the list (a pre-release, or the final release once it is out); otherwise
+     * {@code releases/latest}, never a pre-release. The plugins read the catalogue of this same release.
+     */
+    public Release channelRelease() throws UpdateException, InterruptedException {
+        return settings.beta() ? new UpdateCheck(client, releases, currentVersion).fetchNewest()
+                : new UpdateCheck(client, latest, currentVersion).fetchLatest();
     }
 
     /** The message key telling why the update cannot be installed now; empty when it can. */
@@ -459,6 +483,11 @@ public final class UpdateService {
         @Override
         public boolean autoCheck() {
             return UiPreferences.updateCheck();
+        }
+
+        @Override
+        public boolean beta() {
+            return UiPreferences.updateBeta();
         }
 
         @Override

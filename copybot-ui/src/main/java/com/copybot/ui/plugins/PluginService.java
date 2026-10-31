@@ -109,11 +109,16 @@ public final class PluginService {
         return catalog != null ? catalog : fetchCatalog();
     }
 
-    /** Reads the catalogue of the latest release now (in a temporary folder deleted after) and keeps it. */
+    /**
+     * Reads the catalogue now (in a temporary folder deleted after) and keeps it: the one of the latest release, or
+     * with the beta versions the one of the newest release pre-releases included (the release the application check
+     * offers, so that the plugins fit the beta).
+     */
     public PluginCatalog fetchCatalog() throws UpdateException, InterruptedException {
         Path temp = updates.createTempDir();
         try {
-            PluginCatalog catalog = catalogs.fetch(temp);
+            PluginCatalog catalog = updates.beta() ? catalogs.fetch(updates.channelRelease(), temp)
+                    : catalogs.fetch(temp);
             cached = catalog;
             return catalog;
         } finally {

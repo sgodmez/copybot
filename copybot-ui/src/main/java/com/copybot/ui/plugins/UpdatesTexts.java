@@ -42,6 +42,12 @@ public final class UpdatesTexts {
                 at.format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale)), time);
     }
 
+    /** The version of an offered release, "1.3.0-beta.2 (beta)" for a pre-release (the beta channel). */
+    public static String version(Release release) {
+        return release.prerelease() ? ResourcesEngine.getString("update.beta-version", release.version())
+                : release.version();
+    }
+
     /** The header: the running version and when it last checked. */
     public static String header(String version, String lastCheck) {
         return "Copybot " + version + SEPARATOR + lastCheck;

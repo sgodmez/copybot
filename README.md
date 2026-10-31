@@ -1043,6 +1043,19 @@ tested on a real Linux yet: extract it anywhere and run `Copybot/bin/Copybot`.
 The video and sound preview needs GStreamer and ffmpeg (libavcodec), and
 updating from the application is Windows only.
 
+**Beta versions:** some versions are published first as betas
+(`X.Y.Z-beta.N`, a GitHub pre-release) to try them before everyone. Copybot
+offers them only when **Receive beta versions** is ticked in the preferences
+(under the automatic check; off by default); a beta may be less stable. With
+the option, Copybot offers the highest version among the stable releases and
+the betas, and its official plugins come from the catalogue of that same
+release; a beta copy then gets the final `X.Y.Z` when it comes out (it is
+higher than its betas). Without it, Copybot only ever sees the stable
+releases. A beta installs over the stable copy like any update (same
+installation, same data and plugins); untick the option to go back to the
+stable releases at the next stable version (Copybot never installs an older
+version).
+
 **Making a release:** on `develop`, set the version of the application to
 `X.Y.Z` (drop `-SNAPSHOT`) in the poms, commit and push. Then go through a
 pull request from `develop` to `master` titled `Release X.Y.Z`, merge it, and
@@ -1088,6 +1101,22 @@ plugins window compares with the API of the running Copybot (never with the
 version of the application). The description
 of a plugin, and its licence notice (`gps-zone`: ODbL), come from the
 `catalog.json` of its module.
+
+**Making a beta release:** set the version of the application to
+`X.Y.Z-beta.N` (`beta.1`, `beta.2`, ...; `alpha`, `rc` work too:
+`alpha < beta < rc < X.Y.Z`, and `beta.10` comes after `beta.9`) in the poms,
+and tag `vX.Y.Z-beta.N` as for a release (the workflow runs for any `v*`
+tag, whatever its branch). The workflow accepts a pom version `X.Y.Z` or
+`X.Y.Z-<qualifier>` and still requires the tag to be `v<pom version>`; a tag
+with a `-` makes the draft a **pre-release** (the installer's file version is
+`X.Y.Z`, the qualifier stays in its name and in the application). Read the
+draft and publish it: only the users with **Receive beta versions** are offered
+it (`releases/latest`, which the others ask, never returns a pre-release). Its
+`catalogue.json` is built against the latest published **stable** release
+(pre-releases do not count): it republishes the plugins changed since then,
+and so does the next beta and the next stable release, so each release carries
+the archives of its new plugin versions. Raise the version of a changed plugin
+for the beta as for a stable release.
 
 To run a pipeline from the command line with the jlink image:
 

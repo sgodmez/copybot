@@ -2,7 +2,10 @@ package com.copybot.ui.update;
 
 import java.util.Arrays;
 
-/** Version numbers as {@code X.Y.Z} with an optional qualifier ({@code 1.0.0-beta}); a qualifier sorts before the release. */
+/**
+ * Version numbers as {@code X.Y.Z} with an optional qualifier ({@code 1.0.0-beta.2}); a qualifier sorts before the
+ * release, qualifiers sort as in SemVer ({@code beta.2 < beta.10 < rc.1}).
+ */
 public final class AppVersion {
 
     private AppVersion() {
@@ -30,7 +33,51 @@ public final class AppVersion {
         if (qualifiedLeft != qualifiedRight) {
             return qualifiedLeft ? -1 : 1;
         }
-        return qualifiedLeft ? left[1].compareTo(right[1]) : 0;
+        return qualifiedLeft ? compareQualifiers(left[1], right[1]) : 0;
+    }
+
+    /**
+     * The SemVer order of pre-release qualifiers: dot-separated segments one by one, numbers numerically, words
+     * alphabetically, a number before a word, and fewer segments first when all the shared ones are equal
+     * ({@code alpha < beta < beta.2 < beta.10 < rc.1}).
+     */
+    private static int compareQualifiers(String a, String b) {
+        String[] x = a.split("\\.");
+        String[] y = b.split("\\.");
+        for (int i = 0; i < Math.min(x.length, y.length); i++) {
+            int c = compareSegments(x[i], y[i]);
+            if (c != 0) {
+                return c;
+            }
+        }
+        return Integer.compare(x.length, y.length);
+    }
+
+    private static int compareSegments(String a, String b) {
+        boolean numberA = isNumber(a);
+        boolean numberB = isNumber(b);
+        if (numberA && numberB) {
+            // no overflow on long runs of digits: the longer number (without leading zeros) is the greater
+            String p = stripZeros(a);
+            String q = stripZeros(b);
+            return p.length() != q.length() ? Integer.compare(p.length(), q.length()) : p.compareTo(q);
+        }
+        if (numberA != numberB) {
+            return numberA ? -1 : 1;
+        }
+        return a.compareTo(b);
+    }
+
+    private static boolean isNumber(String segment) {
+        return !segment.isEmpty() && segment.chars().allMatch(c -> c >= '0' && c <= '9');
+    }
+
+    private static String stripZeros(String digits) {
+        int i = 0;
+        while (i < digits.length() - 1 && digits.charAt(i) == '0') {
+            i++;
+        }
+        return digits.substring(i);
     }
 
     private static int[] numbers(String dotted) {

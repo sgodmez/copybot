@@ -5,6 +5,7 @@ import com.copybot.ui.plugins.PluginCatalog;
 import com.copybot.ui.plugins.PluginRow;
 import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.plugins.PluginState;
+import com.copybot.ui.plugins.UpdatesTexts;
 import com.copybot.ui.update.Release;
 import com.copybot.ui.update.UpdateException;
 import com.copybot.ui.update.UpdateService;
@@ -141,7 +142,7 @@ final class UpdateUi {
             return ResourcesEngine.getString("update.banner.plugins", pluginUpdates);
         }
         return ResourcesEngine.getString(pluginUpdates > 0 ? "update.banner.app-and-plugins" : "update.banner.app",
-                release.get().version(), pluginUpdates);
+                UpdatesTexts.version(release.get()), pluginUpdates);
     }
 
     /** The text of a failed check or update: the translated key of an {@link UpdateException}, else its message. */
@@ -197,7 +198,7 @@ final class UpdateUi {
             return;
         }
         ProgressWindow progress = new ProgressWindow(owner, "update.title",
-                ResourcesEngine.getString("update.downloading", release.version()));
+                ResourcesEngine.getString("update.downloading", UpdatesTexts.version(release)));
 
         // the progress of the download thread, handed to the JavaFX thread at most once at a time
         AtomicLong received = new AtomicLong();

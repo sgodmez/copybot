@@ -30,6 +30,7 @@ public final class UiPreferences {
     private static final String RESOURCES_LAYOUT_KEY = "resourcesLayout";
     static final String RECENTS_KEY = "recentPipelines";
     private static final String UPDATE_CHECK_KEY = "updateCheck";
+    private static final String UPDATE_BETA_KEY = "updateBeta";
     private static final String UPDATE_LAST_CHECK_KEY = "updateLastCheck";
     private static final String UPDATE_LAST_CHECK_VERSION_KEY = "updateLastCheckVersion";
 
@@ -137,6 +138,15 @@ public final class UiPreferences {
         saveUpdateCheck(file, enabled);
     }
 
+    /** Whether the beta versions (GitHub pre-releases) are offered too; off by default. */
+    public static boolean updateBeta() {
+        return updateBeta(file);
+    }
+
+    public static void saveUpdateBeta(boolean enabled) {
+        saveUpdateBeta(file, enabled);
+    }
+
     /**
      * When this version last checked for a new version, successful or not; empty when never, or when the date was
      * recorded by another version (spec update-with-plugins §2: a new version checks at its first start, its plugins
@@ -158,6 +168,16 @@ public final class UiPreferences {
 
     static void saveUpdateCheck(Path prefsFile, boolean enabled) {
         write(prefsFile, UPDATE_CHECK_KEY, new JsonPrimitive(enabled));
+    }
+
+    static boolean updateBeta(Path prefsFile) {
+        JsonElement value = read(prefsFile).get(UPDATE_BETA_KEY);
+        return value != null && value.isJsonPrimitive() && value.getAsJsonPrimitive().isBoolean()
+                && value.getAsBoolean();
+    }
+
+    static void saveUpdateBeta(Path prefsFile, boolean enabled) {
+        write(prefsFile, UPDATE_BETA_KEY, new JsonPrimitive(enabled));
     }
 
     static Optional<Instant> updateLastCheck(Path prefsFile, String version) {

@@ -24,6 +24,8 @@ public class PreferencesController {
     @FXML
     private CheckBox updateAutoCheck;
     @FXML
+    private CheckBox updateBeta;
+    @FXML
     private Label updateUnavailable;
 
     @FXML
@@ -68,12 +70,17 @@ public class PreferencesController {
     }
 
 
-    /** The automatic check is possible only for a released, packaged Copybot: otherwise disabled, with why. */
+    /**
+     * The automatic check and the beta versions are possible only for a released, packaged Copybot: otherwise
+     * disabled, with why.
+     */
     private void initUpdates() {
         updateAutoCheck.setSelected(UiPreferences.updateCheck());
+        updateBeta.setSelected(UiPreferences.updateBeta());
         Optional<String> unavailable = UpdateUi.service().map(UpdateService::unavailableReason)
                 .orElse(Optional.of("update.unavailable-dev"));
         updateAutoCheck.setDisable(unavailable.isPresent());
+        updateBeta.setDisable(unavailable.isPresent());
         unavailable.ifPresent(key -> {
             updateUnavailable.setText(ResourcesEngine.getString(key));
             updateUnavailable.setVisible(true);
@@ -98,6 +105,9 @@ public class PreferencesController {
     private void save() {
         if (!updateAutoCheck.isDisabled() && updateAutoCheck.isSelected() != UiPreferences.updateCheck()) {
             UiPreferences.saveUpdateCheck(updateAutoCheck.isSelected());
+        }
+        if (!updateBeta.isDisabled() && updateBeta.isSelected() != UiPreferences.updateBeta()) {
+            UiPreferences.saveUpdateBeta(updateBeta.isSelected()); // read at the next check
         }
         UiPreferences.ResourcesLayout layout = resourcesLayoutCombo.getValue();
         if (layout != null && layout != UiPreferences.resourcesLayout()) {

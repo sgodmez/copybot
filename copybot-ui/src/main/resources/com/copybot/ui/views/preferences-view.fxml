@@ -30,6 +30,12 @@
       <Separator />
       <Label style="-fx-font-weight: bold;" text="%update.section" />
       <CheckBox fx:id="updateAutoCheck" mnemonicParsing="false" text="%update.auto" />
+      <CheckBox fx:id="updateBeta" mnemonicParsing="false" text="%update.beta" />
+      <Label style="-fx-text-fill: #616161;" text="%update.beta.help" wrapText="true">
+         <padding>
+            <Insets left="24.0" />
+         </padding>
+      </Label>
       <Label fx:id="updateUnavailable" managed="false" style="-fx-text-fill: #616161;" visible="false" wrapText="true" />
       <Button mnemonicParsing="false" onAction="#onUpdatesClick" text="%menu.edit.updates" />
       <Separator />

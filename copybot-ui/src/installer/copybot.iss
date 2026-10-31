@@ -1,5 +1,5 @@
 ; Copybot installer (Inno Setup 6): per user without administrator rights, or for all users (the wizard asks).
-; Build: ISCC.exe /DAppVersion=<version> /DSourceDir=<path of target\dist\Copybot> /O<folder> copybot.iss
+; Build: ISCC.exe /DAppVersion=<version> [/DAppNumericVersion=<X.Y.Z>] /DSourceDir=<path of target\dist\Copybot> /O<folder> copybot.iss
 
 #ifndef AppVersion
   #error AppVersion is not defined: pass /DAppVersion=<version>
@@ -13,6 +13,11 @@
 AppId={{C3DBE523-0904-4027-A210-35496B3C38EB}
 AppName=Copybot
 AppVersion={#AppVersion}
+; the file version of the setup must be numbers only: X.Y.Z without the qualifier of a beta (1.3.0-beta.1), passed
+; by the release workflow; without it Inno Setup takes AppVersion when it is numeric, else 0.0.0.0
+#ifdef AppNumericVersion
+VersionInfoVersion={#AppNumericVersion}
+#endif
 AppPublisher=com.copybot
 DefaultDirName={autopf}\Copybot
 DisableProgramGroupPage=yes

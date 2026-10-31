@@ -105,6 +105,18 @@ public class UpdatesTextsTest {
     }
 
     @Test
+    public void aPreReleaseIsNamedAsABeta() {
+        assertEquals("0.7.0", UpdatesTexts.version(RELEASE));
+
+        Release beta = new Release("0.8.0-rc.1", URI.create("https://example.org/b"), "", List.of(), true);
+        String version = UpdatesTexts.version(beta);
+
+        assertEquals(ResourcesEngine.getString("update.beta-version", "0.8.0-rc.1"), version);
+        assertTrue(version.contains("0.8.0-rc.1"), version);
+        assertNotEquals("0.8.0-rc.1", version);
+    }
+
+    @Test
     public void theLastCheckIsNeverTodayOrADate() {
         Instant now = Instant.parse("2026-10-26T15:00:00Z");
 

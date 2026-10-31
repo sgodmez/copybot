@@ -22,6 +22,7 @@ public class UpdateCheckTest {
     private HttpServer server;
     private final AtomicReference<String> accept = new AtomicReference<>();
     private final AtomicReference<String> userAgent = new AtomicReference<>();
+    private final AtomicReference<String> query = new AtomicReference<>();
     private volatile int status = 200;
 
     @BeforeEach
@@ -36,6 +37,15 @@ public class UpdateCheckTest {
             if (status == 200) {
                 exchange.getResponseBody().write(body);
             }
+            exchange.close();
+        });
+        server.createContext("/releases", exchange -> {
+            query.set(exchange.getRequestURI().getQuery());
+            byte[] body = ("[{\"tag_name\": \"v1.2.0\", \"html_url\": \"https://example.com/a\"},"
+                    + " {\"tag_name\": \"v1.3.0-beta.1\", \"html_url\": \"https://example.com/b\", \"prerelease\": true}]")
+                    .getBytes(StandardCharsets.UTF_8);
+            exchange.sendResponseHeaders(200, body.length);
+            exchange.getResponseBody().write(body);
             exchange.close();
         });
         server.start();
@@ -56,6 +66,23 @@ public class UpdateCheckTest {
         Release release = check().fetchLatest();
 
         assertEquals("1.2.0", release.version());
+    }
+
+    @Test
+    public void theNewestOfTheListIncludesPreReleases() throws Exception {
+        URI list = URI.create("http://127.0.0.1:" + server.getAddress().getPort() + "/releases?per_page=30");
+
+        Release release = new UpdateCheck(UpdateCheck.httpClient(), list, "1.0.0").fetchNewest();
+
+        assertEquals("1.3.0-beta.1", release.version());
+        assertTrue(release.prerelease());
+        assertEquals("per_page=30", query.get());
+    }
+
+    @Test
+    public void theListOfGitHubIsTheThirtyLastReleases() {
+        assertEquals(URI.create("https://api.github.com/repos/sgodmez/copybot/releases?per_page=30"),
+                UpdateCheck.RELEASES);
     }
 
     @Test
