@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The "actionConfig" of exec.process (spec exec-ffmpeg §3).
+ * The "actionConfig" of exec.process (design spec §3).
  *
  * @param program         the executable: a path, or a name looked up in the PATH
  * @param arguments       its arguments, with the variables {in}, {out}, {name} (without extension) and {ext}; they

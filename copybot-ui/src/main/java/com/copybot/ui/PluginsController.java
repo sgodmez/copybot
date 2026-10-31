@@ -10,6 +10,7 @@ import com.copybot.ui.plugins.PluginCard.ActionLine;
 import com.copybot.ui.plugins.PluginCard.Filter;
 import com.copybot.ui.plugins.PluginCard.Status;
 import com.copybot.ui.plugins.PluginCatalog;
+import com.copybot.ui.plugins.PluginChangeTexts;
 import com.copybot.ui.plugins.PluginChoices;
 import com.copybot.ui.plugins.PluginChoices.Action;
 import com.copybot.ui.plugins.PluginRow;
@@ -287,7 +288,10 @@ public class PluginsController {
             box.getChildren().add(labelled("plugins.card.depends-on", String.join(", ", card.dependsOn()), ""));
         }
         if (!card.missing().isEmpty()) {
-            box.getChildren().add(labelled("plugins.card.missing", String.join(", ", card.missing()), RED));
+            // a missing official plugin named as such ("the plugin exec 2.0.0"), not by its module
+            box.getChildren().add(labelled("plugins.card.missing", card.missing().stream()
+                    .map(missing -> PluginChangeTexts.missing(missing, rows))
+                    .collect(Collectors.joining(", ")), RED));
         }
         if (card.official() && card.row().entry().license() != null) {
             PluginCatalog.License license = card.row().entry().license();
@@ -480,7 +484,7 @@ public class PluginsController {
 
     @FXML
     protected void onApplyClick() {
-        UpdateUi.applyPlugins(choices.toInstallOrUpdate(rows), choices.toRemove(rows),
+        UpdateUi.applyPlugins(rows, choices.toInstallOrUpdate(rows), choices.toRemove(rows),
                 applyButton.getScene().getWindow());
     }
 

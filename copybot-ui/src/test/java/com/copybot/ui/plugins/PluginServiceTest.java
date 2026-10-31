@@ -203,6 +203,7 @@ public class PluginServiceTest {
         final List<String> downloads = new ArrayList<>();
         UpdateException fetchFailure;
         String failing;
+        String catalogue = CATALOGUE;
 
         @Override
         public PluginCatalog fetch(Path dir) throws UpdateException {
@@ -210,7 +211,7 @@ public class PluginServiceTest {
             if (fetchFailure != null) {
                 throw fetchFailure;
             }
-            return PluginCatalog.parse(CATALOGUE);
+            return PluginCatalog.parse(catalogue);
         }
 
         final List<String> releaseFetches = new ArrayList<>();
@@ -454,6 +455,33 @@ public class PluginServiceTest {
         assertEquals(1, json.getAsJsonArray("install").size());
         assertEquals("a", json.getAsJsonArray("install").get(0).getAsJsonObject().get("target").getAsString());
         assertEquals(List.of("a"), catalogs.downloads);
+    }
+
+    /** A plugin a ticked one needs and that is not installed (exec for ffmpeg) is installed with the application. */
+    @Test
+    public void aChosenPluginNotInstalledIsInstalledWithTheApplication() throws Exception {
+        portableZip = zipOf("Copybot/Copybot.exe");
+        report = report(installed(A, "1.0.0", pluginsDir.resolve("old-a")));
+        // A 1.1.0 needs C, which needs B: both come; D, chosen but needed by none, does not
+        catalogs.catalogue = CATALOGUE
+                .replace("\"description\": { \"en\": \"A\" }",
+                        "\"description\": { \"en\": \"A\" }, \"requires\": [ { \"code\": \"c\", \"version\": \"1.0.0\" } ]")
+                .replace("\"description\": { \"en\": \"C\" }",
+                        "\"description\": { \"en\": \"C\" }, \"requires\": [ { \"code\": \"b\", \"version\": \"1.0.0\" } ]");
+        PluginService service = service();
+        var release = service.checkNow().release().orElseThrow();
+
+        UpdateService.Prepared prepared = service.prepareUpdate(release, Set.of(A, B, C, D), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
+
+        JsonObject json = manifestOf(prepared.command());
+        assertEquals(List.of("a", "b", "c"), json.getAsJsonArray("install").asList().stream()
+                .map(e -> e.getAsJsonObject().get("target").getAsString()).toList());
+        assertEquals(List.of("a", "b", "c"), catalogs.downloads);
+
+        UpdateService.Prepared alone = service.prepareUpdate(release, Set.of(C), bytes -> { },
+                (i, n, code, bytes) -> { }, () -> false);
+        assertFalse(alone.command().contains("-PluginManifest"), "a plugin not installed comes only when needed");
     }
 
     @Test

@@ -4,6 +4,7 @@ import com.copybot.engine.pipeline.ArchivesConfig;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.GroupingRuleConfig;
+import com.copybot.engine.pipeline.MovedActionsMigration;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.RunEndMigration;
@@ -302,6 +303,8 @@ public final class PipelineDocument {
         // the former "postProcess" block becomes the first run-end action, as the engine reads it: the same pipeline,
         // so the document is not marked modified (closing asks nothing), but the next save writes the new form
         RunEndMigration.migrate(root);
+        // likewise, the steps of the ffmpeg actions written when they were in the plugin exec name the plugin ffmpeg
+        MovedActionsMigration.migrate(root);
         for (Section section : Section.values()) {
             checkSteps(root, section, section.jsonName());
         }

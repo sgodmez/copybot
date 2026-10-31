@@ -237,6 +237,29 @@ public class PluginLoaderTest {
     }
 
     @Test
+    public void aPluginRequiringAnAbsentOrOlderPluginIsAnErrorNamingIt() {
+        // as ffmpeg over exec: built against exec 2.0.0, its archive does not hold exec (a provided dependency)
+        Path built = plugins.resolve("built-against");
+        Path baseJar = TestPluginJar.plugin("test.base").version("2.0.0").writeTo(built);
+        Path child = plugins.resolve("child");
+        TestPluginJar.plugin("test.child").version("1.0.0").requires("test.base", baseJar).writeTo(child);
+        Path old = plugins.resolve("old-base");
+        TestPluginJar.plugin("test.base").version("1.0.0").writeTo(old);
+        Path recent = plugins.resolve("recent-base");
+        TestPluginJar.plugin("test.base").version("2.1.0").writeTo(recent);
+
+        PluginDefinition absent = error(load(child), "test.child");
+        assertEquals(List.of("test.base:2.0.0"), absent.getMissingRequires());
+        assertTrue(absent.getErrorMessage().contains("test.base"), absent.getErrorMessage());
+
+        List<PluginDefinition> withOld = load(child, old);
+        loaded(withOld, "test.base");
+        assertEquals(List.of("test.base:2.0.0"), error(withOld, "test.child").getMissingRequires());
+
+        assertEquals(List.of("test.base 2.1.0"), loaded(load(child, recent), "test.child").getPluginDependencies());
+    }
+
+    @Test
     public void twoMajorsOfAPluginEachRunOnTheirOwnVersionOfALibrary() throws Exception {
         // like the demo plugins: 1.0 embeds an old style jar (automatic module), 2.0 the named module that replaced it
         Path old = plugins.resolve("old");

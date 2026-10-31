@@ -24,8 +24,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * exec.process: runs a program on the file of each item; the file it writes ({out}) replaces the content (spec
- * exec-ffmpeg §3). The item keeps its source; its shown name takes the output extension.
+ * exec.process: runs a program on the file of each item; the file it writes ({out}) replaces the content (design
+ * spec §3). The item keeps its source; its shown name takes the output extension.
  * <p>
  * The arguments may hold secrets (resolved by the engine): no message nor log shows them, only the program, its exit
  * code and the end of its error output.

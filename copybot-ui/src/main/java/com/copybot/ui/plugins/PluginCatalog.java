@@ -28,14 +28,31 @@ public final class PluginCatalog {
      * @param description by language ({@code en}, {@code fr}, {@code it})
      * @param changes     what this version changes, by language; empty when the catalogue says nothing
      * @param license     null when the plugin has none to show
+     * @param requires    the official plugins it needs (its module {@code requires} their main module), empty
+     *                    when none
      */
     public record Entry(String module, String code, String version, String engine, String tag, String asset,
-                        Map<String, String> description, Map<String, String> changes, License license) {
+                        Map<String, String> description, Map<String, String> changes, License license,
+                        List<Requirement> requires) {
 
         public Entry {
             description = Map.copyOf(description);
             changes = Map.copyOf(changes);
+            requires = List.copyOf(requires);
         }
+
+        /** An entry that needs no other plugin. */
+        public Entry(String module, String code, String version, String engine, String tag, String asset,
+                     Map<String, String> description, Map<String, String> changes, License license) {
+            this(module, code, version, engine, tag, asset, description, changes, license, List.of());
+        }
+    }
+
+    /**
+     * A plugin another one needs: its code and the lowest version that works (the version it was built against;
+     * a version of the same major one at least as recent works too, as for the loader).
+     */
+    public record Requirement(String code, String version) {
     }
 
     /** A licence to show to the user: its name and its notice by language. */
@@ -86,7 +103,24 @@ public final class PluginCatalog {
             throw new IllegalArgumentException("unsafe name");
         }
         return new Entry(text(o, "module"), code, text(o, "version"), text(o, "engine"), tag, asset,
-                strings(o.get("description")), strings(o.get("changes")), license(o.get("license")));
+                strings(o.get("description")), strings(o.get("changes")), license(o.get("license")),
+                requires(o.get("requires")));
+    }
+
+    /** The plugins an entry needs; absent (a catalogue written before them): none. */
+    private static List<Requirement> requires(JsonElement element) {
+        List<Requirement> requires = new ArrayList<>();
+        if (element != null && !element.isJsonNull()) {
+            for (JsonElement item : element.getAsJsonArray()) {
+                JsonObject o = item.getAsJsonObject();
+                String code = text(o, "code");
+                if (!SAFE_NAME.matcher(code).matches()) {
+                    throw new IllegalArgumentException("unsafe name");
+                }
+                requires.add(new Requirement(code, text(o, "version")));
+            }
+        }
+        return requires;
     }
 
     private static License license(JsonElement element) {

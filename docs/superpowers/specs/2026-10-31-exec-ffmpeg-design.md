@@ -4,6 +4,17 @@ Date : 2026-10-31. Statut : décidé (Steven a délégué les choix ; décisions
 possibilité de le télécharger, GPU prévu, défaut H.265 / MP4). Usage visé : une sortie secondaire (spec
 2026-10-30-secondary-outputs) transcode ou réduit pendant que la sortie principale copie l'original tel quel.
 
+> **Révision 2026-10-31 : ffmpeg dans un plugin séparé.** Demande de Steven après la 0.8.0-beta.1 : les trois
+> actions `ffmpeg.*` quittent le plugin `exec` (qui passe en 2.0.0, avec le seul `exec.process`) pour un plugin
+> `copybot-plugin-ffmpeg` (module `com.copybot.plugin.ffmpeg`, code `ffmpeg`, 1.0.0, avec l'avis GPL). Le plugin
+> ffmpeg **dépend** du plugin exec : `exec` exporte son paquet `com.copybot.plugin.exec.process` (`ProcessRunner`,
+> `ProgramResolver`, `WorkFolder`, `ItemFiles`), `ffmpeg` le `requires` (dépendance Maven `provided`, donc exec
+> n'est pas dans son archive) et le moteur charge sa couche au-dessus de celle d'exec. Le catalogue porte la
+> dépendance (`requires`), et la fenêtre des plugins installe ou met à jour exec avec ffmpeg. Le dossier de données
+> devient `plugin-data/ffmpeg` (une copie téléchargée dans `plugin-data/exec` par la bêta n'est pas reprise). Le
+> reste de cette conception (§2 à §7) vaut tel quel pour le plugin ffmpeg ; « le plugin » y désigne exec pour §2–§3
+> et ffmpeg pour §4–§7.
+
 ## 1. Un plugin, quatre actions de traitement
 
 Module `copybot-plugin/copybot-plugin-exec`, code `exec`, version 1.0.0, bundles en/fr/it, `catalog.json`.

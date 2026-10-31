@@ -56,9 +56,22 @@ public final class UpdatesTexts {
     /**
      * What the line of a plugin says besides its versions: "up to date", that it travels with the offered Copybot
      * ("with Copybot X" while it can be ticked, "needs Copybot X" once Copybot is unticked), that it waits for a newer
-     * Copybot, or nothing for a plugin this Copybot accepts.
+     * Copybot, or nothing for a plugin this Copybot accepts. A plugin left unticked for a plugin it needs names it,
+     * and why it cannot come ("needs exec 3.0.0, which needs a newer version of Copybot"); a plugin installed along
+     * names the plugins that need it.
      */
     public static String note(UpdatesModel model, UpdatesModel.Plugin plugin) {
+        if (plugin.install()) {
+            return ResourcesEngine.getString("updates.installed-for", String.join(", ", model.neededBy(plugin.row())));
+        }
+        if (plugin.line() == UpdatesModel.PluginLine.UPDATABLE || plugin.line() == UpdatesModel.PluginLine.NEEDS_APP) {
+            Optional<UpdatesModel.Waiting> waiting = model.waitingFor(plugin.row());
+            if (waiting.isPresent()) {
+                return ResourcesEngine.getString(waiting.get().newerApp() ? "updates.needs-plugin-newer-app"
+                                : "updates.needs-plugin-unavailable", waiting.get().requirement().code(),
+                        waiting.get().requirement().version());
+            }
+        }
         String offered = model.release().map(Release::version).orElse("");
         return switch (plugin.line()) {
             case UP_TO_DATE -> ResourcesEngine.getString("updates.plugin-up-to-date");

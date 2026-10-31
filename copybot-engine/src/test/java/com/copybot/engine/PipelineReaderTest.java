@@ -120,6 +120,18 @@ public class PipelineReaderTest {
         return "{" + (name == null ? "" : "\"name\":\"" + name + "\",") + extra + "\"outStep\":" + OUT + "}";
     }
 
+    /** A pipeline of 0.8.0-beta.1 naming exec for an ffmpeg action reads as the ffmpeg plugin's step. */
+    @Test
+    public void anFfmpegStepOfTheExecPluginIsReadAsAStepOfTheFfmpegPlugin() throws IOException {
+        PipelineConfig config = read("{\"actionSteps\":[{\"plugin\":\"com.copybot.plugin.exec\","
+                + "\"action\":\"ffmpeg.video\",\"version\":\"1.0.0\"}],\"secondaryOutputs\":[" + branch("Thumbs",
+                "\"actionSteps\":[{\"plugin\":\"com.copybot.plugin.exec\",\"action\":\"ffmpeg.thumbnail\"}],") + "]}");
+
+        assertEquals("com.copybot.plugin.ffmpeg", config.actionSteps().getFirst().plugin());
+        assertNull(config.actionSteps().getFirst().version());
+        assertEquals("com.copybot.plugin.ffmpeg", config.secondaryOutputs().getFirst().actionSteps().getFirst().plugin());
+    }
+
     @Test
     public void aPipelineWithoutSecondaryOutputsHasNone() throws IOException {
         assertEquals(List.of(), read("{}").secondaryOutputs());

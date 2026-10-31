@@ -3,6 +3,8 @@ package com.copybot.ui.plugins;
 import com.copybot.ui.update.UpdateException;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 public class PluginCatalogTest {
@@ -62,6 +64,24 @@ public class PluginCatalogTest {
 
         assertEquals(1, catalog.entries().size());
         assertEquals("ok", catalog.entries().get(0).code());
+    }
+
+    @Test
+    public void theRequiredPluginsOfAnEntryAreRead() throws Exception {
+        PluginCatalog catalog = PluginCatalog.parse("""
+                { "format": 1, "plugins": [
+                  { "module": "m.exec", "code": "exec", "version": "2.0.0", "engine": "1.2", "tag": "v1", "asset": "e.zip" },
+                  { "module": "m.ffmpeg", "code": "ffmpeg", "version": "1.0.0", "engine": "1.2", "tag": "v1",
+                    "asset": "f.zip", "requires": [ { "code": "exec", "version": "2.0.0" } ] },
+                  { "module": "m.bad", "code": "bad", "version": "1.0.0", "engine": "1.2", "tag": "v1",
+                    "asset": "b.zip", "requires": [ { "code": "../exec", "version": "2.0.0" } ] },
+                  { "module": "m.blank", "code": "blank", "version": "1.0.0", "engine": "1.2", "tag": "v1",
+                    "asset": "b.zip", "requires": [ { "code": "exec" } ] }
+                ] }""");
+
+        assertEquals(List.of("exec", "ffmpeg"), catalog.entries().stream().map(PluginCatalog.Entry::code).toList());
+        assertEquals(List.of(), catalog.entries().get(0).requires());
+        assertEquals(List.of(new PluginCatalog.Requirement("exec", "2.0.0")), catalog.entries().get(1).requires());
     }
 
     @Test

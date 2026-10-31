@@ -17,7 +17,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
 /**
- * Runs an external program on one item (spec exec-ffmpeg §2): its input closed, its output discarded, the end of its
+ * Runs an external program on one item (design spec §2): its input closed, its output discarded, the end of its
  * error output kept for the message of a failure. A time limit or an interruption of the calling thread (a cancel)
  * kills the program and every process it started.
  * <p>
@@ -34,7 +34,7 @@ public final class ProcessRunner {
     private static final System.Logger LOGGER = System.getLogger(ProcessRunner.class.getName());
     /** A longer line of the error output is cut before it is handed over. */
     private static final int MAX_LINE = 8 * 1024;
-    /** The error output is read as UTF-8: what ffmpeg writes, on Windows too. */
+    /** The error output is read as UTF-8: what most programs write, on Windows too. */
     private static final Charset CHARSET = StandardCharsets.UTF_8;
     /** The null device: the input of the programs. */
     private static final File NULL_FILE = new File(
@@ -71,7 +71,7 @@ public final class ProcessRunner {
     }
 
     /**
-     * Runs the program to its end, handing over the lines of its standard output too (e.g. {@code ffmpeg -version}).
+     * Runs the program to its end, handing over the lines of its standard output too (e.g. the version a program gives).
      *
      * @param stdoutLines receives each line of the standard output, on a thread of its own; null: the output is
      *                    discarded

@@ -1,5 +1,6 @@
 package com.copybot.engine;
 
+import com.copybot.engine.pipeline.MovedActionsMigration;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
 import com.copybot.engine.pipeline.RunEndMigration;
@@ -44,6 +45,7 @@ public final class PipelineReader {
         checkSecondaryOnError(tree);
         if (tree.isJsonObject()) {
             RunEndMigration.migrate(tree.getAsJsonObject());
+            MovedActionsMigration.migrate(tree.getAsJsonObject());
         }
         PipelineConfig pipelineConfig;
         try {

@@ -136,6 +136,29 @@ public class UpdatesTextsTest {
         return DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT).withLocale(Locale.ENGLISH).format(time);
     }
 
+    /** ffmpeg 1.1 needs exec 3, which needs a newer Copybot: its line tells why it stays unticked. */
+    @Test
+    public void anUpdateLeftUntickedForAPluginItNeedsSaysWhy() {
+        PluginRow exec = row("exec", "2.0.0", "3.0.0", "2.0");
+        PluginCatalog.Entry entry = new PluginCatalog.Entry("com.copybot.plugin.ffmpeg", "ffmpeg", "1.1.0", "1.0",
+                "v1", "ffmpeg.zip", Map.of(), Map.of(), null, List.of(new PluginCatalog.Requirement("exec", "3.0.0")));
+        PluginRow ffmpeg = new PluginRow(entry, "1.0.0", List.of(Path.of("plugins", "ffmpeg")), PluginState.UP_TO_DATE);
+        UpdatesModel model = model(Optional.empty(), exec, ffmpeg);
+
+        assertEquals(ResourcesEngine.getString("updates.needs-plugin-newer-app", "exec", "3.0.0"),
+                UpdatesTexts.note(model, plugin(model, ffmpeg)));
+
+        UpdatesModel notOffered = new UpdatesModel(Optional.empty(), List.of(ffmpeg), List.of(ffmpeg), "1.3");
+        assertEquals(ResourcesEngine.getString("updates.needs-plugin-unavailable", "exec", "3.0.0"),
+                UpdatesTexts.note(notOffered, plugin(notOffered, ffmpeg)));
+
+        PluginRow notInstalled = new PluginRow(new PluginCatalog.Entry("com.copybot.plugin.exec", "exec", "3.0.0",
+                "1.0", "v1", "exec.zip", Map.of(), Map.of(), null), null, List.of(), PluginState.NOT_INSTALLED);
+        UpdatesModel along = new UpdatesModel(Optional.empty(), List.of(ffmpeg), List.of(notInstalled, ffmpeg), "1.3");
+        assertEquals(ResourcesEngine.getString("updates.installed-for", "ffmpeg"),
+                UpdatesTexts.note(along, plugin(along, notInstalled)));
+    }
+
     @Test
     public void theHeaderIsTheVersionAndTheLastCheck() {
         assertEquals("Copybot 0.6.1" + UpdatesTexts.SEPARATOR + "never", UpdatesTexts.header("0.6.1", "never"));

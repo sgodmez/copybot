@@ -21,6 +21,7 @@ import java.util.Set;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongConsumer;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -190,8 +191,22 @@ public final class PluginService {
      */
     private List<PluginRow> updatedWith(Release release, Set<String> modules, Path temp) throws InterruptedException {
         try {
-            return updatedWithTheApplication(rows(catalogs.fetch(release, temp))).stream()
+            List<PluginRow> rows = rows(catalogs.fetch(release, temp));
+            List<PluginRow> updated = updatedWithTheApplication(rows).stream()
                     .filter(row -> modules.contains(row.entry().module())).toList();
+            // a chosen plugin that is not installed comes too when a plugin that comes needs it (exec for ffmpeg)
+            List<PluginRow> taken = new ArrayList<>(updated);
+            boolean grown = true;
+            while (grown) {
+                Set<String> needed = taken.stream().flatMap(row -> row.entry().requires().stream())
+                        .map(PluginCatalog.Requirement::code).collect(Collectors.toSet());
+                List<PluginRow> more = rows.stream().filter(row -> !taken.contains(row)
+                        && row.installedVersion() == null && modules.contains(row.entry().module())
+                        && needed.contains(row.entry().code())).toList();
+                taken.addAll(more);
+                grown = !more.isEmpty();
+            }
+            return rows.stream().filter(taken::contains).toList();
         } catch (UpdateException e) {
             LOG.log(System.Logger.Level.INFO, "plugin catalogue not read, the application is updated alone: {0} {1}",
                     e.key(), List.of(e.args()));
@@ -231,8 +246,9 @@ public final class PluginService {
      * application, then the catalogue of {@code release} read and each chosen installed plugin with a newer version in
      * it unpacked, one script applying both. Without such a plugin, the usual update.
      *
-     * @param modules        the plugins to update (a module not installed in the plugins folder, or without a newer
-     *                       version in that catalogue, is ignored); empty: the application alone
+     * @param modules        the plugins to update (a module installed elsewhere than the plugins folder, or without a
+     *                       newer version in that catalogue, is ignored; one not installed is installed only when a
+     *                       plugin that comes needs it); empty: the application alone
      * @param appProgress    the bytes of the application received so far
      * @param pluginProgress the archives, once the application is downloaded
      */

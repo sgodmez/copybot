@@ -1,5 +1,6 @@
 package com.copybot.ui.model;
 
+import com.copybot.engine.PipelineReader;
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
@@ -171,6 +172,37 @@ public class PipelineDocumentTest {
         JsonObject saved = tree(Files.readString(file));
         assertFalse(saved.has("postProcess"));
         assertEquals(2, saved.getAsJsonArray("runEnd").size(), "saved in the new form");
+    }
+
+    /** A pipeline of 0.8.0-beta.1 naming exec for an ffmpeg action opens on the ffmpeg plugin, as the engine reads it. */
+    @Test
+    public void anFfmpegStepOfTheExecPluginOpensAsAStepOfTheFfmpegPlugin() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("beta.json"), """
+                { "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.video", "version": "1.0.0",
+                                     "actionConfig": { "quality": "small" } },
+                                   { "plugin": "com.copybot.plugin.exec", "action": "exec.process" } ],
+                  "secondaryOutputs": [ { "name": "Thumbs",
+                      "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.thumbnail" } ],
+                      "outStep": { "action": "file.write" } } ] }
+                """);
+
+        PipelineDocument document = PipelineDocument.load(file);
+
+        assertEquals(tree("""
+                { "plugin": "com.copybot.plugin.ffmpeg", "action": "ffmpeg.video", "actionConfig": { "quality": "small" } }
+                """), document.steps(Section.PROCESS).getFirst(), "the version of exec dropped");
+        assertEquals("com.copybot.plugin.exec", document.steps(Section.PROCESS).get(1).get("plugin").getAsString());
+        assertFalse(document.isModified(), "the same pipeline for the engine: closing asks nothing");
+
+        document.save(file);
+        PipelineConfig saved = PipelineReader.read(file);
+        assertEquals("com.copybot.plugin.ffmpeg", saved.actionSteps().getFirst().plugin());
+        assertNull(saved.actionSteps().getFirst().version());
+        assertEquals("com.copybot.plugin.ffmpeg", saved.secondaryOutputs().getFirst().actionSteps().getFirst().plugin());
+        JsonObject written = tree(Files.readString(file));
+        assertEquals("com.copybot.plugin.ffmpeg", written.getAsJsonArray("secondaryOutputs").get(0).getAsJsonObject()
+                .getAsJsonArray("actionSteps").get(0).getAsJsonObject().get("plugin").getAsString(),
+                "saved in the new form");
     }
 
     @Test

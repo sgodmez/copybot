@@ -1,6 +1,7 @@
 package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
+import com.copybot.ui.plugins.PluginCatalog;
 import com.copybot.ui.plugins.PluginRow;
 import com.copybot.ui.plugins.PluginService;
 import com.copybot.ui.plugins.UpdatesModel;
@@ -56,6 +57,8 @@ public class UpdatesController {
     private UpdatesModel model = new UpdatesModel(Optional.empty(), List.of(), null);
     /** The plugin lines of the last good read of the catalogue: kept when a later one fails. */
     private List<PluginRow> rows = List.of();
+    /** Every row of the same catalogue, installed or not: where the plugins the ticked ones need are looked for. */
+    private List<PluginRow> catalogueRows = List.of();
     /** Reading the catalogue, or why it could not be read; empty otherwise. */
     private String pluginStatus = "";
     /** The size of the application file of the offered release for this copy, 0 when unknown. */
@@ -115,12 +118,16 @@ public class UpdatesController {
             pluginStatus = ResourcesEngine.getString("plugins.official.loading");
         }
         rebuild(release);
-        Background.run(() -> plugins.rowsForUpdates(fetch ? plugins.fetchCatalog() : plugins.catalog()),
+        Background.run(() -> {
+                    PluginCatalog catalog = fetch ? plugins.fetchCatalog() : plugins.catalog();
+                    return List.of(plugins.rowsForUpdates(catalog), plugins.rows(catalog));
+                },
                 found -> {
                     if (token != readToken) {
                         return;
                     }
-                    rows = found;
+                    rows = found.get(0);
+                    catalogueRows = found.get(1);
                     pluginStatus = "";
                     rebuild(release);
                 },
@@ -147,7 +154,7 @@ public class UpdatesController {
 
     /** A new model: everything updatable ticked again. */
     private void rebuild(Optional<Release> release) {
-        model = new UpdatesModel(release, rows, VersionUtil.engineVersion().orElse(null));
+        model = new UpdatesModel(release, rows, catalogueRows, VersionUtil.engineVersion().orElse(null));
         model.setAppSize(release.isPresent() ? appSize : 0);
         render();
     }
@@ -228,7 +235,9 @@ public class UpdatesController {
                 tick.setDisable(!model.enabled(row));
             });
             lead = tick;
-            versions = new Label(row.installedVersion() + "  \u2192  " + row.entry().version());
+            // a plugin installed along with the ones that need it: only the version installed
+            versions = new Label(plugin.install() ? row.entry().version()
+                    : row.installedVersion() + "  \u2192  " + row.entry().version());
         }
         Label note = new Label();
         note.setStyle(GREY);
@@ -348,12 +357,13 @@ public class UpdatesController {
     protected void onApplyClick() {
         var window = applyButton.getScene().getWindow();
         if (model.appChecked()) {
-            UpdateUi.install(model.release().orElseThrow(), model.checkedModules(), window);
+            UpdateUi.install(model.release().orElseThrow(), model.checkedModules(), catalogueRows, window);
             return;
         }
-        List<PluginRow> ticked = model.plugins().stream().map(UpdatesModel.Plugin::row).filter(model::checked)
-                .toList();
-        UpdateUi.applyPlugins(ticked, List.of(), window);
+        // the plugins installed along are not chosen: the plan brings them, and the confirmation says why
+        List<PluginRow> ticked = model.plugins().stream().filter(p -> !p.install()).map(UpdatesModel.Plugin::row)
+                .filter(model::checked).toList();
+        UpdateUi.applyPlugins(catalogueRows, ticked, List.of(), window);
     }
 
     @FXML

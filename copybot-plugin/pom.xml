@@ -20,8 +20,12 @@
         <module>copybot-plugin-notify-email</module>
         <module>copybot-plugin-archive</module>
         <module>copybot-plugin-exec</module>
+        <module>copybot-plugin-ffmpeg</module>
         <module>copybot-plugin-remote</module>
     </modules>
+
+    <properties>
+    </properties>
 
     <dependencies>
         <dependency>

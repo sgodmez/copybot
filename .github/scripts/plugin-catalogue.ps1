@@ -10,7 +10,12 @@
     and its zip (built by `mvn package`) is copied into the output folder.
 
     Fails when a plugin keeps its version although its module changed since the tag of its entry (version not
-    raised), and when a kept entry was built for a plugin API that this one is not compatible with any more.
+    raised), when a kept entry was built for a plugin API that this one is not compatible with any more, and when a
+    kept entry requires a plugin whose current version no longer meets that requirement.
+
+    A plugin version is read from the module's pom (written there; a ${property} is resolved from the module's
+    or copybot-plugin/pom.xml's properties). The `requires` of an entry are
+    its provided dependencies on other official plugins, at the version of that dependency.
 
 .PARAMETER Tag
     Tag of the release being made, e.g. v1.2.0.
@@ -129,22 +134,88 @@ function Test-ModuleChanged([string]$tag, [string]$moduleDir) {
     return $oldText -ne $newText
 }
 
+# a value of a module's pom: as written, or the property it names (${name}), from the module's own properties
+# or else from copybot-plugin/pom.xml
+function Resolve-PomValue([string]$value, [xml]$pom) {
+    $value = $value.Trim()
+    if ($value -notmatch '^\$\{([^}]+)\}$') { return $value }
+    $name = $Matches[1]
+    foreach ($candidate in @($pom, $script:pluginsPom)) {
+        $properties = $candidate.project.properties
+        if ($properties) {
+            $node = $properties.ChildNodes | Where-Object { $_.LocalName -eq $name } | Select-Object -First 1
+            if ($node) { return "$($node.InnerText)".Trim() }
+        }
+    }
+    throw "The property $name is not defined in the pom of the module nor in copybot-plugin/pom.xml"
+}
+
+# true when a version meets a requirement: the same major version, at least as recent (the rule of the loader)
+function Test-Satisfies([string]$version, [string]$required) {
+    return $version -match '^(\d+)\.\d+\.\d+$' -and $Matches[1] -eq ($required -split '\.')[0] -and
+            ([version]$version) -ge ([version]$required)
+}
+
+# the official plugins a plugin needs: its dependencies on another plugin module (copybot-plugin-<x>, scope
+# provided: not in its archive, the engine loads it over the layer of that plugin), as {code, version}: the code
+# of that plugin and the version built against, the lowest one that works (its module records it in its requires)
+function Get-PluginRequires([xml]$pom, [string]$moduleDir) {
+    $requires = @()
+    foreach ($dependency in @($pom.project.dependencies.dependency)) {
+        if (-not $dependency) { continue }
+        $artifact = "$($dependency.artifactId)".Trim()
+        if ("$($dependency.groupId)".Trim() -ne 'com.copybot' -or $artifact -notlike 'copybot-plugin-*') { continue }
+        $neededRoot = Join-Path $root "copybot-plugin/$artifact"
+        $neededCatalog = Join-Path $neededRoot 'catalog.json'
+        if (-not (Test-Path -LiteralPath $neededCatalog)) { throw "$moduleDir depends on $artifact, which is not an official plugin" }
+        if ("$($dependency.scope)".Trim() -ne 'provided') {
+            throw "$moduleDir depends on the plugin $artifact without <scope>provided</scope>: its jar would be in the archive"
+        }
+        $required = Resolve-PomValue "$($dependency.version)" $pom
+        if ($required -notmatch '^(\d+)\.\d+\.\d+$') { throw "$moduleDir requires $artifact at version '$required', not X.Y.Z" }
+        $neededPom = [xml](Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $neededRoot 'pom.xml'))
+        $current = Resolve-PomValue "$($neededPom.project.version)" $neededPom
+        if (-not (Test-Satisfies $current $required)) {
+            throw "$moduleDir requires $artifact $required, but that plugin is at version $current"
+        }
+        $neededCode = (Get-Content -Raw -Encoding UTF8 -LiteralPath $neededCatalog | ConvertFrom-Json).code
+        $requires += [ordered]@{ code = $neededCode; version = $required }
+    }
+    return $requires
+}
+
+$pluginsPom = [xml](Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $root 'copybot-plugin/pom.xml'))
 $previous = Get-PreviousEntries
 $entries = @()
 $newZips = @()
 
+# every official plugin with its current version, first: a kept entry is checked against the versions of the
+# plugins it needs, whatever their order
+$modules = @()
 foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin') -Filter catalog.json -Recurse -Depth 1 | Sort-Object FullName)) {
     $moduleDir = $catalogFile.Directory.Name
     $moduleRoot = $catalogFile.Directory.FullName
     $source = Get-Content -Raw -Encoding UTF8 -LiteralPath $catalogFile.FullName | ConvertFrom-Json
-    $code = $source.code
-
     # read from the module's own pom, not through Maven: on a fresh runner help:evaluate would need the parent and
-    # the imported BOM in the local repository (the build only packages); an official plugin declares its version
+    # the imported BOM in the local repository (the build only packages); an official plugin declares its version,
+    # or names a property of copybot-plugin/pom.xml holding it
     $pom = [xml](Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $moduleRoot 'pom.xml'))
-    $version = "$($pom.project.version)".Trim()
-    if (-not $version) { throw "$moduleDir has no <version> of its own in its pom.xml" }
+    $declared = "$($pom.project.version)".Trim()
+    if (-not $declared) { throw "$moduleDir has no <version> of its own in its pom.xml" }
+    $version = Resolve-PomValue $declared $pom
     if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "The version of $moduleDir ($version) is not X.Y.Z" }
+    $modules += [pscustomobject]@{ Dir = $moduleDir; Root = $moduleRoot; Source = $source; Pom = $pom; Version = $version }
+}
+$currentVersions = @{}
+foreach ($module in $modules) { $currentVersions[$module.Source.code] = $module.Version }
+
+foreach ($module in $modules) {
+    $moduleDir = $module.Dir
+    $moduleRoot = $module.Root
+    $source = $module.Source
+    $code = $source.code
+    $pom = $module.Pom
+    $version = $module.Version
 
     $old = $previous | Where-Object { $_.code -eq $code } | Select-Object -First 1
     if ($old -and $old.version -eq $version) {
@@ -155,6 +226,18 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
         if ($old.engine -notmatch '^(\d+)\.(\d+)$') { throw "The kept entry of $code has a bad engine ($($old.engine))" }
         if ([int]$Matches[1] -ne $apiMajor -or [int]$Matches[2] -gt $apiMinor) {
             throw "Plugin $code $version was built for the plugin API $($old.engine), not compatible with the plugin API ${ApiVersion}: give it a new version"
+        }
+        # the plugins it needs may have moved on since (a new major version of exec): the published archive must
+        # still load over the versions this catalogue offers
+        foreach ($requirement in @($old.requires)) {
+            if (-not $requirement) { continue }
+            $current = $currentVersions["$($requirement.code)"]
+            if (-not $current) {
+                throw "Plugin $code $version requires the plugin $($requirement.code), which is no longer an official plugin: give $code a new version"
+            }
+            if (-not (Test-Satisfies $current "$($requirement.version)")) {
+                throw "Plugin $code $version requires $($requirement.code) $($requirement.version), but that plugin is now at version ${current}: give $code a new version"
+            }
         }
         Write-Host "Kept: $code $version ($($old.tag))"
         $entries += $old
@@ -178,6 +261,8 @@ foreach ($catalogFile in (Get-ChildItem -Path (Join-Path $root 'copybot-plugin')
     }
     if ($source.changes) { $entry.changes = $source.changes }
     if ($source.license) { $entry.license = $source.license }
+    $requires = @(Get-PluginRequires $pom $moduleDir)
+    if ($requires.Count -gt 0) { $entry.requires = $requires }
     $reason = if ($old) { "was $($old.version)" } else { 'new' }
     Write-Host "Published: $code $version on $Tag ($reason)"
     $entries += [pscustomobject]$entry

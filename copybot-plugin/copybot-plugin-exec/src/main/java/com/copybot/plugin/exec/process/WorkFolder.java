@@ -40,6 +40,7 @@ public final class WorkFolder {
         this.folder = folder.toAbsolutePath();
     }
 
+    /** The folder of the run folders, absolute. */
     public Path folder() {
         return folder;
     }

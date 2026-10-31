@@ -2,9 +2,10 @@ package com.copybot.ui;
 
 import com.copybot.resources.ResourcesEngine;
 import com.copybot.ui.plugins.PluginCatalog;
+import com.copybot.ui.plugins.PluginChangeTexts;
+import com.copybot.ui.plugins.PluginDependencies;
 import com.copybot.ui.plugins.PluginRow;
 import com.copybot.ui.plugins.PluginService;
-import com.copybot.ui.plugins.PluginState;
 import com.copybot.ui.plugins.UpdatesTexts;
 import com.copybot.ui.update.Release;
 import com.copybot.ui.update.UpdateException;
@@ -30,6 +31,7 @@ import javafx.stage.Window;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -39,7 +41,6 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongConsumer;
-import java.util.stream.Collectors;
 
 /**
  * The JavaFX side of the self-update (spec app-update §2-§5) and of the official plugins (spec plugin-install §3-§5):
@@ -155,14 +156,24 @@ final class UpdateUi {
 
     /**
      * "Update and restart" of the Updates window with Copybot ticked: the application and exactly these plugins (a
-     * module not installed in the plugins folder, or without a newer version in the catalogue of the release, is
-     * ignored).
+     * module installed outside the plugins folder, or without a newer version in the catalogue of the release, is
+     * ignored; a module not installed is installed). The requirements are checked first, as for the plugins alone:
+     * one the catalogue cannot meet stops before anything is done, a needed plugin left out is taken along.
      *
+     * @param rows  every row of the catalogue (where the needed plugins are looked for)
      * @param owner the window the confirmations and the download window belong to
      */
-    static void install(Release release, Set<String> modules, Window owner) {
-        Set<String> chosen = Set.copyOf(modules);
-        install(release, () -> chosen, owner);
+    static void install(Release release, Set<String> modules, List<PluginRow> rows, Window owner) {
+        List<PluginRow> chosen = rows.stream().filter(row -> modules.contains(row.entry().module())).toList();
+        PluginDependencies.Plan plan = PluginDependencies.plan(rows, chosen, List.of());
+        if (plan.refused()) {
+            inform(owner, "update.title", String.join("\n", PluginChangeTexts.refusals(plan)));
+            return;
+        }
+        Set<String> all = new LinkedHashSet<>(modules);
+        plan.added().forEach(row -> all.add(row.entry().module()));
+        Set<String> taken = Set.copyOf(all);
+        install(release, () -> taken, owner);
     }
 
     /**
@@ -252,12 +263,16 @@ final class UpdateUi {
      * runs or while another Copybot runs from the same folder; the changes and the licences confirmed; a warning
      * when Windows will ask for an administrator; the unsaved editors asked about; every archive downloaded and
      * unpacked with a window that can cancel; the script launched and Copybot quits. A failure or a cancel changes
-     * nothing, deletes the download and Copybot goes on.
+     * nothing, deletes the download and Copybot goes on. The plugins the chosen ones need are installed or updated
+     * along with them (listed in the confirmation); a requirement the catalogue cannot meet stops before anything is
+     * done; the plugins a removal leaves without one they need are named in the confirmation.
      *
-     * @param owner the Plugins window
+     * @param rows   every row of the catalogue (where the needed plugins are looked for)
+     * @param chosen the plugins chosen to be installed or updated
+     * @param owner  the Plugins window
      */
-    static void applyPlugins(List<PluginRow> toInstallOrUpdate, List<PluginRow> toRemove, Window owner) {
-        if (plugins == null || toInstallOrUpdate.isEmpty() && toRemove.isEmpty()) {
+    static void applyPlugins(List<PluginRow> rows, List<PluginRow> chosen, List<PluginRow> toRemove, Window owner) {
+        if (plugins == null || chosen.isEmpty() && toRemove.isEmpty()) {
             return;
         }
         Optional<String> blocked = plugins.applyBlocked().or(plugins::otherInstance);
@@ -265,7 +280,13 @@ final class UpdateUi {
             inform(owner, "plugins.confirm.title", ResourcesEngine.getString(blocked.get()));
             return;
         }
-        if (!confirmPluginChanges(toInstallOrUpdate, toRemove, owner)) {
+        PluginDependencies.Plan plan = PluginDependencies.plan(rows, chosen, toRemove);
+        if (plan.refused()) {
+            inform(owner, "plugins.confirm.title", String.join("\n", PluginChangeTexts.refusals(plan)));
+            return;
+        }
+        List<PluginRow> toInstallOrUpdate = plan.installOrUpdate();
+        if (!confirmPluginChanges(plan, owner)) {
             return;
         }
         if (plugins.adminApprovalNeeded() && !confirmAdminApproval(owner, "plugins.confirm.title", "plugins.admin")) {
@@ -311,17 +332,13 @@ final class UpdateUi {
                 });
     }
 
-    /** The changes in words, with the licences of the plugins to install; false when cancelled. */
-    private static boolean confirmPluginChanges(List<PluginRow> toInstallOrUpdate, List<PluginRow> toRemove,
-            Window owner) {
-        List<String> lines = new ArrayList<>();
-        List<PluginRow> installs = toInstallOrUpdate.stream()
-                .filter(row -> row.state() == PluginState.NOT_INSTALLED).toList();
-        List<PluginRow> updates = toInstallOrUpdate.stream().filter(row -> !installs.contains(row)).toList();
-        addLine(lines, "plugins.confirm.install", installs);
-        addLine(lines, "plugins.confirm.update", updates);
-        addLine(lines, "plugins.confirm.remove", toRemove);
-        List<String> licences = toInstallOrUpdate.stream().filter(row -> row.entry().license() != null)
+    /**
+     * The changes in words (with the plugins installed along because they are needed, and the plugins a removal
+     * breaks), with the licences of the plugins to install; false when cancelled.
+     */
+    private static boolean confirmPluginChanges(PluginDependencies.Plan plan, Window owner) {
+        List<String> lines = new ArrayList<>(PluginChangeTexts.changes(plan));
+        List<String> licences = plan.installOrUpdate().stream().filter(row -> row.entry().license() != null)
                 .map(row -> ResourcesEngine.getString("plugins.license", row.entry().license().name(),
                         localized(row.entry().license().notice())) + " (" + row.entry().code() + ")")
                 .toList();
@@ -339,13 +356,6 @@ final class UpdateUi {
         confirm.setHeaderText(null);
         confirm.getDialogPane().setMinWidth(480);
         return confirm.showAndWait().filter(choice -> choice == apply).isPresent();
-    }
-
-    private static void addLine(List<String> lines, String key, List<PluginRow> rows) {
-        if (!rows.isEmpty()) {
-            lines.add(ResourcesEngine.getString(key, rows.stream().map(row -> row.entry().code())
-                    .collect(Collectors.joining(", "))));
-        }
     }
 
     /** The text of the language of the UI, else the English one, else any. */

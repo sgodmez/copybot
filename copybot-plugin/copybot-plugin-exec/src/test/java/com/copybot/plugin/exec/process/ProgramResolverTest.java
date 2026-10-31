@@ -86,6 +86,6 @@ public class ProgramResolverTest {
     public void batchFilesAreToldApart() {
         assertTrue(ProgramResolver.isBatch(Path.of("C:/tools/run.BAT")));
         assertTrue(ProgramResolver.isBatch(Path.of("run.cmd")));
-        assertFalse(ProgramResolver.isBatch(Path.of("ffmpeg.exe")));
+        assertFalse(ProgramResolver.isBatch(Path.of("convert.exe")));
     }
 }

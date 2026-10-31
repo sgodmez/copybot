@@ -103,7 +103,7 @@ Apache Commons IO 2.21.0 (commons-io:commons-io)      Apache License 2.0
 The Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 -------------------------------------------------------------------------------
-Plugin exec (copybot-plugin/copybot-plugin-exec)
+Plugin ffmpeg (copybot-plugin/copybot-plugin-ffmpeg)
 -------------------------------------------------------------------------------
 
 FFmpeg is not distributed with Copybot or with the plugin. When the user asks

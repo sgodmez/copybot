@@ -30,16 +30,13 @@ libraries.
 
 <p align="center">
   <a href="https://github.com/sgodmez/copybot/releases/latest"><img src="https://img.shields.io/github/v/release/sgodmez/copybot?label=download&logo=github" alt="Download the latest release"></a>
-  <a href="https://github.com/sgodmez/copybot/releases"><img src="https://img.shields.io/github/v/release/sgodmez/copybot?include_prereleases&label=beta&color=orange" alt="Latest beta"></a>
 </p>
 
 **[Download the latest release](https://github.com/sgodmez/copybot/releases/latest)**:
 `copybot-<version>-setup.exe` (Windows installer), `copybot-<version>-windows-x64.zip`
 (Windows, portable) or `copybot-<version>-linux-x64.tar.gz` (Linux). The
 application updates itself on Windows and installs its plugins from
-*Edit > Plugins…*. Betas are on the [releases page](https://github.com/sgodmez/copybot/releases),
-marked *Pre-release*; tick *Receive beta versions* in the preferences to be
-offered them. More in [Quick start](#quick-start).
+*Edit > Plugins…*. More in [Quick start](#quick-start).
 
 ### Plugins
 
@@ -47,7 +44,8 @@ offered them. More in [Quick start](#quick-start).
 |---|---|---|
 | `metadata-extractor` | Capture date of photos and videos (EXIF, QuickTime, MP4), so files are sorted by when they were taken; rewrites the EXIF date of JPEGs whose time zone was corrected | [How it works](#how-it-works) |
 | `gps-zone` | Checks the camera's time zone against the photo's GPS position and offers a correction in the plan (optional, 36 MB of time zone data) | [How it works](#how-it-works) |
-| `exec` | Runs any program on a file (`{in}` → `{out}`), and ffmpeg presets: video transcoding to H.265 / H.264 with GPU encoders, HEIC → JPEG, thumbnails; ffmpeg downloaded on demand | [Programs and ffmpeg](#programs-and-ffmpeg-the-exec-plugin) |
+| `exec` | Runs any program on a file (`{in}` → `{out}`); what it writes replaces the content | [Programs](#programs-the-exec-plugin) |
+| `ffmpeg` | Video transcoding to H.265 / H.264 with GPU encoders, HEIC → JPEG, thumbnails; ffmpeg downloaded on demand. Needs `exec` (installed with it) | [ffmpeg](#ffmpeg-the-ffmpeg-plugin) |
 | `remote` | SFTP, FTP / FTPS and S3 (AWS, MinIO…) as sources and targets, with trust on first use of servers' keys and certificates | [Remote servers](#remote-servers-sftp-ftp-and-s3-the-remote-plugin) |
 | `notify-email` | Sends a report e-mail after the run (SMTP, STARTTLS / SSL), password kept in the local secrets vault | [notify-email](#notify-email-emailsend) |
 | `notify-webhook` | Posts the run report to a webhook: JSON, ntfy, Discord, Slack or Telegram | [notify-webhook](#notify-webhook-webhooksend) |
@@ -232,10 +230,10 @@ when several versions are installed.
 | `extract` | `com.copybot.plugin.metadataextractor` | analyze | Capture date from EXIF, falling back to QuickTime then MP4 (through [metadata-extractor](https://github.com/drewnoakes/metadata-extractor)) |
 | `write-date` | `com.copybot.plugin.metadataextractor` | process | Goes just before the write. Rewrites the EXIF date of the JPEGs whose time zone was corrected in the plan to the local date and offset, without recompressing the image (through [Commons Imaging](https://commons.apache.org/proper/commons-imaging/)); every other file passes untouched |
 | `check` | `com.copybot.plugin.gpszone` (optional) | analyze | Goes after `extract`. Flags a photo whose camera was badly set: from its GPS position, the time zone of the place (offline boundaries of [Timezone Boundary Builder](https://github.com/evansiroky/timezone-boundary-builder) through [timeshape](https://github.com/RomanIakovlev/timeshape)) gives another offset than the recorded one, the GPS time confirming the capture date. Nothing near a time zone boundary, at sea, or for a video. The plan suggests the zone; you apply it |
-| `exec.process` | `com.copybot.plugin.exec` | process | Runs any program on the file (`{in}`, `{out}`, `{name}`, `{ext}` in its arguments); what it writes replaces the content. See *Programs and ffmpeg* |
-| `ffmpeg.video` | `com.copybot.plugin.exec` | process | Compresses videos to MP4 in H.265 or H.264, on the processor or a GPU encoder; ffmpeg is found, or downloaded on Windows |
-| `ffmpeg.image` | `com.copybot.plugin.exec` | process | HEIC (or chosen images) to JPEG, with quality and maximum size |
-| `ffmpeg.thumbnail` | `com.copybot.plugin.exec` | process | A small JPEG of each image or video; other files are left out |
+| `exec.process` | `com.copybot.plugin.exec` | process | Runs any program on the file (`{in}`, `{out}`, `{name}`, `{ext}` in its arguments); what it writes replaces the content. See *Programs* |
+| `ffmpeg.video` | `com.copybot.plugin.ffmpeg` | process | Compresses videos to MP4 in H.265 or H.264, on the processor or a GPU encoder; ffmpeg is found, or downloaded on Windows. See *ffmpeg* |
+| `ffmpeg.image` | `com.copybot.plugin.ffmpeg` | process | HEIC (or chosen images) to JPEG, with quality and maximum size |
+| `ffmpeg.thumbnail` | `com.copybot.plugin.ffmpeg` | process | A small JPEG of each image or video; other files are left out |
 
 ### Companion files and archives
 
@@ -439,13 +437,27 @@ one item, conflict check of the branches in the plan, companion files in
 branches, conditional branches (a filter at the head of the branch does the
 job: every step accepts `filterCondition`).
 
-## Programs and ffmpeg (the exec plugin)
+## Programs (the exec plugin)
 
-The `exec` plugin has four process actions. `exec.process` runs any program
+The `exec` plugin has one process action, `exec.process`: it runs any program
 on the file (`program`, `arguments` with `{in}`, `{out}`, `{name}` and `{ext}`,
 `outputExtension`, `successCodes`, `timeoutSeconds`); what the program writes
-replaces the content of the item. The three `ffmpeg.*` actions build the
-ffmpeg command themselves:
+replaces the content of the item. A batch file (`.bat`, `.cmd`) is refused: run
+the program it calls. `${secret:name}` and `${env:NAME}` in the arguments are
+replaced, and never logged. Its `process` package (finding a program, running
+it with a time limit, the working files of a step) is what other plugins build
+on: the `ffmpeg` plugin needs it.
+
+## ffmpeg (the ffmpeg plugin)
+
+The `ffmpeg` plugin needs the `exec` plugin (it runs ffmpeg through it):
+*Edit > Plugins…* installs `exec` along with it. Until version 0.8.0-beta.1
+these actions were in the `exec` plugin 1.0.0; a pipeline written then names
+`com.copybot.plugin.exec` for them: Copybot rewrites such a step to
+`com.copybot.plugin.ffmpeg` when it reads the pipeline (and drops its
+`version`, which was the one of `exec`), so it keeps working once saved again.
+Updating `exec` 1.0.0 to 2.0.0 removes these actions from it: install the
+`ffmpeg` plugin from *Edit > Plugins…* to keep them. Its three actions build the ffmpeg command themselves:
 
 | Action | What it does |
 |---|---|
@@ -468,7 +480,7 @@ extra branches (see *Secondary outputs*):
     {
       "name": "Compressed videos",
       "onError": "warn",
-      "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.video",
+      "actionSteps": [ { "plugin": "com.copybot.plugin.ffmpeg", "action": "ffmpeg.video",
                          "actionConfig": { "codec": "h265", "quality": "medium", "maxHeight": 1080,
                                            "downloadFfmpeg": true } } ],
       "outStep": { "action": "file.write",
@@ -477,7 +489,7 @@ extra branches (see *Secondary outputs*):
     {
       "name": "Thumbnails",
       "onError": "warn",
-      "actionSteps": [ { "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.thumbnail",
+      "actionSteps": [ { "plugin": "com.copybot.plugin.ffmpeg", "action": "ffmpeg.thumbnail",
                          "actionConfig": { "size": 320, "downloadFfmpeg": true } } ],
       "outStep": { "action": "file.write",
                    "actionConfig": { "outPattern": "\\\\nas\\thumbs\\{captureDate.Y|lastModified.Y}\\{name}" } }
@@ -486,7 +498,7 @@ extra branches (see *Secondary outputs*):
 }
 ```
 
-To also turn HEIC photos into JPEG, put `{ "plugin": "com.copybot.plugin.exec", "action": "ffmpeg.image",
+To also turn HEIC photos into JPEG, put `{ "plugin": "com.copybot.plugin.ffmpeg", "action": "ffmpeg.image",
 "actionConfig": { "quality": 90, "maxSize": 4096, "downloadFfmpeg": true } }` in the `actionSteps` of a
 branch, or of the main branch if the JPEG should replace the HEIC. Each ffmpeg
 action takes an optional `ffmpegPath`, a `timeoutSeconds` per file (3600 for
@@ -496,10 +508,12 @@ and fails its files until another step has installed the copy (it then finds
 it).
 
 **Finding ffmpeg.** In this order: `ffmpegPath`, the copy the plugin downloaded
-(in the `plugin-data/exec` folder of the Copybot data folder), then `ffmpeg` in
+(in the `plugin-data/ffmpeg` folder of the Copybot data folder), then `ffmpeg` in
 the `PATH`. ffmpeg is looked for and its version read once per phase of the run
 (preparation, execution). HEIC needs ffmpeg 7.1 or later:
-an older one gives a clear error on each HEIC file.
+an older one gives a clear error on each HEIC file. A copy downloaded by the
+0.8.0-beta.1 `exec` plugin (in `plugin-data/exec`) is not reused: it is
+downloaded again, and that folder can be deleted.
 
 **Downloading ffmpeg** (Windows x64 only). With `downloadFfmpeg` checked, a
 missing ffmpeg is downloaded when the **first file that needs it** comes up
@@ -876,6 +890,37 @@ installed, the newer revision of a version wins, and different minor versions
 can live side by side. A plugin that fails to load is reported in the plugins
 window, and the other plugins still load.
 
+**Plugins that need other plugins** (`ffmpeg` runs ffmpeg through the process
+package of `exec`). The needed plugin exports to every module only the
+packages it shares (`exec` exports `com.copybot.plugin.exec.process`; its
+plugin class is exported to the engine alone and its actions are opened to the
+engine and Gson only); keep them small, documented, and raise its major
+version when they break. The plugin that needs it declares
+`requires <its main module>;` in its `module-info.java` and depends on it in
+its `pom.xml` with `<scope>provided</scope>`, so that the needed plugin is not
+copied into its `lib/` nor into its archive; `javac` records the version built
+against in the `requires`. **The required version is the version of that
+dependency** (`ffmpeg` depends on `exec` `2.0.0`): when you raise the version
+of a needed plugin, update that dependency in the plugins that need it (the
+build fails otherwise, and the release script refuses a published entry whose
+requirement no longer matches). A new major
+version breaks them until they are adapted and given a new version. The engine
+loads a plugin over the layer of the needed plugin, which must be installed in
+the same major version, at least as recent; otherwise the plugin is shown
+failed with the plugin it misses. The release catalogue reads that `provided`
+dependency and writes `"requires": [ { "code": "exec", "version": "2.0.0" } ]`
+in the entry; it fails when a requirement is not met by the current version of
+the needed plugin, including for an entry it keeps from an earlier release.
+*Edit > Plugins…* installs or updates the needed plugins along with it (in the
+same restart, listed in the confirmation); uninstalling a plugin that others
+need names them before anything is done, and installing a plugin while
+uninstalling one it needs is refused. The Updates window ticks the update of a
+needed plugin with the plugin that needs it (only when that update meets the
+requirement), installs a needed plugin that is not installed along with it
+(also with an update of Copybot), and leaves unticked a plugin whose needed
+plugin cannot come, saying why (for instance when that plugin needs a newer
+Copybot).
+
 To write an action, you extend `AbstractActionWithConfig<C>`, where `C` is a
 record holding the action's configuration. You implement `IInAction`,
 `IAnalyzeAction`, `IProcessAction`, `IOutAction` or `IRunEndAction`. Annotations on the
@@ -1037,7 +1082,7 @@ You need **JDK 25** and Maven (3.8.8 or later).
 mvn verify
 ```
 
-builds the modules and runs the test suite (about 2,250 tests across the
+builds the modules and runs the test suite (about 2,350 tests across the
 engine, the UI and the plugins). To build the desktop application as well, add
 the `dist` profile:
 
@@ -1054,7 +1099,8 @@ It produces:
 - `copybot-plugin/copybot-plugin-notify-email/target/` — the end-of-run e-mail. Copy its jar and its `lib/` folder (Jakarta Mail) into `plugins/notify-email/` next to the application.
 - `copybot-plugin/copybot-plugin-notify-webhook/target/` — the end-of-run webhook (ntfy, Discord, Slack, Telegram, JSON). Copy its jar into `plugins/notify-webhook/` next to the application.
 - `copybot-plugin/copybot-plugin-archive/target/` — the end-of-run ZIP archive of the copied files. Copy its jar into `plugins/archive/` next to the application.
-- `copybot-plugin/copybot-plugin-exec/target/` — `exec.process` and the ffmpeg actions (compressed videos, HEIC to JPEG, thumbnails). Copy its jar into `plugins/exec/` next to the application. It does not ship ffmpeg: see *Programs and ffmpeg*.
+- `copybot-plugin/copybot-plugin-exec/target/` — `exec.process`, any program on each file. Copy its jar into `plugins/exec/` next to the application. See *Programs*.
+- `copybot-plugin/copybot-plugin-ffmpeg/target/` — the ffmpeg actions (compressed videos, HEIC to JPEG, thumbnails). Copy its jar into `plugins/ffmpeg/` next to the application, with `exec` installed (it needs it). It does not ship ffmpeg: see *ffmpeg*.
 - `copybot-plugin/copybot-plugin-remote/target/` — SFTP, FTP / FTPS and S3 sources and targets. Copy its jar and its `lib/` folder (JSch, Commons Net, Commons IO) into `plugins/remote/` next to the application. See *Remote servers*.
 
 **Where Copybot keeps its files:** the code (the application and its
@@ -1074,19 +1120,6 @@ tested on a real Linux yet: extract it anywhere and run `Copybot/bin/Copybot`.
 The video and sound preview needs GStreamer and ffmpeg (libavcodec), and
 updating from the application is Windows only.
 
-**Beta versions:** some versions are published first as betas
-(`X.Y.Z-beta.N`, a GitHub pre-release) to try them before everyone. Copybot
-offers them only when **Receive beta versions** is ticked in the preferences
-(under the automatic check; off by default); a beta may be less stable. With
-the option, Copybot offers the highest version among the stable releases and
-the betas, and its official plugins come from the catalogue of that same
-release; a beta copy then gets the final `X.Y.Z` when it comes out (it is
-higher than its betas). Without it, Copybot only ever sees the stable
-releases. A beta installs over the stable copy like any update (same
-installation, same data and plugins); untick the option to go back to the
-stable releases at the next stable version (Copybot never installs an older
-version).
-
 **Making a release:** on `develop`, set the version of the application to
 `X.Y.Z` (drop `-SNAPSHOT`) in the poms, commit and push. Then go through a
 pull request from `develop` to `master` titled `Release X.Y.Z`, merge it, and
@@ -1105,7 +1138,9 @@ release notes list: whoever opens it is named in the notes and among the
 contributors of the release (commits pushed straight to a branch are not).
 The official
 plugins (`metadata-extractor`, `gps-zone`) have their own version, in their own
-`pom.xml` (`1.0.0`, never `-SNAPSHOT`): change the application version
+`pom.xml` (`1.0.0`, never `-SNAPSHOT`; raising `exec`, which `ffmpeg` builds
+against, also means updating `ffmpeg`'s dependency, see *Plugins that need
+other plugins*): change the application version
 without overwriting theirs (only the `<parent>` of a plugin follows the
 application; a bulk replace of the version, such as `mvn versions:set`, would
 also overwrite the plugin versions: restore them afterwards). **Raise the version
@@ -1126,7 +1161,10 @@ archive is not published again, a new version gets its zip on the current
 release. The release **fails** when a plugin kept its version although its
 module changed since the release of its entry (version not raised), or when a
 kept plugin was built for a plugin API that is not compatible any more (new
-major version of the API: give the plugin a new version). The `engine` of an
+major version of the API: give the plugin a new version), or when a plugin,
+kept or new, requires a version of another plugin that its current version no
+longer meets (a new major version of `exec`: adapt `ffmpeg` and give it a new
+version). The `engine` of an
 entry is the plugin API version (`X.Y`) its archive was built for, which the
 plugins window compares with the API of the running Copybot (never with the
 version of the application). The description
@@ -1211,8 +1249,8 @@ does that). That run configuration loads the metadata and gps-zone plugins
 straight from their `target/` folders through the `copybot.devPluginPaths`
 system property (folders separated by the platform path separator, `;` on
 Windows; ignored in the packaged application), so package these plugins once
-first. A dev run of the UI also needs the folders of the run-end plugins (and of `exec`, to use ffmpeg, and `remote`, for servers and buckets) in
-`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target;copybot-plugin/copybot-plugin-exec/target;copybot-plugin/copybot-plugin-remote/target`
+first. A dev run of the UI also needs the folders of the run-end plugins (and of `exec` and `ffmpeg`, to run programs and ffmpeg, and `remote`, for servers and buckets) in
+`-Dcopybot.devPluginPaths`: `copybot-plugin/copybot-plugin-notify-email/target;copybot-plugin/copybot-plugin-notify-webhook/target;copybot-plugin/copybot-plugin-archive/target;copybot-plugin/copybot-plugin-exec/target;copybot-plugin/copybot-plugin-ffmpeg/target;copybot-plugin/copybot-plugin-remote/target`
 (add them to the run configuration yourself). The data folder is then `copybot-ui/src/dev/`, where `prefs.json` and
 `logs/` are written (git-ignored).
 
@@ -1241,7 +1279,7 @@ idea where to start again. Copybot is built around a few rules:
 |---|---|
 | [`copybot-engine`](copybot-engine) | The engine, the CLI, the plugin API (`com.copybot.plugin.api.*`) and the built-in `file.read` / `file.write` actions |
 | [`copybot-ui`](copybot-ui) | The JavaFX desktop application and its packaging |
-| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive`, `exec` (any program, ffmpeg for video, HEIC and thumbnails), and `remote` (SFTP, FTP / FTPS and S3 sources and targets) |
+| [`copybot-plugin`](copybot-plugin) | Plugins shipped with the project: `metadata-extractor`, the optional `gps-zone`, and the end-of-run actions `notify-email`, `notify-webhook` and `archive`, `exec` (any program), `ffmpeg` (video, HEIC and thumbnails, over `exec`), and `remote` (SFTP, FTP / FTPS and S3 sources and targets) |
 | [`copybot-plugin-demo`](copybot-plugin-demo) | Demo plugins exercising module isolation, versions and dependencies |
 | [`copybot-dependencies`](copybot-dependencies) | Shared dependency versions |
 

@@ -10,8 +10,11 @@
     </parent>
 
     <artifactId>copybot-plugin-exec</artifactId>
-    <!-- its own version, not the application's: raised when the plugin changes (see the README, Making a release) -->
-    <version>1.0.0</version>
+    <!--
+        its own version, not the application's: raised when the plugin changes (see the README, Making a release);
+        in copybot-plugin/pom.xml, where the plugins that need exec read it too
+    -->
+    <version>2.0.0</version>
 
     <properties>
         <!-- IPlugin.getPluginCode(): the folder of the release archive -->
@@ -42,12 +45,10 @@
                     <execution>
                         <id>default-testCompile</id>
                         <configuration>
-                            <!-- java.logging: the tests read the log of the runs; jdk.httpserver: the fake release server -->
+                            <!-- java.logging: the tests read the log of the runs -->
                             <compilerArgs>
                                 <arg>--add-reads</arg>
-                                <arg>com.copybot.plugin.exec=java.logging,jdk.httpserver</arg>
-                                <arg>--add-modules</arg>
-                                <arg>jdk.httpserver</arg>
+                                <arg>com.copybot.plugin.exec=java.logging</arg>
                             </compilerArgs>
                         </configuration>
                     </execution>
@@ -57,7 +58,7 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>--add-reads com.copybot.plugin.exec=java.logging,jdk.httpserver --add-modules jdk.httpserver</argLine>
+                    <argLine>--add-reads com.copybot.plugin.exec=java.logging</argLine>
                 </configuration>
             </plugin>
             <plugin>

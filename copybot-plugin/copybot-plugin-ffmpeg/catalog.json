@@ -1,0 +1,22 @@
+{
+  "module": "com.copybot.plugin.ffmpeg",
+  "code": "ffmpeg",
+  "description": {
+    "en": "Runs ffmpeg on each file: compresses videos, turns HEIC photos into JPEG, makes thumbnails. Needs the plugin exec, installed with it.",
+    "fr": "Lance ffmpeg sur chaque fichier : compresse les vid\u00e9os, convertit les photos HEIC en JPEG, fait des miniatures. N\u00e9cessite le plugin exec, install\u00e9 avec lui.",
+    "it": "Esegue ffmpeg su ogni file: comprime i video, converte le foto HEIC in JPEG, crea miniature. Richiede il plugin exec, installato insieme."
+  },
+  "changes": {
+    "en": "First version: the ffmpeg actions of the plugin exec 1.0.0 in a plugin of their own.",
+    "fr": "Premi\u00e8re version : les actions ffmpeg du plugin exec 1.0.0 dans un plugin \u00e0 part.",
+    "it": "Prima versione: le azioni ffmpeg del plugin exec 1.0.0 in un plugin a s\u00e9."
+  },
+  "license": {
+    "name": "GPL (ffmpeg)",
+    "notice": {
+      "en": "Copybot does not ship ffmpeg. When asked, the plugin downloads a build of FFmpeg (https://ffmpeg.org) by BtbN (https://github.com/BtbN/FFmpeg-Builds), licensed under the GNU General Public License (GPL) v3: the user downloads it and uses it under that license, whose text comes with that build; the sources of FFmpeg are on https://ffmpeg.org.",
+      "fr": "Copybot ne livre pas ffmpeg. \u00c0 la demande, le plugin t\u00e9l\u00e9charge une compilation de FFmpeg (https://ffmpeg.org) faite par BtbN (https://github.com/BtbN/FFmpeg-Builds), sous licence GNU General Public License (GPL) v3 : l'utilisateur la t\u00e9l\u00e9charge et l'utilise selon cette licence, dont le texte accompagne cette compilation ; les sources de FFmpeg sont sur https://ffmpeg.org.",
+      "it": "Copybot non distribuisce ffmpeg. Su richiesta, il plugin scarica una build di FFmpeg (https://ffmpeg.org) realizzata da BtbN (https://github.com/BtbN/FFmpeg-Builds), con licenza GNU General Public License (GPL) v3: l'utente la scarica e la usa secondo tale licenza, il cui testo accompagna la build; i sorgenti di FFmpeg sono su https://ffmpeg.org."
+    }
+  }
+}
