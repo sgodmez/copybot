@@ -114,7 +114,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: Compress-Archive -Path copybot-ui\target\dist\Copybot -DestinationPath "copybot-ui\target\release\copybot-$env:VERSION-windows-x64.zip"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: linux
           path: copybot-ui/target/release
