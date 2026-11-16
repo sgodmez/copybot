@@ -104,13 +104,13 @@ public class MainController {
     }
 
     /**
-     * Asks for a pipeline file (*.json) and opens its plan view: the "Open a pipeline" button of the home screen and
-     * the File menu item. A resume cursor (.state.json, listed by the same filter) is refused with a message.
+     * Asks for a pipeline file (*.json, *.yaml, *.yml) and opens its plan view: the "Open a pipeline" button of the
+     * home screen and the File menu item. A resume cursor (.state.json, listed by the same filter) is refused with a message.
      */
     void openPipelineChooser() {
         FileChooser chooser = new FileChooser();
         chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
-                ResourcesEngine.getString("home.file-filter"), "*.json"));
+                ResourcesEngine.getString("home.file-filter"), PipelineDocument.FILE_PATTERNS));
         File file = chooser.showOpenDialog(CopybotMainUi.STAGE);
         if (file == null) {
             return;

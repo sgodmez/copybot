@@ -5,6 +5,7 @@ import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PipelineYaml;
 import com.copybot.engine.pipeline.SecondaryOutputConfig.OnError;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.exception.CopybotException;
@@ -1564,5 +1565,83 @@ public class PipelineDocumentTest {
                 """);
 
         assertEquals(List.of("0:SOURCE_KEPT", "1:SOURCE_KEPT", "2:SOURCE_KEPT"), kinds(document));
+    }
+
+    // ---- pipelines written in YAML ----
+
+    private static final String YAML_PIPELINE = """
+            execution: auto
+            inSteps:
+              - action: file.read
+                actionConfig: { path: 'F:/DCIM', recursive: true }
+            outStep:
+              action: file.write
+              actionConfig: { outPattern: 'D:/photos/{name}' }
+            """;
+
+    /** A YAML file is saved as YAML: its format is kept, and the engine reads back the same pipeline. */
+    @Test
+    public void aYamlPipelineIsSavedAsYaml() throws IOException {
+        Path file = Files.writeString(tempDir.resolve("sd.yaml"), YAML_PIPELINE);
+        PipelineDocument document = PipelineDocument.load(file);
+        document.setExecutionMode(ExecutionMode.STREAMING);
+
+        document.save(file);
+
+        String saved = Files.readString(file);
+        assertTrue(saved.startsWith("execution: streaming\n"), saved);
+        assertEquals(tree(document.toJson()), PipelineYaml.read(saved));
+        assertEquals(ExecutionMode.STREAMING, PipelineReader.read(file).execution());
+        assertEquals("F:/DCIM", PipelineDocument.load(file).steps(Section.IN).getFirst()
+                .getAsJsonObject("actionConfig").get("path").getAsString());
+    }
+
+    /** The format follows the file written, as the engine reads it: "Save as" a .json writes JSON, a .yml YAML. */
+    @Test
+    public void theFormatWrittenFollowsTheTargetExtension() throws IOException {
+        PipelineDocument fromYaml = PipelineDocument.load(Files.writeString(tempDir.resolve("sd.yaml"), YAML_PIPELINE));
+        Path json = tempDir.resolve("copy.json");
+        fromYaml.save(json);
+        assertTrue(Files.readString(json).startsWith("{"), Files.readString(json));
+        assertEquals(tree(fromYaml.toJson()), tree(Files.readString(json)));
+
+        PipelineDocument fromJson = PipelineDocument.load(Files.writeString(tempDir.resolve("p.json"), PIPELINE));
+        Path yml = tempDir.resolve("copy.YML");
+        fromJson.save(yml);
+        assertFalse(Files.readString(yml).startsWith("{"), Files.readString(yml));
+        assertEquals(tree(fromJson.toJson()), PipelineYaml.read(Files.readString(yml)));
+    }
+
+    /** Comments are lost by a save: the same warning as a non-strict JSON. */
+    @Test
+    public void aYamlPipelineWithCommentsIsLenient() throws IOException {
+        assertFalse(PipelineDocument.load(Files.writeString(tempDir.resolve("a.yaml"), YAML_PIPELINE)).isLenient());
+        assertTrue(PipelineDocument.load(Files.writeString(tempDir.resolve("b.yaml"), "# my card\n" + YAML_PIPELINE))
+                .isLenient());
+    }
+
+    @Test
+    public void anInvalidYamlPipelineIsRefusedWithItsCause() throws IOException {
+        Path twice = Files.writeString(tempDir.resolve("twice.yaml"), "execution: plan\nexecution: auto\n");
+        CopybotException e = assertThrows(CopybotException.class, () -> PipelineDocument.load(twice));
+        assertTrue(e.getMessage().contains("twice.yaml") && e.getMessage().contains("YAML"), e.getMessage());
+        assertTrue(e.getMessage().contains("execution"), e.getMessage());
+
+        Path notSteps = Files.writeString(tempDir.resolve("steps.yml"), "inSteps: 5\n");
+        assertThrows(CopybotException.class, () -> PipelineDocument.load(notSteps));
+        Path list = Files.writeString(tempDir.resolve("list.yml"), "- a\n- b\n");
+        assertThrows(CopybotException.class, () -> PipelineDocument.load(list));
+    }
+
+    /** "Save as" of a YAML file proposes its extension; a typed extension is kept. */
+    @Test
+    public void saveAsAppendsTheExtensionOfTheCurrentFile() {
+        assertEquals(Path.of("dir", "copy.yml"),
+                PipelineDocument.withDefaultExtension(Path.of("dir", "copy"), Path.of("sd.yml")));
+        assertEquals(Path.of("dir", "copy.YAML"),
+                PipelineDocument.withDefaultExtension(Path.of("dir", "copy"), Path.of("x", "sd.YAML")));
+        assertEquals(Path.of("copy.json"), PipelineDocument.withDefaultExtension(Path.of("copy"), Path.of("sd.json")));
+        assertEquals(Path.of("copy.json"), PipelineDocument.withDefaultExtension(Path.of("copy"), null));
+        assertEquals(Path.of("copy.json"), PipelineDocument.withDefaultExtension(Path.of("copy.json"), Path.of("sd.yml")));
     }
 }

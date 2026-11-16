@@ -60,6 +60,11 @@
                 <artifactId>gson</artifactId>
                 <version>2.14.0</version>
             </dependency>
+            <dependency>
+                <groupId>org.snakeyaml</groupId>
+                <artifactId>snakeyaml-engine</artifactId>
+                <version>3.2</version>
+            </dependency>
 
         </dependencies>
     </dependencyManagement>

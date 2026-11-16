@@ -3,6 +3,7 @@ package com.copybot.ui;
 import com.copybot.engine.Execution;
 import com.copybot.engine.Plan;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.PipelineYaml;
 import com.copybot.engine.pipeline.WorkItemExecution;
 import com.copybot.engine.plugin.PluginEngine;
 import com.copybot.engine.resume.ResumePoint;
@@ -820,7 +821,8 @@ public class PlanController implements PlanOperations.View {
                 RecentPipelines.displayName(pipelinePath)) + "\n" + String.join("\n", exclusion.added()));
         uncoveredText(exclusion).ifPresent(parts::add);
         if (document.isLenient()) {
-            parts.add(ResourcesEngine.getString("editor.lenient"));
+            parts.add(ResourcesEngine.getString(
+                    PipelineYaml.isYaml(pipelinePath) ? "editor.yaml-comments" : "editor.lenient"));
         }
         ButtonType add = new ButtonType(ResourcesEngine.getString("plan.exclude.add"), ButtonBar.ButtonData.OK_DONE);
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION, String.join("\n\n", parts), add, ButtonType.CANCEL);

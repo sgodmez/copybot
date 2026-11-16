@@ -180,7 +180,7 @@ the source and shows the path each file gets.
 ```mermaid
 flowchart LR
     src["Source<br/>(SD card, folder, share)"] --> in
-    subgraph pipeline["Pipeline (JSON)"]
+    subgraph pipeline["Pipeline (JSON or YAML)"]
         in["IN<br/>list files"] --> analyse["ANALYZE<br/>read metadata"]
         analyse --> process["PROCESS<br/>transform, fork, filter"]
         process --> out["OUT<br/>write to target"]
@@ -216,6 +216,35 @@ actions, and gives that action its own configuration:
   "resume": { "mode": "stateThenDestination" }
 }
 ```
+
+The same pipeline can be written in YAML: a file ending in `.yaml` or `.yml`
+is read as YAML, any other as JSON. The editor saves a file in the format it
+was opened in (a *Save as* follows the extension typed); comments are lost on
+save, and the editor says so first.
+
+```yaml
+execution: plan
+inSteps:
+  - action: file.read
+    actionConfig:
+      path: 'E:\DCIM'                      # single quotes: no escaping
+      include: ['**/*.nef', '**/*.jpg', '**/*.mp4']
+analyseSteps:
+  - plugin: com.copybot.plugin.metadataextractor
+    action: extract
+outStep:
+  action: file.write
+  actionConfig:
+    outPattern: '\\nas\photos\{captureDate.Y|lastModified.Y}\{captureDate.m|lastModified.m}\{name}'
+    verify: readBack
+    onConflict: { compare: partialHash, ifIdentical: skip, ifDifferent: rename }
+resume:
+  mode: stateThenDestination
+```
+
+YAML 1.2 rules apply: `no`, `on` and `yes` are text, not booleans; a key
+written twice is refused; quote a value that would otherwise read as a number
+(`'1.10'`). The resume cursor stays a JSON file (`x.state.json`).
 
 A step without `plugin` uses the actions built into the engine. Each step can
 also set `maxConcurrency`, extra `resources`, or the plugin `version` to use

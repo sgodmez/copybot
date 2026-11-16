@@ -6,6 +6,7 @@ module com.copybot.engine {
     requires java.logging;
     requires info.picocli;
     requires transitive com.google.gson; // the plugin API exposes JsonElement
+    requires org.snakeyaml.engine; // pipelines written in YAML
 
     exports com.copybot.config to com.google.gson, com.copybot.ui;
     exports com.copybot.exception;

@@ -7,6 +7,7 @@ import com.copybot.engine.pipeline.GroupingRuleConfig;
 import com.copybot.engine.pipeline.MovedActionsMigration;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PipelineYaml;
 import com.copybot.engine.pipeline.RunEndMigration;
 import com.copybot.engine.pipeline.RunEndStepConfig;
 import com.copybot.engine.pipeline.SecondaryOutputConfig;
@@ -224,6 +225,8 @@ public final class PipelineDocument {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().serializeNulls().disableHtmlEscaping().create();
 
     private static final String RESUME_CURSOR_SUFFIX = ".state.json";
+    /** The files of the open and save choosers: the pipelines the engine reads (JSON, or YAML by extension). */
+    public static final List<String> FILE_PATTERNS = List.of("*.json", "*.yaml", "*.yml");
 
     private final JsonObject root;
     private final boolean lenient;
@@ -255,14 +258,30 @@ public final class PipelineDocument {
      * ("sd-to-nas", ".pipeline", "foo."); any typed extension is kept ("foo.txt").
      */
     public static Path withDefaultExtension(Path path) {
+        return withDefaultExtension(path, null);
+    }
+
+    /**
+     * As {@link #withDefaultExtension(Path)}, the extension appended being the one of the current file when it is
+     * YAML ("sd.yml": ".yml"), so a "Save as" keeps the format of the file opened; ".json" otherwise.
+     */
+    public static Path withDefaultExtension(Path path, Path current) {
         String name = path.getFileName().toString();
         int dot = name.lastIndexOf('.');
-        return dot > 0 && dot < name.length() - 1 ? path : path.resolveSibling(name + ".json");
+        if (dot > 0 && dot < name.length() - 1) {
+            return path;
+        }
+        String extension = ".json";
+        if (current != null && PipelineYaml.isYaml(current)) {
+            String currentName = current.getFileName().toString();
+            extension = currentName.substring(currentName.lastIndexOf('.'));
+        }
+        return path.resolveSibling(name + extension);
     }
 
     /**
      * The file was read as non-strict JSON (comments, single quotes, unquoted names...), which the engine
-     * accepts: saving rewrites it as strict JSON, its comments and layout are lost.
+     * accepts, or as YAML holding comments: saving rewrites it, its comments and layout are lost.
      */
     public boolean isLenient() {
         return lenient;
@@ -276,15 +295,24 @@ public final class PipelineDocument {
         return duplicateKeys;
     }
 
-    /** @throws CopybotException pipeline.not-found, pipeline.not-json (also for a step that is not an object) */
+    /**
+     * A {@code .yaml} / {@code .yml} file is read as YAML, as the engine does ({@link PipelineYaml}), any other
+     * as JSON.
+     *
+     * @throws CopybotException pipeline.not-found, pipeline.not-json / pipeline.not-yaml (also for a step that is
+     *                          not an object)
+     */
     public static PipelineDocument load(Path path) {
         if (!Files.isReadable(path)) {
             throw CopybotException.ofResource("pipeline.not-found", path);
         }
+        boolean yaml = PipelineYaml.isYaml(path);
         try {
-            return parse(Files.readString(path));
+            String text = Files.readString(path);
+            return yaml ? parseYaml(text) : parse(text);
         } catch (IOException | IllegalArgumentException e) {
-            throw CopybotException.ofResource(e, "pipeline.not-json", path);
+            throw CopybotException.ofResource(e, yaml ? "pipeline.not-yaml" : "pipeline.not-json", path,
+                    e.getMessage());
         }
     }
 
@@ -296,6 +324,20 @@ public final class PipelineDocument {
         } catch (JsonParseException e) {
             throw new IllegalArgumentException(e.getMessage(), e);
         }
+        return of(tree, !JsonTexts.isStrictJson(json), JsonTexts.duplicateKeys(json));
+    }
+
+    /**
+     * A pipeline written in YAML; lenient when it holds comments (a save loses them). A key written twice is
+     * refused, so there is no duplicate key to report.
+     *
+     * @throws IllegalArgumentException invalid YAML, not a mapping, or a section that is not made of objects
+     */
+    public static PipelineDocument parseYaml(String yaml) {
+        return of(PipelineYaml.read(yaml), PipelineYaml.hasComments(yaml), List.of());
+    }
+
+    private static PipelineDocument of(JsonElement tree, boolean lenient, List<String> duplicateKeys) {
         if (!tree.isJsonObject()) {
             throw new IllegalArgumentException(ResourcesEngine.getString("pipeline.document.not-object"));
         }
@@ -322,7 +364,7 @@ public final class PipelineDocument {
                 }
             }
         }
-        return new PipelineDocument(root, !JsonTexts.isStrictJson(json), JsonTexts.duplicateKeys(json));
+        return new PipelineDocument(root, lenient, duplicateKeys);
     }
 
     /** @throws IllegalArgumentException the section of this object is not made of step objects ({@code label}) */
@@ -347,7 +389,7 @@ public final class PipelineDocument {
         return true;
     }
 
-    /** Pretty-printed JSON, what {@link #save} writes. */
+    /** Pretty-printed JSON, what {@link #save} writes to a JSON file (a YAML file gets the same tree in YAML). */
     public String toJson() {
         return GSON.toJson(root) + "\n";
     }
@@ -369,7 +411,9 @@ public final class PipelineDocument {
         try {
             keepPosixPermissions(target, temp);
             try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                ByteBuffer content = ByteBuffer.wrap(toJson().getBytes(StandardCharsets.UTF_8));
+                // the format the engine will read this file as (a "Save as" may change it)
+                String text = PipelineYaml.isYaml(target) ? PipelineYaml.write(root) : toJson();
+                ByteBuffer content = ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8));
                 while (content.hasRemaining()) {
                     channel.write(content);
                 }

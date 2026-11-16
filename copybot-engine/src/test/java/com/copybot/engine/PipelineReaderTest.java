@@ -184,6 +184,41 @@ public class PipelineReaderTest {
                 .secondaryOutputs().size());
     }
 
+    /** A .yaml pipeline reads as its JSON form, run-end migration and enum checks included. */
+    @Test
+    public void aYamlPipelineReadsAsItsJsonForm() throws IOException {
+        PipelineConfig config = PipelineReader.read(Files.writeString(tempDir.resolve("p.yaml"), """
+                # my SD card
+                execution: streaming
+                postProcess:
+                  command: D:\\progs\\synoRight.exe
+                  args: [rights, '{createdDirs}']
+                """));
+
+        assertEquals(com.copybot.engine.pipeline.ExecutionMode.STREAMING, config.execution());
+        assertEquals(1, config.runEnd().size());
+        assertEquals(JsonParser.parseString("{\"command\":\"D:\\\\progs\\\\synoRight.exe\","
+                + "\"args\":[\"rights\",\"{createdDirs}\"]}"), config.runEnd().getFirst().actionConfig());
+
+        CopybotException unknown = assertThrows(CopybotException.class,
+                () -> PipelineReader.read(Files.writeString(tempDir.resolve("u.yml"), "execution: oops\n")));
+        assertTrue(unknown.getMessage().contains("oops"), unknown.getMessage());
+    }
+
+    /** Invalid YAML names the file and what is wrong (here the key written twice). */
+    @Test
+    public void anInvalidYamlPipelineIsRefusedWithItsCause() throws IOException {
+        Path pipeline = Files.writeString(tempDir.resolve("twice.yaml"), "execution: parallel\nexecution: sequential\n");
+
+        CopybotException e = assertThrows(CopybotException.class, () -> PipelineReader.read(pipeline));
+
+        assertTrue(e.getMessage().contains("twice.yaml"), e.getMessage());
+        assertTrue(e.getMessage().contains("YAML"), e.getMessage());
+        assertTrue(e.getMessage().contains("execution"), e.getMessage());
+        assertThrows(CopybotException.class,
+                () -> PipelineReader.read(Files.writeString(tempDir.resolve("empty.yaml"), "")));
+    }
+
     @Test
     public void anUnknownOnErrorIsRefusedNotReadAsFail() {
         for (String bad : List.of("\"oops\"", "\"WARN\"", "5", "{}")) {

@@ -100,7 +100,7 @@
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <configuration>
                     <useModulePath>false</useModulePath>
-                    <argLine>--module-path ${com.copybot:copybot-engine:jar}${path.separator}${com.google.code.gson:gson:jar}${path.separator}${info.picocli:picocli:jar} --add-modules com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=ALL-UNNAMED</argLine>
+                    <argLine>--module-path ${com.copybot:copybot-engine:jar}${path.separator}${com.google.code.gson:gson:jar}${path.separator}${info.picocli:picocli:jar}${path.separator}${org.snakeyaml:snakeyaml-engine:jar} --add-modules com.copybot.engine --add-exports com.copybot.engine/com.copybot.engine.plugin=ALL-UNNAMED</argLine>
                 </configuration>
                 <executions>
                     <execution>

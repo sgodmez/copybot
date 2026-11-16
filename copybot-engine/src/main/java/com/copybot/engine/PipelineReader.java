@@ -3,6 +3,7 @@ package com.copybot.engine;
 import com.copybot.engine.pipeline.MovedActionsMigration;
 import com.copybot.engine.pipeline.PipelineChecks;
 import com.copybot.engine.pipeline.PipelineConfig;
+import com.copybot.engine.pipeline.PipelineYaml;
 import com.copybot.engine.pipeline.RunEndMigration;
 import com.copybot.exception.CopybotException;
 import com.copybot.utils.GsonUtil;
@@ -24,16 +25,30 @@ public final class PipelineReader {
     private PipelineReader() {
     }
 
-    /** @throws CopybotException pipeline.not-found / pipeline.not-json, or an unknown enum name */
+    /**
+     * A {@code .yaml} / {@code .yml} file is read as YAML ({@link PipelineYaml}), any other as JSON.
+     *
+     * @throws CopybotException pipeline.not-found / pipeline.not-json / pipeline.not-yaml, or an unknown enum name
+     */
     public static PipelineConfig read(Path pipelinePath) {
         if (!Files.isReadable(pipelinePath)) {
             throw CopybotException.ofResource("pipeline.not-found", pipelinePath);
         }
+        boolean yaml = PipelineYaml.isYaml(pipelinePath);
+        String notReadable = yaml ? "pipeline.not-yaml" : "pipeline.not-json";
         JsonElement tree;
-        try (var reader = Files.newBufferedReader(pipelinePath)) {
-            tree = JsonParser.parseReader(reader);
-        } catch (IOException | JsonParseException e) {
-            throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
+        if (yaml) {
+            try {
+                tree = PipelineYaml.read(Files.readString(pipelinePath));
+            } catch (IOException | IllegalArgumentException e) {
+                throw CopybotException.ofResource(e, notReadable, pipelinePath, e.getMessage());
+            }
+        } else {
+            try (var reader = Files.newBufferedReader(pipelinePath)) {
+                tree = JsonParser.parseReader(reader);
+            } catch (IOException | JsonParseException e) {
+                throw CopybotException.ofResource(e, notReadable, pipelinePath);
+            }
         }
         // before Gson: its enum adapter may fail on a non-string mode, which would read as "not a JSON"
         JsonElement resume = tree.isJsonObject() ? tree.getAsJsonObject().get("resume") : null;
@@ -51,10 +66,10 @@ public final class PipelineReader {
         try {
             pipelineConfig = GsonUtil.getGson().fromJson(tree, PipelineConfig.class);
         } catch (JsonParseException e) {
-            throw CopybotException.ofResource(e, "pipeline.not-json", pipelinePath);
+            throw CopybotException.ofResource(e, notReadable, pipelinePath, e.getMessage());
         }
         if (pipelineConfig == null) { // empty file
-            throw CopybotException.ofResource("pipeline.not-json", pipelinePath);
+            throw CopybotException.ofResource(notReadable, pipelinePath, "");
         }
         checkEnumName(resume, "mode", pipelineConfig.resume() == null ? null : pipelineConfig.resume().mode(),
                 "resume.mode.unknown");

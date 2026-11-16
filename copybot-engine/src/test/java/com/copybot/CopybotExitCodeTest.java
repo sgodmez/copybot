@@ -106,6 +106,29 @@ public class CopybotExitCodeTest {
         assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
     }
 
+    /** The same pipeline written in YAML runs alike; its resume cursor stays JSON, beside it. */
+    @Test
+    public void aYamlPipelineRunsLikeItsJsonForm() throws IOException {
+        Path pipeline = Files.writeString(tempDir.resolve("sd.yaml"), """
+                # the SD card to the NAS
+                inSteps:
+                  - action: file.read
+                    actionConfig: { path: '%s' }
+                outStep:
+                  action: file.write
+                  actionConfig:
+                    outPattern: '%s/{name}'
+                    onConflict: { ifDifferent: error }
+                resume: { mode: state }
+                """.formatted(json(card), json(nas)));
+
+        String[] result = cli("-p=" + pipeline, CONFIG);
+
+        assertEquals("0", result[0], result[2]);
+        assertTrue(Files.exists(nas.resolve("IMG_02.JPG")));
+        assertTrue(Files.exists(tempDir.resolve("sd.state.json")));
+    }
+
     @Test
     public void theCommandLineAnswersYesToAPluginAndSaysItOnStderr() throws IOException {
         AtomicReference<Boolean> answer = new AtomicReference<>();

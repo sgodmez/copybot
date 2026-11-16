@@ -2,6 +2,7 @@ package com.copybot.ui;
 
 import com.copybot.engine.pipeline.ConflictCheck;
 import com.copybot.engine.pipeline.ExecutionMode;
+import com.copybot.engine.pipeline.PipelineYaml;
 import com.copybot.engine.pipeline.SecondaryOutputConfig;
 import com.copybot.engine.plugin.CatalogAction;
 import com.copybot.engine.plugin.PluginCatalog.FailedPlugin;
@@ -1046,8 +1047,8 @@ public class EditorController {
             return;
         }
         List<String> losses = new ArrayList<>();
-        if (document.isLenient()) {
-            losses.add(ResourcesEngine.getString("editor.lenient"));
+        if (document.isLenient()) { // the file read, the target: a YAML holding comments or a non-strict JSON
+            losses.add(ResourcesEngine.getString(PipelineYaml.isYaml(target) ? "editor.yaml-comments" : "editor.lenient"));
         }
         if (!document.duplicateKeys().isEmpty()) {
             losses.add(ResourcesEngine.getString("editor.duplicate-keys", String.join("\n", document.duplicateKeys())));
@@ -1070,13 +1071,15 @@ public class EditorController {
     }
 
     /**
-     * The file to save to, ".json" appended to a name without extension
-     * ({@link PipelineDocument#withDefaultExtension}; then confirmed if it exists: the chooser only
-     * confirmed the name typed). A resume cursor (".state.json") is refused.
+     * The file to save to, the extension of the current file (".yaml", ".yml") or ".json" appended to a name
+     * without extension ({@link PipelineDocument#withDefaultExtension}; then confirmed if it exists: the chooser
+     * only confirmed the name typed). A resume cursor (".state.json") is refused. The file is written in the format
+     * of its extension.
      */
     private Optional<Path> chooseTarget() {
         FileChooser chooser = new FileChooser();
-        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(ResourcesEngine.getString("home.file-filter"), "*.json"));
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(ResourcesEngine.getString("home.file-filter"),
+                PipelineDocument.FILE_PATTERNS));
         if (path != null) {
             chooser.setInitialDirectory(path.getParent().toFile());
             chooser.setInitialFileName(path.getFileName().toString());
@@ -1086,7 +1089,7 @@ public class EditorController {
             return Optional.empty();
         }
         Path chosen = file.toPath();
-        Path withExtension = PipelineDocument.withDefaultExtension(chosen);
+        Path withExtension = PipelineDocument.withDefaultExtension(chosen, path);
         boolean appended = !withExtension.equals(chosen);
         Path target = withExtension.toAbsolutePath().normalize();
         if (PipelineDocument.isResumeCursor(target)) {
