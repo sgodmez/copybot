@@ -1,0 +1,25 @@
+Copybot plugin gps-zone
+Copyright the Copybot authors, distributed under the GNU General Public License v3
+(see the LICENSE of Copybot, https://www.gnu.org/licenses/gpl-3.0.html).
+
+This plugin includes, or uses, third-party software and data:
+
+Time zone boundary data
+  Contains the time zone boundaries of Timezone Boundary Builder
+  (https://github.com/evansiroky/timezone-boundary-builder), built from
+  OpenStreetMap data, (c) OpenStreetMap contributors.
+  The data is made available under the Open Data Commons Open Database License
+  (ODbL) v1.0: https://opendatacommons.org/licenses/odbl/1-0/
+  It is embedded, unmodified, in the timeshape library below (data.tar.zstd).
+
+timeshape 2026b.29 (net.iakovlev:timeshape), https://github.com/RomanIakovlev/timeshape
+  Code under the MIT License; its time zone data under the ODbL (above).
+
+Libraries used by timeshape, shipped in the lib/ folder of the plugin:
+  geojson-proto (net.iakovlev)            MIT License
+  Esri Geometry API for Java              Apache License 2.0
+  Protocol Buffers (com.google.protobuf)  BSD 3-Clause License
+  Apache Commons Compress, IO, Lang, Codec  Apache License 2.0
+  Jackson Core                            Apache License 2.0
+  zstd-jni (com.github.luben)             BSD 2-Clause License
+  SLF4J API                               MIT License

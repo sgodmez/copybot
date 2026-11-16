@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-parent</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>copybot-plugin</artifactId>
+    <packaging>pom</packaging>
+
+    <modules>
+        <module>copybot-plugin-metadata-extractor</module>
+        <module>copybot-plugin-gps-zone</module>
+        <module>copybot-plugin-notify-webhook</module>
+        <module>copybot-plugin-notify-email</module>
+        <module>copybot-plugin-archive</module>
+        <module>copybot-plugin-exec</module>
+        <module>copybot-plugin-ffmpeg</module>
+        <module>copybot-plugin-remote</module>
+    </modules>
+
+    <properties>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-engine</artifactId>
+            <version>${project.parent.version}</version>
+            <scope>provided</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.copybot</groupId>
+                <artifactId>copybot-dependencies</artifactId>
+                <version>${project.parent.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>copy-dependencies</goal>
+                        </goals>
+                        <configuration>
+                            <includeScope>runtime</includeScope>
+                            <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+        <pluginManagement>
+            <plugins>
+                <plugin>
+                    <!--
+                        The release archive: copybot-plugin-<code>-<version>.zip holding <code>/<jar> and <code>/lib/.
+                        Managed here, switched on by each plugin module (this module has no plugin.code).
+                    -->
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <executions>
+                        <execution>
+                            <id>plugin-zip</id>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>single</goal>
+                            </goals>
+                            <configuration>
+                                <descriptors>
+                                    <descriptor>${project.basedir}/../plugin-zip.xml</descriptor>
+                                </descriptors>
+                                <finalName>copybot-plugin-${plugin.code}-${project.version}</finalName>
+                                <appendAssemblyId>false</appendAssemblyId>
+                                <attach>false</attach>
+                            </configuration>
+                        </execution>
+                    </executions>
+                </plugin>
+            </plugins>
+        </pluginManagement>
+    </build>
+
+</project>

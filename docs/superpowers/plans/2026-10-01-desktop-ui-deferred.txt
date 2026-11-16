@@ -1,0 +1,12 @@
+Task 1: minor (deferred): wildcard/List<Map> not tested; only direct self-cycle tested; immutability untested; PATTERN_VARIABLES test circular; list component annotations not propagated to element (undocumented); private field() overload naming
+Task 4: minor (deferred): '%'-prefixed translation treated as missing; no test for schema-less action / non-embedded plugin / order; doubled blank line
+Task 6: minor (deferred): targetOf catch has no debug log; blank Target when pattern has no directory part (UI shows blank)
+Task 7: minor (deferred): prefs guard counter order-dependent; guard only under surefire; duplicated in-memory Preferences impl in tests
+Task 10: minor (deferred): lexicographic version sort inherited from engine; non-string plugin member treated as embedded; coverage gaps
+Task 9: minor (deferred): POSIX permissions of saved pipeline (600); duplicate keys collapsed silently
+Task 11: minor (deferred): no test asserting unknown members survive a move / neighbours survive remove / no-op move leaves modified false; non-array section → raw Gson ISE
+Task 12: minor (deferred): coverage gaps (DECIMAL/ENUM write, list blank removal, invalid line, setAdvancedText modified)
+Task 14: minor (deferred): coverage gaps (file-count progress, fork totals, filters for fork/PENDING rows, from-name line, DESTINATION source)
+Task 15: minor (deferred): global loading flag (not per editor); warning alert focus reverts the field; .json append on foo.txt
+Task 16: minor (deferred): stale `this` if Back clicked while editor loading (pre-existing); unchecked manual items (resume scenario, edit/save reload, prefs switch, delete-source banner, missing recents, open/new, filter)
+Final: minor (deferred): home stale-view on save after Back (like T16b); 2-thread missing-check pool can delay rows; background catalog vs language change race; repeated catalog warning; int-range limit for long fields; broken newest plugin → editor shows older schema

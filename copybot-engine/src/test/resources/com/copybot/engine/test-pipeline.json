@@ -1,0 +1,18 @@
+{
+  "inSteps": [
+    {
+      "action": "file.read",
+      "actionConfig": {
+        "path": "./target/maintest-in"
+      }
+    }
+  ],
+  "analyseSteps": [],
+  "outStep": {
+    "action": "file.write",
+    "actionConfig": {
+      "outPattern": "./target/maintest-out/{name}",
+      "onConflict": { "ifDifferent": "error" }
+    }
+  }
+}

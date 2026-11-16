@@ -1,0 +1,261 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>com.copybot</groupId>
+        <artifactId>copybot-parent</artifactId>
+        <version>0.8.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>copybot-ui</artifactId>
+
+    <properties>
+        <!-- the icon of the app image: jpackage takes an .ico on Windows, a .png on Linux (profile linux) -->
+        <app.icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.ico</app.icon>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.copybot</groupId>
+            <artifactId>copybot-engine</artifactId>
+            <version>${project.parent.version}</version>
+        </dependency>
+        <!-- used directly (module-info "requires com.google.gson"): version managed by copybot-dependencies -->
+        <dependency>
+            <groupId>com.google.code.gson</groupId>
+            <artifactId>gson</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-controls</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-fxml</artifactId>
+        </dependency>
+        <!-- the preview of videos and sounds (double click on a row of the plan) -->
+        <dependency>
+            <groupId>org.openjfx</groupId>
+            <artifactId>javafx-media</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.controlsfx</groupId>
+            <artifactId>controlsfx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.kordamp.ikonli</groupId>
+            <artifactId>ikonli-javafx</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.kordamp.bootstrapfx</groupId>
+            <artifactId>bootstrapfx-core</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-engine</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>com.copybot</groupId>
+                <artifactId>copybot-dependencies</artifactId>
+                <version>${project.parent.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <!-- the version shown in Help > About -->
+            <resource>
+                <directory>src/main/resources-filtered</directory>
+                <filtering>true</filtering>
+            </resource>
+        </resources>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <!-- jdk.httpserver: the local server of the update tests -->
+                    <argLine>--enable-native-access=com.copybot.engine,javafx.graphics --add-modules jdk.httpserver --add-reads com.copybot.ui=jdk.httpserver</argLine>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>default-testCompile</id>
+                        <configuration>
+                            <compilerArgs>
+                                <arg>--add-modules</arg>
+                                <arg>jdk.httpserver</arg>
+                                <arg>--add-reads</arg>
+                                <arg>com.copybot.ui=jdk.httpserver</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <!-- jpackage's app-image launcher is read-only; Maven's clean plugin can't delete
+                             it on Windows without this, so clear the attribute before pre-clean runs -->
+                        <id>clear-dist-readonly</id>
+                        <phase>pre-clean</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <attrib readonly="false">
+                                    <fileset dir="${project.build.directory}/dist" erroronmissingdir="false">
+                                        <include name="**/*"/>
+                                    </fileset>
+                                </attrib>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <profile>
+            <id>linux</id>
+            <activation>
+                <os>
+                    <name>linux</name>
+                </os>
+            </activation>
+            <properties>
+                <app.icon>${project.basedir}/src/main/resources/com/copybot/ui/Copybot.png</app.icon>
+            </properties>
+        </profile>
+        <!-- the desktop application: mvn -Pdist package (jlink runtime image, then jpackage app image) -->
+        <profile>
+            <id>dist</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <!-- jpackage needs a numeric version: 1.0-SNAPSHOT gives 1.0.0 -->
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>build-helper-maven-plugin</artifactId>
+                        <version>3.6.2</version>
+                        <executions>
+                            <execution>
+                                <id>parse-version</id>
+                                <goals>
+                                    <goal>parse-version</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-antrun-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <!-- jpackage refuses to write over an existing app image: delete it first
+                                     (its launcher is read-only on Windows, so clear the attribute before) -->
+                                <id>delete-app-image</id>
+                                <phase>prepare-package</phase>
+                                <goals>
+                                    <goal>run</goal>
+                                </goals>
+                                <configuration>
+                                    <target>
+                                        <attrib readonly="false">
+                                            <fileset dir="${project.build.directory}/dist/Copybot" erroronmissingdir="false">
+                                                <include name="**/*"/>
+                                            </fileset>
+                                        </attrib>
+                                        <delete dir="${project.build.directory}/dist/Copybot"/>
+                                    </target>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.openjfx</groupId>
+                        <artifactId>javafx-maven-plugin</artifactId>
+                        <version>0.0.8</version>
+                        <executions>
+                            <execution>
+                                <id>javafx_jlink</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jlink</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>com.copybot.ui/com.copybot.ui.CopybotMainUi</mainClass>
+                                    <jlinkZipName>copybot</jlinkZipName>
+                                    <jlinkImageName>copybot</jlinkImageName>
+                                    <noManPages>true</noManPages>
+                                    <stripDebug>true</stripDebug>
+                                    <stripJavaDebugAttributes>true</stripJavaDebugAttributes>
+                                    <noHeaderFiles>true</noHeaderFiles>
+                                    <!-- jlink calls 2 deprecated (zip-6 now), but the plugin only takes 0..2 -->
+                                    <compress>2</compress>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.panteleyev</groupId>
+                        <artifactId>jpackage-maven-plugin</artifactId>
+                        <version>1.8.0</version>
+                        <executions>
+                            <execution>
+                                <id>jpackage</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>jpackage</goal>
+                                </goals>
+                                <configuration>
+                                    <name>Copybot</name>
+                                    <appVersion>${parsedVersion.majorVersion}.${parsedVersion.minorVersion}.${parsedVersion.incrementalVersion}</appVersion>
+                                    <vendor>com.copybot</vendor>
+                                    <destination>target/dist</destination>
+                                    <module>com.copybot.ui/com.copybot.ui.CopybotMainUi</module>
+                                    <type>APP_IMAGE</type>
+                                    <runtimeImage>target/copybot</runtimeImage>
+                                    <icon>${app.icon}</icon>
+                                    <javaOptions>
+                                        <option>-Dfile.encoding=UTF-8</option>
+                                        <!-- the disk lookup of Windows calls kernel32, JavaFX loads its own libraries -->
+                                        <option>--enable-native-access=com.copybot.engine,javafx.graphics</option>
+                                    </javaOptions>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
+</project>

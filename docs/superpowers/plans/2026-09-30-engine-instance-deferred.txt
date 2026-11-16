@@ -1,0 +1,6 @@
+Task 1: minor (deferred): starvation clock counts pause time (FIFO right after long resume); no multi-waiter single-resume test; leaked parked thread on assertion failure; empty footprint + pre-interrupted thread now throws (later tasks must handle)
+Task 2: minor (deferred): interrupt between awaitCompletion and setStatus ends SUCCESS/ERROR and still saves cursor (T3 told to handle cancel/cursor race); no direct CANCELLED test for runSinglePhase/prepare
+Task 3: minor (deferred): no deterministic ListingCancelled test / external-interrupt-flag test (T4 to add the ListingCancelled one); race test doesn't assert both outcomes; brief tests may leak parked thread on failure; paused registry left if Plan abandoned (engine close must resume — carry to T6)
+Task 5: minor (deferred): two volatile writes (loaded/error lists) not atomic; no test for silent same-dirs second call; MainTest stale comment (already in T8)
+Task 6: minor (deferred): same Plan executable by two distinct engine instances (theoretical)
+Task 8: minor (deferred): onPhaseFailed cancel branch overwrites first cause (use recordFailureIfAbsent); start() safety net status read/set not atomic; no test for single 5s close deadline; resetForTest leaves stale loadedFrom warnings

@@ -1,0 +1,13 @@
+version: 2
+updates:
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    ignore:
+      # the project's own modules, the demo plugins pin both versions of their demo library on purpose
+      - dependency-name: "com.copybot:*"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"

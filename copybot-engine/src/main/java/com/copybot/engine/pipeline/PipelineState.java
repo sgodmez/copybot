@@ -1,0 +1,185 @@
+package com.copybot.engine.pipeline;
+
+import com.copybot.engine.resources.DiskTraffic;
+import com.copybot.engine.resources.ResourceRegistry;
+import com.copybot.engine.resources.ResourceSnapshot;
+import com.copybot.engine.resume.ResumeProposal;
+
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+
+public class PipelineState {
+    // written by the pipeline thread, read by watchers/UI on other threads
+    private volatile PipelineStatus status;
+
+    private ConcurrentLinkedQueue<WorkItemExecution> workItems;
+
+    // written by listing threads, read by watchers/UI on other threads
+    private volatile boolean listingInProgress;
+    private volatile boolean listingComplete;
+
+    private ResourceRegistry registry;
+
+    // written by the pipeline thread, read by watchers/UI on other threads
+    private volatile ResumeProposal resumeProposal;
+    private volatile List<String> warnings = List.of();
+    private final AtomicReference<Throwable> failure = new AtomicReference<>();
+    private volatile boolean preparationFailed;
+    private volatile String runEndStep;
+
+    // written by listing threads, read by watchers/UI on other threads
+    private final AtomicInteger archivesUnfolded = new AtomicInteger();
+    private final AtomicInteger archivesToDownload = new AtomicInteger();
+    private final AtomicLong bytesToDownload = new AtomicLong();
+
+    public PipelineState() {
+        status = PipelineStatus.NEW;
+        workItems = new ConcurrentLinkedQueue<>();
+    }
+
+    public PipelineStatus getStatus() {
+        return status;
+    }
+
+    public synchronized void setStatus(PipelineStatus status) {
+        this.status = status;
+    }
+
+    /** Atomically replaces the status when it is still the expected one (pause / resume vs. the end of the run). */
+    public synchronized boolean compareAndSetStatus(PipelineStatus expected, PipelineStatus next) {
+        if (status != expected) {
+            return false;
+        }
+        status = next;
+        return true;
+    }
+
+    public ConcurrentLinkedQueue<WorkItemExecution> getWorkItems() {
+        return workItems;
+    }
+
+    public boolean isListingInProgress() {
+        return listingInProgress;
+    }
+
+    public void setListingInProgress(boolean listingInProgress) {
+        this.listingInProgress = listingInProgress;
+    }
+
+    /**
+     * Every input step of the last preparation listed to its end: no failure, no stop (spec manual-point §2). A
+     * preparation stopped afterwards offers its rows (resume from here, analyse); one stopped while listing cannot
+     * (files would be missing).
+     */
+    public boolean isListingComplete() {
+        return listingComplete;
+    }
+
+    public void setListingComplete(boolean listingComplete) {
+        this.listingComplete = listingComplete;
+    }
+
+    public void setRegistry(ResourceRegistry registry) {
+        this.registry = registry;
+    }
+
+    public List<ResourceSnapshot> getResourceSnapshot() {
+        return registry == null ? List.of() : registry.snapshot();
+    }
+
+    /** The bytes read and written per disk so far, under the names of {@link #getResourceSnapshot()}. */
+    public Map<String, DiskTraffic.Bytes> getDiskTraffic() {
+        return registry == null ? Map.of() : registry.diskTraffic();
+    }
+
+    public ResumeProposal getResumeProposal() {
+        return resumeProposal;
+    }
+
+    public void setResumeProposal(ResumeProposal resumeProposal) {
+        this.resumeProposal = resumeProposal;
+    }
+
+    /**
+     * The configuration warnings of the steps ({@code IAction#configWarnings}), set once the steps are
+     * resolved; empty before. Shown before the run: dry-run output, CLI start, UI banner.
+     */
+    public List<String> getWarnings() {
+        return warnings;
+    }
+
+    public void setWarnings(List<String> warnings) {
+        this.warnings = List.copyOf(warnings);
+    }
+
+    /** A pipeline-level failure that is not tied to an item (e.g. the state file could not be written). */
+    public Throwable getFailure() {
+        return failure.get();
+    }
+
+    public void setFailure(Throwable failure) {
+        this.failure.set(failure);
+    }
+
+    /**
+     * Records the failure only when none is recorded yet (atomically: concurrent listings may fail together).
+     *
+     * @return true when this failure was recorded
+     */
+    public boolean recordFailureIfAbsent(Throwable failure) {
+        return this.failure.compareAndSet(null, failure);
+    }
+
+    /**
+     * True when the pipeline ended ERROR because its preparation failed (unresolvable step, invalid state
+     * file, "destination" mode without target paths...): nothing was written. A listing failure,
+     * items in error or a cursor write failure are run failures: false.
+     */
+    public boolean isPreparationFailed() {
+        return preparationFailed;
+    }
+
+    public void setPreparationFailed(boolean preparationFailed) {
+        this.preparationFailed = preparationFailed;
+    }
+
+    /**
+     * The end-of-run action running now, by its localised name (spec run-end: "Fin de run : Envoyer un e-mail");
+     * null outside the end-of-run actions.
+     */
+    public String getRunEndStep() {
+        return runEndStep;
+    }
+
+    public void setRunEndStep(String runEndStep) {
+        this.runEndStep = runEndStep;
+    }
+
+    /** The archives unfolded at the listing so far (spec grouping/archives). */
+    public int getArchivesUnfolded() {
+        return archivesUnfolded.get();
+    }
+
+    public void addArchiveUnfolded() {
+        archivesUnfolded.incrementAndGet();
+    }
+
+    /** The archives that are not local files, copied locally to be unfolded ("archives to download: N, X GB"). */
+    public int getArchivesToDownload() {
+        return archivesToDownload.get();
+    }
+
+    /** The size of the {@link #getArchivesToDownload()} archives. */
+    public long getBytesToDownload() {
+        return bytesToDownload.get();
+    }
+
+    public void addArchiveToDownload(long bytes) {
+        archivesToDownload.incrementAndGet();
+        bytesToDownload.addAndGet(bytes);
+    }
+}

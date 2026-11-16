@@ -1,0 +1,59 @@
+Copybot plugin remote
+Copyright the Copybot authors, distributed under the GNU General Public License v3
+(see the LICENSE of Copybot, https://www.gnu.org/licenses/gpl-3.0.html).
+
+This plugin includes, or uses, third-party software and data:
+
+Libraries shipped in the lib/ folder of the plugin (each jar also holds its
+licence texts in META-INF/):
+
+JSch 2.28.8 (com.github.mwiede:jsch), https://github.com/mwiede/jsch
+  BSD-style licence:
+
+  Copyright (c) 2002-2015 Atsuhiko Yamanaka, JCraft,Inc.
+  All rights reserved.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are met:
+
+    1. Redistributions of source code must retain the above copyright notice,
+       this list of conditions and the following disclaimer.
+
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in
+       the documentation and/or other materials provided with the distribution.
+
+    3. The names of the authors may not be used to endorse or promote products
+       derived from this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESSED OR IMPLIED WARRANTIES,
+  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
+  FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL JCRAFT,
+  INC. OR ANY CONTRIBUTORS TO THIS SOFTWARE BE LIABLE FOR ANY DIRECT, INDIRECT,
+  INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+  OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+  EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+  JSch includes JZlib (Copyright (c) 2000-2011 ymnk, JCraft,Inc., the same
+  BSD-style licence) and jBCrypt (Copyright (c) 2006 Damien Miller, ISC-style
+  licence); their texts are in the jar, META-INF/LICENSE.JZlib.txt and
+  META-INF/LICENSE.jBCrypt.txt.
+
+Apache Commons Net 3.13.0 (commons-net:commons-net)   Apache License 2.0
+  Apache Commons Net
+  Copyright 2001-2026 The Apache Software Foundation
+
+  This product includes software developed at
+  The Apache Software Foundation (https://www.apache.org/).
+
+Apache Commons IO 2.21.0 (commons-io:commons-io)      Apache License 2.0
+  Apache Commons IO
+  Copyright 2002-2025 The Apache Software Foundation
+
+  This product includes software developed at
+  The Apache Software Foundation (https://www.apache.org/).
+
+The Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0

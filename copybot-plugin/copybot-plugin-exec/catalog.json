@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.exec",
+  "code": "exec",
+  "description": {
+    "en": "Runs a program of your choice on each file; the file it writes replaces the content.",
+    "fr": "Lance le programme de votre choix sur chaque fichier ; le fichier qu'il \u00e9crit remplace le contenu.",
+    "it": "Esegue un programma a scelta su ogni file; il file che scrive ne sostituisce il contenuto."
+  },
+  "changes": {
+    "en": "Runs an external program on each file; built for plugin API 1.2.",
+    "fr": "Lance un programme externe sur chaque fichier ; construit pour l\u2019API de plugins 1.2.",
+    "it": "Esegue un programma esterno su ogni file; costruito per l\u2019API dei plugin 1.2."
+  }
+}

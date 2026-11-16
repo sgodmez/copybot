@@ -1,0 +1,16 @@
+Deferred minors of the four 2026-09/10 projects: triaged and handled on 2026-10-02 (FIX / TEST / DROP per item).
+
+Rulings (user, 2026-10-02):
+Ruling: long config fields — the editor accepts the whole long range for INTEGER fields; the engine reads integers exactly (out of range = config error, no silent wrap) — cost if wrong: none
+Ruling: a loaded plugin version whose actions cannot be listed — catalog exposes it as failed, the editor shows its steps read-only ("plugin en erreur") — cost if wrong: none
+Ruling: Save As — ".json" appended only when the typed name has no extension — cost if wrong: none
+Ruling: the recents missing-check pool stays at 2 threads — cost if wrong: rows may show late behind a stuck share
+Ruling: a configWarnings() that throws fails the preparation (exit 2) — cost if wrong: none
+Ruling: the CLI output (dry-run, warnings, item errors) is localized; scripts rely on exit codes — cost if wrong: parsing scripts must follow the language
+
+Still open:
+- Manual UI checks: resume scenario, edit/save/reload, language switch, delete-source banner, missing recents, Open/New, table filter.
+- POSIX permission preservation on pipeline save: test skipped on Windows, never run.
+- FileComparisonTest 2001 ms cases need a file system with sub-second timestamps (fail on HFS+/ext3).
+- A loaded plugin version with zero actions is in neither catalog list: the editor falls back to an older version (theoretical).
+- An out-of-range int in an action config reports Gson's message without the step name.

@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.notifywebhook",
+  "code": "notify-webhook",
+  "description": {
+    "en": "Tells a web service the result of a run at its end: ntfy, Discord, Slack, Telegram or any JSON webhook.",
+    "fr": "Annonce le bilan d'un run \u00e0 un service web \u00e0 sa fin : ntfy, Discord, Slack, Telegram ou n'importe quel webhook JSON.",
+    "it": "Comunica a un servizio web l'esito di un run alla sua fine: ntfy, Discord, Slack, Telegram o qualsiasi webhook JSON."
+  },
+  "changes": {
+    "en": "First version.",
+    "fr": "Premi\u00e8re version.",
+    "it": "Prima versione."
+  }
+}

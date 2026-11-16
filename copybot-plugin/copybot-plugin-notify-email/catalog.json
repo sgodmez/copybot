@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.notifyemail",
+  "code": "notify-email",
+  "description": {
+    "en": "Sends the result of a run by e-mail at its end (SMTP).",
+    "fr": "Envoie le bilan d'un run par e-mail \u00e0 sa fin (SMTP).",
+    "it": "Invia l'esito di un run via e-mail alla sua fine (SMTP)."
+  },
+  "changes": {
+    "en": "First version.",
+    "fr": "Premi\u00e8re version.",
+    "it": "Prima versione."
+  }
+}

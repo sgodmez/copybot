@@ -1,0 +1,11 @@
+Task 1: minor (deferred): commit trailer has no blank line before it; tests use literal keys (harmless)
+Task 2: minor (deferred): commit 0724304 trailer says Claude Haiku 4.5 instead of required Opus 5.5 trailer
+Task 2: minor (deferred): ItemKey null date -> bare NPE; ResumePoint canonical ctor accepts AFTER/FROM with null key; ResumeMode lacks javadoc
+Task 3: minor (deferred): no test for write-error path nor {"cursor":null}; NPE/ISE catch instead of explicit null checks (brief design)
+Task 4: minor (deferred): DestinationProbeTest lacks "only first dir exists" case; 1000-item test doesn't assert the returned point
+Task 5: minor (deferred): nextCursor relies on propose() having set previousCursor (T6 reuses same resolver: OK); getParent() null guard; skipReason comment for ALL; setReady keeps currentStepIndex; a few apply/nextCursor cases untested
+Task 6: minor (deferred): no tests for cancellation in prepare/execute, filtered/fork post-barrier, per-phase terminal notification; ctor javadoc mentions single terminal notification; PipelineState blank line; barrierIndex==size marks items DONE at prepare
+Task 6: minor (deferred): runSinglePhase RuntimeException branch doesn't setFailure (legacy, unchanged)
+Task 7: minor (deferred): PlanPrinter labels hard-coded English; no --from-date / mutual-exclusion tests; listing failure "first" not atomic; MainTest stale javadoc about single PluginEngine.load; Plan.fromFile message for keyless file
+Task 8: minor (deferred): no doAnalyze-path tests; QuickTime/MP4 zero date (1904) not filtered; silent return on unsupported format
+Final: fix wave re-review — all addressed; nits: non-string unknown mode accepted; setResumeKey public/order re-freezes

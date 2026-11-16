@@ -1,0 +1,22 @@
+{
+  "module": "com.copybot.plugin.gpszone",
+  "code": "gps-zone",
+  "description": {
+    "en": "Finds the time zone of a photo from its GPS position, offline, to check the time zone of the camera.",
+    "fr": "Trouve le fuseau horaire d'une photo d'après sa position GPS, hors ligne, pour contrôler le fuseau de l'appareil.",
+    "it": "Trova il fuso orario di una foto dalla sua posizione GPS, offline, per controllare il fuso della fotocamera."
+  },
+  "changes": {
+    "en": "Texts in Italian.",
+    "fr": "Textes en italien.",
+    "it": "Testi in italiano."
+  },
+  "license": {
+    "name": "ODbL",
+    "notice": {
+      "en": "Contains the time zone boundaries of Timezone Boundary Builder, built from OpenStreetMap data (c) OpenStreetMap contributors, made available under the Open Data Commons Open Database License (ODbL) v1.0: https://opendatacommons.org/licenses/odbl/1-0/",
+      "fr": "Contient les limites de fuseaux horaires de Timezone Boundary Builder, issues des données OpenStreetMap (c) les contributeurs d'OpenStreetMap, sous licence Open Data Commons Open Database License (ODbL) v1.0 : https://opendatacommons.org/licenses/odbl/1-0/",
+      "it": "Contiene i confini dei fusi orari di Timezone Boundary Builder, ricavati dai dati OpenStreetMap (c) i collaboratori di OpenStreetMap, resi disponibili con la Open Data Commons Open Database License (ODbL) v1.0: https://opendatacommons.org/licenses/odbl/1-0/"
+    }
+  }
+}

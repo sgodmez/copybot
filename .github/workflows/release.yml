@@ -1,0 +1,135 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  # the Linux app image, handed to the release job: one job publishes, so the tag gets a single draft
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # the release job checks the tag against the pom version
+      - name: Version
+        id: version
+        run: echo "version=$(mvn -B -q -N help:evaluate -Dexpression=project.version -DforceStdout)" >> "$GITHUB_OUTPUT"
+
+      # the linux profile of copybot-ui switches the icon to the .png
+      - name: Build application
+        run: mvn -B -Pdist package -DskipTests
+
+      # a tar keeps the launcher executable; the Copybot folder is the archive root
+      - name: Portable archive
+        run: |
+          mkdir -p copybot-ui/target/release
+          tar -czf "copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C copybot-ui/target/dist Copybot
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: copybot-ui/target/release/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: linux
+    runs-on: windows-latest
+    steps:
+      # the whole history and the tags: the catalogue guard compares a plugin with the tag of its entry
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+
+      # the pom version must be X.Y.Z, or X.Y.Z-<qualifier> for a beta (1.3.0-beta.1), and the tag must be v<version>
+      # (the property is quoted: unquoted, PowerShell splits -Dexpression=project.version at the dot)
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (mvn -B -q -N help:evaluate "-Dexpression=project.version" -DforceStdout).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the pom version" }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "The pom version ($version) is not X.Y.Z or X.Y.Z-<qualifier>" }
+          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "Tag $env:GITHUB_REF_NAME does not match the pom version (v$version)" }
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # X.Y.Z without the qualifier: the file version of the installer (Windows wants numbers only)
+          "numeric=$($version -replace '-.*$', '')" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          # the plugin API version (the module version of com.copybot.engine), X.Y: the `engine` of the catalogue
+          $api = (mvn -B -q -N help:evaluate "-Dexpression=copybot.plugin.api.version" -DforceStdout).Trim()
+          if ($LASTEXITCODE -ne 0) { throw "Could not read the plugin API version" }
+          if ($api -notmatch '^\d+\.\d+$') { throw "The plugin API version ($api) is not X.Y" }
+          "api=$api" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      # the plugin API matches its committed fingerprint: a forgotten raise of the API version stops the release
+      # (the properties are quoted for PowerShell)
+      - name: Plugin API check
+        shell: pwsh
+        run: mvn -B -pl copybot-engine "-Dtest=PluginApiFingerprintTest" "-Dsurefire.failIfNoSpecifiedTests=false" test
+
+      - name: Build application
+        shell: pwsh
+        run: mvn -B -Pdist package -DskipTests
+
+      # catalogue.json of this release (all the official plugins, each with the release that hosts its archive)
+      # and the zips of the plugins whose version is new; fails on a plugin changed without a new version.
+      # "New" is against the latest published stable release (`gh release view` skips drafts and pre-releases): a beta
+      # republishes the plugins changed since the last stable release, and so does the next stable release
+      - name: Plugin catalogue
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          API: ${{ steps.version.outputs.api }}
+        run: .github/scripts/plugin-catalogue.ps1 -Tag $env:GITHUB_REF_NAME -ApiVersion $env:API -OutDir copybot-ui/target/release
+
+      - name: Installer
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          NUMERIC: ${{ steps.version.outputs.numeric }}
+        run: |
+          choco install innosetup --no-progress -y
+          # folder of the installed Inno Setup major version (6, 7...)
+          $iscc = Get-ChildItem "${env:ProgramFiles(x86)}\Inno Setup*\ISCC.exe" | Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found under ${env:ProgramFiles(x86)}\Inno Setup*" }
+          & $iscc.FullName /DAppVersion=$env:VERSION /DAppNumericVersion=$env:NUMERIC /DSourceDir="$PWD\copybot-ui\target\dist\Copybot" /O"$PWD\copybot-ui\target\release" copybot-ui\src\installer\copybot.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with exit code $LASTEXITCODE" }
+
+      # PowerShell 7: Compress-Archive writes portable (forward slash) zip entries; the Copybot folder is the archive root
+      - name: Portable archive
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: Compress-Archive -Path copybot-ui\target\dist\Copybot -DestinationPath "copybot-ui\target\release\copybot-$env:VERSION-windows-x64.zip"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: copybot-ui/target/release
+
+      # always a draft, published by hand; a tag with a qualifier (v1.3.0-beta.1) is a pre-release: only the users who
+      # asked for the beta versions are offered it, and releases/latest (the stable users) never returns it
+      - name: GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-setup.exe
+            copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-windows-x64.zip
+            copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-linux-x64.tar.gz
+            copybot-ui/target/release/catalogue.json
+            copybot-ui/target/release/copybot-plugin-*.zip

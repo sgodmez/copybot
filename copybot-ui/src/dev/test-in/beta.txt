@@ -1,0 +1,1 @@
+Deuxième fichier d'exemple, copié vers copybot-ui/target/ui-test-out.

@@ -1,0 +1,14 @@
+{
+  "module": "com.copybot.plugin.remote",
+  "code": "remote",
+  "description": {
+    "en": "Reads files from and writes files to remote servers: SFTP, FTP or FTPS, and S3 buckets (AWS, MinIO...).",
+    "fr": "Lit et \u00e9crit des fichiers sur des serveurs distants : SFTP, FTP ou FTPS, et compartiments S3 (AWS, MinIO...).",
+    "it": "Legge e scrive file su server remoti: SFTP, FTP o FTPS, e bucket S3 (AWS, MinIO...)."
+  },
+  "changes": {
+    "en": "First version.",
+    "fr": "Premi\u00e8re version.",
+    "it": "Prima versione."
+  }
+}

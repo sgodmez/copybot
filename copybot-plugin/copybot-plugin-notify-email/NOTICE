@@ -1,0 +1,11 @@
+Copybot plugin notify-email
+Copyright the Copybot authors, distributed under the GNU General Public License v3
+(see the LICENSE of Copybot, https://www.gnu.org/licenses/gpl-3.0.html).
+
+This plugin includes, or uses, third-party software and data:
+
+Libraries shipped in the lib/ folder of the plugin:
+  Jakarta Mail API 2.1.5 (jakarta.mail)          EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Angus Mail 2.0.5 (org.eclipse.angus)           EPL 2.0, GPL 2.0 with Classpath Exception, or EDL 1.0
+  Jakarta Activation API 2.1.4 (jakarta.activation)  EDL 1.0 (BSD 3-Clause)
+  Angus Activation 2.0.3 (org.eclipse.angus)     EDL 1.0 (BSD 3-Clause)
