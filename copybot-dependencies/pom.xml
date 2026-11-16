@@ -13,7 +13,7 @@
     <packaging>pom</packaging>
 
     <properties>
-        <javafx.version>27</javafx.version>
+        <javafx.version>27.0.1</javafx.version>
     </properties>
 
     <dependencyManagement>
