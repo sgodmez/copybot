@@ -122,7 +122,7 @@ jobs:
       # always a draft, published by hand; a tag with a qualifier (v1.3.0-beta.1) is a pre-release: only the users who
       # asked for the beta versions are offered it, and releases/latest (the stable users) never returns it
       - name: GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
