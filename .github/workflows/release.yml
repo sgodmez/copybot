@@ -34,7 +34,7 @@ jobs:
           mkdir -p copybot-ui/target/release
           tar -czf "copybot-ui/target/release/copybot-${{ steps.version.outputs.version }}-linux-x64.tar.gz" -C copybot-ui/target/dist Copybot
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux
           path: copybot-ui/target/release/*.tar.gz
